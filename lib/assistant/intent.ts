@@ -191,11 +191,19 @@ export function priorAssistantRequestedQuoteDetails(messages: AssistantMessage[]
 
 function extractRequestedProductText(messages: AssistantMessage[]) {
   const userMessages = messages.filter((message) => message.role === "user").map((message) => message.content.trim());
+  const productMessages = userMessages.filter((message) => {
+    if (/^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|oui|d'accord|vas-y)$/i.test(message)) return false;
+    if (emailPattern.test(message) && message.length < 90) return false;
+    if (/^(my name is|name is|i am|i'm|je m'appelle|mon nom est|company is|compagnie|entreprise)\b/i.test(message)) {
+      return /\b(need|looking for|want|quote|devis|cherche|besoin|veux|voudrais|do you have|do you carry|source|find|get)\b/i.test(message);
+    }
+    return message.length >= 3;
+  });
   const quoteMessage =
-    userMessages.find((message) => isQuoteIntent(message) && message.length > 8) ||
-    userMessages.find((message) => /\b(need|looking for|want|cherche|besoin|veux|voudrais)\b/i.test(message));
+    productMessages.find((message) => isQuoteIntent(message) && message.length > 8) ||
+    productMessages.find((message) => /\b(need|looking for|want|cherche|besoin|veux|voudrais|do you have|do you carry|avez-vous|avez vous|source|sourcing|find|get)\b/i.test(message));
 
-  return (quoteMessage || userMessages.at(-1) || "").replace(emailPattern, "").trim();
+  return (quoteMessage || productMessages.at(-1) || "").replace(emailPattern, "").trim();
 }
 
 export function buildQuoteDraft(

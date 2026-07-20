@@ -36,8 +36,8 @@ function quoteMissingText(missing: string[], language: "en" | "fr" | "unknown") 
       : missing.join(", ");
 
   return language === "fr"
-    ? `Bien sûr. Je peux envoyer votre demande de devis à notre équipe ici dans le chat. Vous pouvez aussi demander un devis directement depuis une page produit en cliquant « Add to Quote », puis « My Quote » en haut du site pour réviser et soumettre la demande. Pour l’envoyer ici, il me manque: ${fields}.`
-    : `Of course. I can send your quote request to our team here in chat. You can also request a quote directly from a product page by clicking “Add to Quote”, then “My Quote” at the top of the site to review and submit it. To send it here, I still need: ${fields}.`;
+    ? `Bien sûr. Je peux envoyer votre demande de devis ou de recherche d’article à notre équipe ici dans le chat. Vous pouvez aussi demander un devis directement depuis une page produit en cliquant « Add to Quote », puis « My Quote » en haut du site pour réviser et soumettre la demande. Pour l’envoyer ici, il me manque: ${fields}.`
+    : `Of course. I can send your quote or item-sourcing request to our team here in chat. You can also request a quote directly from a product page by clicking “Add to Quote”, then “My Quote” at the top of the site to review and submit it. To send it here, I still need: ${fields}.`;
 }
 
 function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unknown") {
@@ -103,6 +103,25 @@ function looksLikeQuoteDetailsReply(text: string) {
   if (/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/.test(trimmed)) return true;
   if (/\b(my name is|name is|i am|i'm|je m'appelle|mon nom est|company is|compagnie|entreprise)\b/i.test(trimmed)) return true;
   return /^[A-Z][A-Za-z' -]{1,40}\s+[A-Z][A-Za-z' -]{1,40}$/.test(trimmed);
+}
+
+function isAffirmative(text: string) {
+  return /^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|do it|oui|d'accord|vas-y|svp)$/i.test(
+    String(text || "").trim()
+  );
+}
+
+function priorAssistantOfferedItemRequest(messages: AssistantMessage[]) {
+  return messages
+    .slice()
+    .reverse()
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /send your request to our team|check the item|prepare a quote request|envoyer votre demande|vérifier l’article|preparer une demande de devis|préparer une demande de devis/i.test(
+          message.content
+        )
+    );
 }
 
 function searchQueryForLatest(messages: AssistantMessage[], latest: string, products: CatalogProduct[]) {
@@ -481,6 +500,8 @@ async function handleAssistantPost(req: NextRequest) {
   const shouldIgnorePriorQuoteFlow = (isQuickActionPrompt(latest) || isProductSearchIntent(latest)) && !isQuoteIntent(latest);
   const shouldContinuePriorQuoteFlow =
     !shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages) && looksLikeQuoteDetailsReply(latest);
+  const shouldContinueItemRequestFlow =
+    !shouldIgnorePriorQuoteFlow && priorAssistantOfferedItemRequest(messages) && isAffirmative(latest);
 
   if (isContactIntent(latest)) {
     return new Response(textStream(contactHelpText(language)), {
@@ -558,7 +579,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || products.some((product) => product.quoteOnly)) {
+  if (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow || products.some((product) => product.quoteOnly)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
       await Promise.all([
@@ -569,8 +590,8 @@ async function handleAssistantPost(req: NextRequest) {
       return new Response(
         textStream(
           language === "fr"
-            ? "Merci. Votre demande de devis a été envoyée à notre équipe des ventes. Nous vous contacterons sous peu."
-            : "Thank you. Your quote request has been sent to our sales team. We will contact you shortly."
+            ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
+            : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly."
         ),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
