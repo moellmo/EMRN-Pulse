@@ -1,5 +1,5 @@
 import { getTypesenseSearch } from "../typesense";
-import { absoluteStoreUrl } from "../store-url";
+import { absoluteStoreUrl, normalizeCommerceUrl } from "../store-url";
 import { buildSmartSearchQuery } from "../smart-search-translator";
 import { withBackorderAvailability } from "./availability";
 import { mcpCreateCart } from "./bigcommerce-mcp";
@@ -223,7 +223,7 @@ export async function createCart(input: CartRequest): Promise<CartResult> {
   const data = await response.json();
   return {
     cartId: data.data?.id,
-    checkoutUrl: data.data?.redirect_urls?.checkout_url || data.data?.redirect_urls?.cart_url,
+    checkoutUrl: normalizeCommerceUrl(data.data?.redirect_urls?.checkout_url || data.data?.redirect_urls?.cart_url),
     blockedItems: [],
     provider: "bigcommerce-api",
   };

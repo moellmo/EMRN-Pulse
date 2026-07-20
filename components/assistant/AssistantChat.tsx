@@ -534,7 +534,7 @@ function renderInlineMessage(text: string, isUser: boolean) {
 
   return parts.map((part, index) => {
     if (/^https?:\/\//.test(part)) {
-      const label = part.includes("/checkout") ? "Checkout" : "View product";
+      const label = part.includes("/checkout") ? "Checkout" : part.includes("/cart.php") ? "Cart" : "View product";
       return (
         <a
           key={`${part}-${index}`}

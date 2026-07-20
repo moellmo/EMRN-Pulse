@@ -21,3 +21,20 @@ export function absoluteStoreUrl(path?: string) {
   const withoutBadModelPrefix = clean.replace(/^(?:gpt-[^/]+\/)+/i, "");
   return `${STORE_URL}${withoutBadModelPrefix.startsWith("/") ? "" : "/"}${withoutBadModelPrefix}`;
 }
+
+export function normalizeCommerceUrl(url?: string) {
+  const absolute = absoluteStoreUrl(url);
+
+  try {
+    const parsed = new URL(absolute);
+    if (parsed.origin === STORE_URL && /^\/cart\/?$/i.test(parsed.pathname)) {
+      parsed.pathname = "/cart.php";
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString();
+    }
+    return parsed.toString();
+  } catch {
+    return absolute;
+  }
+}

@@ -1,4 +1,5 @@
 import type { CartRequest, CartResult, CommerceToolStatus } from "./types";
+import { normalizeCommerceUrl } from "../store-url";
 
 const mcpUrl = process.env.BIGCOMMERCE_MCP_URL;
 let mcpSessionId: string | null = null;
@@ -130,15 +131,15 @@ function normalizeMcpCartResult(data: unknown): CartResult {
 
   return {
     cartId: String(nested.id || nested.cartId || cart.entityId || cart.id || ""),
-    checkoutUrl: String(
-      structuredContent.checkoutURL ||
+    checkoutUrl: normalizeCommerceUrl(
+      String(structuredContent.checkoutURL ||
         structuredContent.checkoutUrl ||
         nested.checkoutURL ||
         nested.checkoutUrl ||
         nested.checkout_url ||
         redirectUrls.checkout_url ||
         redirectUrls.cart_url ||
-        ""
+        "")
     ),
     blockedItems: [],
     provider: "bigcommerce-mcp",
