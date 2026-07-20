@@ -1,0 +1,535 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171c26;
+  --emrn-pulse: #c34d50;
+  --emrn-pulse-bg: #faf7f6;
+  --emrn-pulse-border: #eadfdd;
+  --emrn-red: #c34d50;
+  --emrn-red-dark: #a9483f;
+  --emrn-red-soft: #f8eeec;
+  --emrn-red-border: #ead3cf;
+  --emrn-charcoal: #171c26;
+  --emrn-text: #252a34;
+  --emrn-muted: #697080;
+  --emrn-white: #ffffff;
+  --emrn-surface: #fbf8f7;
+  --emrn-message: #f3f4f6;
+  --emrn-border: #e8e3e1;
+  --emrn-radius-sm: 12px;
+  --emrn-radius-md: 18px;
+  --emrn-radius-lg: 24px;
+  --emrn-radius-pill: 999px;
+  --emrn-shadow-soft:
+    0 10px 30px rgba(23, 28, 38, 0.1),
+    0 2px 8px rgba(23, 28, 38, 0.05);
+  --emrn-shadow-launcher:
+    0 10px 28px rgba(195, 77, 80, 0.3),
+    0 3px 10px rgba(23, 28, 38, 0.16);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+textarea,
+input {
+  font-family: inherit;
+}
+
+.emrn-chat-panel {
+  border-color: var(--emrn-pulse-border);
+}
+
+.emrn-pulse-panel {
+  color: var(--emrn-text);
+  background: var(--emrn-white);
+  border: 1px solid var(--emrn-border);
+  border-radius: 22px;
+  box-shadow: var(--emrn-shadow-soft);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.emrn-pulse-panel.fixed {
+  right: 20px;
+  bottom: calc(96px + env(safe-area-inset-bottom));
+  z-index: 2147482999;
+  width: min(400px, calc(100vw - 40px));
+  height: min(680px, calc(100dvh - 130px));
+}
+
+.emrn-pulse-mascot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  user-select: none;
+  pointer-events: none;
+}
+
+.emrn-pulse-avatar {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 3px solid rgba(255, 255, 255, 0.96);
+  box-shadow: 0 3px 10px rgba(23, 28, 38, 0.14);
+}
+
+.emrn-pulse-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  transform: scale(1.6) translateY(3%);
+  transform-origin: center center;
+}
+
+.emrn-pulse-avatar--header {
+  background: #ffffff;
+  border: 3px solid #ffffff;
+}
+
+.emrn-pulse-avatar--header img {
+  transform: scale(1.75) translateY(3%);
+}
+
+.emrn-pulse-avatar--message {
+  width: 44px;
+  height: 44px;
+  border-color: #ffffff;
+  box-shadow: none;
+}
+
+.emrn-pulse-avatar--message img {
+  transform: scale(1.68) translateY(3%);
+}
+
+.emrn-pulse-launcher {
+  position: fixed;
+  right: calc(env(safe-area-inset-right) + 22px);
+  bottom: calc(env(safe-area-inset-bottom) + 18px);
+  z-index: 2147483000;
+  width: 92px;
+  height: 92px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.emrn-pulse-launcher:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: none;
+}
+
+.emrn-pulse-launcher:focus-visible {
+  outline: 3px solid rgba(195, 77, 80, 0.32);
+  outline-offset: 4px;
+}
+
+.emrn-pulse-launcher img {
+  width: 92px;
+  height: 92px;
+  object-fit: contain;
+  border-radius: 0;
+  filter:
+    drop-shadow(0 12px 24px rgba(195, 77, 80, 0.26))
+    drop-shadow(0 3px 9px rgba(23, 28, 38, 0.16));
+  transform: none;
+}
+
+.emrn-pulse-header {
+  min-height: 82px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #ffffff;
+  background: var(--emrn-red);
+}
+
+.emrn-pulse-header-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.emrn-pulse-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.emrn-pulse-status {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.emrn-pulse-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #38c976;
+  box-shadow: 0 0 0 3px rgba(56, 201, 118, 0.18);
+}
+
+.emrn-pulse-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.emrn-pulse-icon-button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #ffffff;
+  background: transparent;
+  cursor: pointer;
+}
+
+.emrn-pulse-icon-button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.emrn-pulse-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 16px;
+  background: #ffffff;
+}
+
+.emrn-pulse-message-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+}
+
+.emrn-pulse-message-row--customer {
+  justify-content: flex-end;
+}
+
+.emrn-pulse-message {
+  max-width: 86%;
+  padding: 12px 14px;
+  border-radius: 17px;
+  font-size: 15px;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+
+.emrn-pulse-message--assistant {
+  max-width: min(88%, 34rem);
+  color: var(--emrn-text);
+  background: var(--emrn-message);
+  border-bottom-left-radius: 6px;
+}
+
+.emrn-pulse-message--customer {
+  max-width: 78%;
+  color: #ffffff;
+  background: var(--emrn-red);
+  border-bottom-right-radius: 6px;
+}
+
+.emrn-pulse-message-content {
+  display: grid;
+  gap: 7px;
+}
+
+.emrn-pulse-message-content p {
+  margin: 0;
+}
+
+.emrn-pulse-message-bullet {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 7px;
+  align-items: start;
+}
+
+.emrn-pulse-message-link {
+  color: var(--emrn-red);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.emrn-pulse-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 14px;
+  background: #ffffff;
+}
+
+.emrn-pulse-quick-action {
+  min-height: 38px;
+  padding: 8px 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--emrn-red);
+  background: #ffffff;
+  border: 1px solid var(--emrn-red);
+  border-radius: var(--emrn-radius-pill);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.emrn-pulse-quick-action:hover {
+  background: var(--emrn-red-soft);
+}
+
+.emrn-pulse-composer {
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--emrn-border);
+  background: #ffffff;
+}
+
+.emrn-pulse-input-wrap {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 18px;
+  border: 1px solid #e3e5ea;
+  border-radius: var(--emrn-radius-pill);
+  background: #ffffff;
+  box-shadow: inset 0 1px 2px rgba(23, 28, 38, 0.03);
+}
+
+.emrn-pulse-input-wrap:focus-within {
+  border-color: var(--emrn-red);
+  box-shadow: 0 0 0 3px rgba(195, 77, 80, 0.14);
+}
+
+.emrn-pulse-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  max-height: 96px;
+  padding: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--emrn-text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 24px;
+  overflow-y: auto;
+}
+
+.emrn-pulse-input::placeholder {
+  color: #a2a7b0;
+}
+
+.emrn-pulse-send {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: #ffffff;
+  background: var(--emrn-red);
+  cursor: pointer;
+}
+
+.emrn-pulse-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.emrn-pulse-language {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+  padding: 9px 14px 12px;
+  background: #ffffff;
+}
+
+.emrn-pulse-hero-mascot {
+  width: min(360px, 80vw);
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.emrn-pulse-hero-mascot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.emrn-pulse-language button {
+  min-height: 30px;
+  padding: 6px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: var(--emrn-radius-pill);
+  color: var(--emrn-muted);
+  background: transparent;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.emrn-pulse-language svg {
+  width: 20px;
+  height: 20px;
+}
+
+.emrn-pulse-language button[aria-pressed="true"] {
+  color: var(--emrn-red);
+  background: var(--emrn-red-soft);
+}
+
+.emrn-typing-dot {
+  position: relative;
+  display: inline-flex;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--emrn-pulse);
+}
+
+.emrn-typing-dot::before,
+.emrn-typing-dot::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--emrn-pulse);
+  opacity: 0.45;
+}
+
+.emrn-typing-dot::before {
+  left: 12px;
+}
+
+.emrn-typing-dot::after {
+  left: 24px;
+}
+
+@media (max-width: 640px) {
+  .emrn-pulse-panel.fixed {
+    left: 10px;
+    right: 10px;
+    bottom: calc(80px + env(safe-area-inset-bottom));
+    width: auto;
+    height: min(720px, calc(100dvh - 100px));
+    border-radius: 20px;
+  }
+
+  .emrn-pulse-launcher {
+    right: 14px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    width: 82px;
+    height: 82px;
+  }
+
+  .emrn-pulse-launcher img {
+    width: 82px;
+    height: 82px;
+  }
+
+  .emrn-pulse-message {
+    max-width: 84%;
+  }
+
+  .emrn-pulse-header {
+    min-height: 74px;
+    padding: 12px 14px;
+  }
+
+  .emrn-pulse-avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .emrn-pulse-avatar--message {
+    width: 38px;
+    height: 38px;
+  }
+
+  .emrn-pulse-title {
+    font-size: 18px;
+  }
+
+  .emrn-pulse-quick-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .emrn-pulse-quick-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .emrn-pulse-quick-action {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .emrn-pulse-launcher,
+  .emrn-pulse-panel,
+  .emrn-pulse-quick-action {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
