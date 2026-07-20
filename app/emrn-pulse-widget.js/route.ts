@@ -28,9 +28,9 @@ export async function GET(req: Request) {
   iframe.setAttribute("frameborder", "0");
   iframe.allow = "clipboard-write";
 
-  function applySize(open) {
-    iframe.style.width = open ? "430px" : "120px";
-    iframe.style.height = open ? "780px" : "120px";
+  function applySize(open, nudge) {
+    iframe.style.width = open ? "430px" : nudge ? "350px" : "120px";
+    iframe.style.height = open ? "780px" : nudge ? "150px" : "120px";
     iframe.style.maxWidth = "100vw";
     iframe.style.maxHeight = "100dvh";
   }
@@ -38,7 +38,7 @@ export async function GET(req: Request) {
   window.addEventListener("message", function (event) {
     if (event.origin !== origin) return;
     if (!event.data || event.data.type !== "emrn-pulse:resize") return;
-    applySize(Boolean(event.data.open));
+    applySize(Boolean(event.data.open), Boolean(event.data.nudge));
   });
 
   if (document.readyState === "loading") {

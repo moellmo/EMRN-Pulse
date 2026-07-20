@@ -175,6 +175,81 @@ input {
   transform: none;
 }
 
+.emrn-pulse-nudge {
+  position: fixed;
+  right: calc(env(safe-area-inset-right) + 104px);
+  bottom: calc(env(safe-area-inset-bottom) + 34px);
+  z-index: 2147483000;
+  width: 210px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--emrn-red-border);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow:
+    0 12px 28px rgba(23, 28, 38, 0.14),
+    0 4px 12px rgba(195, 77, 80, 0.12);
+  color: var(--emrn-text);
+  animation: emrn-nudge-in 220ms ease-out;
+}
+
+.emrn-pulse-nudge::after {
+  content: "";
+  position: absolute;
+  right: -7px;
+  bottom: 22px;
+  width: 14px;
+  height: 14px;
+  border-top: 1px solid var(--emrn-red-border);
+  border-right: 1px solid var(--emrn-red-border);
+  background: #ffffff;
+  transform: rotate(45deg);
+}
+
+.emrn-pulse-nudge-main {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--emrn-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.emrn-pulse-nudge-main:focus-visible,
+.emrn-pulse-nudge-close:focus-visible {
+  outline: 2px solid rgba(195, 77, 80, 0.36);
+  outline-offset: 2px;
+}
+
+.emrn-pulse-nudge-close {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--emrn-red-soft);
+  color: var(--emrn-red);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+@keyframes emrn-nudge-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px) translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0) translateY(0);
+  }
+}
+
 .emrn-pulse-header {
   min-height: 82px;
   padding: 14px 16px;
@@ -486,6 +561,17 @@ input {
   .emrn-pulse-launcher img {
     width: 82px;
     height: 82px;
+  }
+
+  .emrn-pulse-nudge {
+    right: 92px;
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    width: 190px;
+    padding: 9px 9px 9px 12px;
+  }
+
+  .emrn-pulse-nudge-main {
+    font-size: 13px;
   }
 
   .emrn-pulse-message {

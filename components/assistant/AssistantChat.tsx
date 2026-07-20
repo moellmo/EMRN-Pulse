@@ -20,12 +20,15 @@ type UiText = {
   typing: string;
   retry: string;
   error: string;
+  proactivePrompt: string;
+  proactiveDismiss: string;
   quickActions: Array<{ label: string; prompt: string; icon: "search" | "quote" | "box" | "truck" }>;
 };
 
 const brand = "#c34d50";
 const SESSION_KEY = "emrn-pulse-session-id";
 const STORAGE_PREFIX = "emrn-pulse-chat";
+const NUDGE_DISMISSED_KEY = "emrn-pulse-nudge-dismissed";
 
 function storedLanguage() {
   if (typeof window === "undefined") return "en";
@@ -71,6 +74,8 @@ const ui: Record<"en" | "fr", UiText> = {
     typing: "Meri is checking EMRN data...",
     retry: "Retry",
     error: "I’m sorry, I could not complete that request. Would you like me to send this to our support team?",
+    proactivePrompt: "Need help finding a product? I can help.",
+    proactiveDismiss: "Dismiss help message",
     quickActions: [
       { label: "Find a Product", prompt: "Find a product", icon: "search" },
       { label: "Request a Quote", prompt: "I need a quote", icon: "quote" },
@@ -93,6 +98,8 @@ const ui: Record<"en" | "fr", UiText> = {
     retry: "Réessayer",
     error:
       "Je suis désolée, je n’ai pas pu compléter cette demande. Voulez-vous que je l’envoie à notre équipe de support?",
+    proactivePrompt: "Besoin d’aide pour trouver un produit? Je peux vous aider.",
+    proactiveDismiss: "Masquer le message d’aide",
     quickActions: [
       { label: "Trouver un produit", prompt: "Je cherche un produit", icon: "search" },
       { label: "Demander un devis", prompt: "J’ai besoin d’un devis", icon: "quote" },
@@ -108,6 +115,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [isOpen, setIsOpen] = useState(mode === "embedded");
+  const [showNudge, setShowNudge] = useState(false);
   const [lastPrompt, setLastPrompt] = useState("");
   const [hasError, setHasError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -136,13 +144,25 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
 
   useEffect(() => {
     if (mode === "floating" && isOpen) {
+      setShowNudge(false);
       window.setTimeout(() => textareaRef.current?.focus(), 80);
     }
   }, [isOpen, mode]);
 
   useEffect(() => {
     if (mode !== "floating" || typeof window === "undefined") return;
-    window.parent?.postMessage({ type: "emrn-pulse:resize", open: isOpen }, "*");
+    window.parent?.postMessage({ type: "emrn-pulse:resize", open: isOpen, nudge: showNudge }, "*");
+  }, [isOpen, mode, showNudge]);
+
+  useEffect(() => {
+    if (mode !== "floating" || isOpen || typeof window === "undefined") return;
+    if (localStorage.getItem(NUDGE_DISMISSED_KEY) === "true") return;
+
+    const timer = window.setTimeout(() => {
+      if (!isOpen) setShowNudge(true);
+    }, 12000);
+
+    return () => window.clearTimeout(timer);
   }, [isOpen, mode]);
 
   function switchLanguage(nextLanguage: "en" | "fr") {
@@ -381,13 +401,43 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
 
   if (mode === "embedded") return panel;
 
+  const openChat = () => {
+    localStorage.setItem(NUDGE_DISMISSED_KEY, "true");
+    setShowNudge(false);
+    setIsOpen(true);
+  };
+
+  const dismissNudge = () => {
+    localStorage.setItem(NUDGE_DISMISSED_KEY, "true");
+    setShowNudge(false);
+  };
+
   return (
     <>
       {isOpen ? panel : null}
+      {!isOpen && showNudge ? (
+        <div className="emrn-pulse-nudge" role="status">
+          <button type="button" className="emrn-pulse-nudge-main" onClick={openChat}>
+            {text.proactivePrompt}
+          </button>
+          <button
+            type="button"
+            className="emrn-pulse-nudge-close"
+            onClick={dismissNudge}
+            aria-label={text.proactiveDismiss}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
       <button
         type="button"
         aria-label={isOpen ? text.closeLabel : text.openLabel}
-        onClick={() => setIsOpen((current) => !current)}
+        onClick={() => {
+          localStorage.setItem(NUDGE_DISMISSED_KEY, "true");
+          setShowNudge(false);
+          setIsOpen((current) => !current);
+        }}
         className="emrn-pulse-launcher"
         style={{ outlineColor: brand }}
       >
