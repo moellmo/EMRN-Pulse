@@ -8,7 +8,28 @@ type AdminRow =
   | (SupportRequest & { createdAt: string })
   | AssistantAiUsageEvent;
 
-export default async function AssistantAdminPage() {
+type AdminPageProps = {
+  searchParams: Promise<{ token?: string | string[] }>;
+};
+
+export default async function AssistantAdminPage({ searchParams }: AdminPageProps) {
+  const token = process.env.EMRN_ASSISTANT_ADMIN_TOKEN;
+  const providedToken = (await searchParams).token;
+  const isAuthorized =
+    !token ||
+    (Array.isArray(providedToken) ? providedToken.includes(token) : providedToken === token);
+
+  if (!isAuthorized) {
+    return (
+      <main className="min-h-screen bg-slate-50 p-6 text-slate-950">
+        <div className="mx-auto max-w-xl rounded-md border border-red-200 bg-white p-5 text-red-700">
+          Admin access requires a valid token. Open this page with
+          <code className="mx-1 rounded bg-red-50 px-1">?token=YOUR_ADMIN_TOKEN</code>.
+        </div>
+      </main>
+    );
+  }
+
   const data = await readAssistantAdminData().catch((error) => {
     console.error("[EMRN Pulse] admin page data unavailable", error);
     return null;
@@ -23,6 +44,12 @@ export default async function AssistantAdminPage() {
         {!data ? (
           <div className="mt-8 rounded-md border border-red-200 bg-white p-5 text-red-700">
             Admin data is unavailable. Set EMRN_ASSISTANT_ADMIN_TOKEN for production access.
+          </div>
+        ) : data.metrics.totalEvents === 0 ? (
+          <div className="mt-8 rounded-md border border-amber-200 bg-white p-5 text-amber-800">
+            No production logs have been recorded yet. Local dev logs are not available on Vercel.
+            To keep durable history, set <code>EMRN_GOOGLE_SHEETS_WEBHOOK_URL</code> and
+            <code className="ml-1">EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET</code>, redeploy, then send a few Pulse test messages.
           </div>
         ) : (
           <>
