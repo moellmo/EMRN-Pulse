@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
@@ -122,6 +122,183 @@ function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unkn
     : `${product.name}\nSKU: ${product.sku}\nPrice: ${price}\nAvailability: ${availability}\n${purchase}\n\nView product: ${product.url}`;
 }
 
+function productResultsText(products: CatalogProduct[], language: "en" | "fr" | "unknown", query: string) {
+  const shown = products.slice(0, 5);
+  const lines = shown.map((product) => {
+    const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
+    const availability =
+      product.availabilityDescription ||
+      product.availability ||
+      (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
+    const action = product.quoteOnly || !product.purchasable
+      ? language === "fr"
+        ? "Demander un devis"
+        : "Request a quote"
+      : language === "fr"
+        ? "Peut être commandé en ligne"
+        : "Can be ordered online";
+
+    return language === "fr"
+      ? `- **${product.name}** — SKU: ${product.sku || "non disponible"} — ${price}. ${availability}. ${action}. [Voir le produit](${product.url})`
+      : `- **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. ${action}. [View product](${product.url})`;
+  });
+
+  const intro =
+    language === "fr"
+      ? `Voici les produits que j’ai trouvés pour « ${query} » :`
+      : `Here are the products I found for “${query}”:`;
+  const outro =
+    language === "fr"
+      ? "Si vous me dites la taille, la marque, l’usage ou la quantité souhaitée, je peux réduire la liste ou vous aider à l’ajouter au panier."
+      : "If you tell me the size, brand, use, or quantity you need, I can narrow this down or help add the right item to your cart.";
+
+  return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
+}
+
+function siteSearchUrl(query: string) {
+  const url = new URL("/search.php", process.env.EMRN_STORE_URL || "https://emrn.ca");
+  url.searchParams.set("search_query", query);
+  return url.toString();
+}
+
+function contactHelpText(language: "en" | "fr" | "unknown") {
+  return language === "fr"
+    ? "Bien sûr. Je peux envoyer un message à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question. Vous pouvez aussi utiliser la page Contactez-nous: https://emrn.ca/contact-us/"
+    : "Of course. I can send a message to our team. Please send your name, email, and question. You can also use the Contact Us page: https://emrn.ca/contact-us/";
+}
+
+function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
+  const normalized = text.toLowerCase();
+  const helpLink = "https://emrn.ca/faq-s/";
+  const contactLink = "https://emrn.ca/contact-us/";
+  const shippingReturnsLink = "https://emrn.ca/shipping-returns";
+  const privacyLink = "https://emrn.ca/privacy-policy";
+  const accountLink = "https://emrn.ca/login.php";
+  const businessLink = "https://emrn.ca/business-account-application";
+  const businessSolutionsLink = "https://emrn.ca/business-medical-supplies";
+  const homeMedicalSuppliesLink = "https://emrn.ca/home-medical-supplies/";
+  const specialPricingLink = "https://emrn.ca/my-special-pricing";
+
+  const answer = (en: string, fr: string) => (language === "fr" ? fr : en);
+
+  if (/\b(order statuses|order status mean|status mean|awaiting payment|awaiting fulfillment|awaiting shipment|partially shipped|completed)\b/i.test(text)) {
+    return answer(
+      `Order statuses show where the order is in the process. Awaiting Payment means payment is not complete or confirmed. Awaiting Fulfillment means the order is being reviewed, picked, packed, or prepared. Awaiting Shipment means it is being prepared for shipment or carrier/supplier processing. Partially Shipped means some items shipped separately. Shipped means tracking should be available by email or in your account. Completed means the order has been processed. More details: ${helpLink}`,
+      `Les statuts indiquent où se trouve la commande. Awaiting Payment veut dire que le paiement n’est pas confirmé. Awaiting Fulfillment veut dire que la commande est en révision ou préparation. Awaiting Shipment veut dire qu’elle est en préparation d’expédition, chez le fournisseur ou en attente de ramassage transporteur. Partially Shipped veut dire qu’une partie a été expédiée séparément. Shipped veut dire que le suivi devrait être disponible par courriel ou dans le compte. Completed veut dire que la commande est traitée. Détails: ${helpLink}`
+    );
+  }
+
+  if (/\b(awaiting shipment|waiting shipment|stuck|too long|longer than expected)\b/i.test(text)) {
+    return answer(
+      `“Awaiting Shipment” means the order is in the shipping process but has not yet been marked shipped with tracking. It can be waiting for warehouse processing, supplier shipment, carrier pickup, or stock. If it has been longer than expected, contact EMRN with your order number and the team can check the latest update: ${contactLink}`,
+      `« Awaiting Shipment » veut dire que la commande est en processus d’expédition, mais qu’elle n’a pas encore été marquée expédiée avec suivi. Elle peut attendre le traitement entrepôt, le fournisseur, le transporteur ou le stock. Si le délai semble trop long, contactez EMRN avec votre numéro de commande: ${contactLink}`
+    );
+  }
+
+  if (/\b(tracking|track my order|tracking number|where.*tracking|shipped.*tracking)\b/i.test(text)) {
+    return answer(
+      `Tracking is usually emailed once the order ships, and it can also be checked from My Orders after signing in. If your order says shipped but you do not see tracking, contact EMRN with your order number so the team can help locate it: ${contactLink}`,
+      `Le suivi est habituellement envoyé par courriel lorsque la commande est expédiée, et il peut aussi être consulté dans Mes commandes après connexion. Si votre commande est indiquée expédiée mais que vous ne voyez pas le suivi, contactez EMRN avec votre numéro de commande: ${contactLink}`
+    );
+  }
+
+  if (/\b(shipping|ship across canada|free shipping|delivery time|ship time|shipping rates|oxygen cylinder|backorder)\b/i.test(text)) {
+    return answer(
+      `EMRN processes orders when received. Most orders ship within 1-2 business days when merchandise is available and credit/payment verification is complete. If there is a delay or backorder, EMRN will try to contact you and may offer backorder, substitution, or cancellation options. Free shipping applies to online/web orders over $150 shipped within Canada, excluding territories and remote areas. Large/overweight, hazardous, or temperature-controlled freight items do not qualify. Shipping rates are calculated by weight, size, and dimensions. Details: ${shippingReturnsLink}`,
+      `EMRN traite les commandes à la réception. La plupart des commandes sont expédiées en 1 à 2 jours ouvrables lorsque les articles sont disponibles et que le paiement/crédit est confirmé. En cas de délai ou rupture, EMRN tentera de vous contacter et pourra proposer de garder la commande en attente, substituer un article ou annuler. La livraison gratuite s’applique aux commandes web de plus de 150 $ expédiées au Canada, sauf territoires et régions éloignées. Les articles lourds/surdimensionnés, dangereux ou nécessitant un transport contrôlé en température ne sont pas admissibles. Les frais sont calculés selon poids, taille et dimensions. Détails: ${shippingReturnsLink}`
+    );
+  }
+
+  if (/\b(invoice|old invoice|copy.*invoice|receipt|order documents|company information)\b/i.test(text)) {
+    return answer(
+      `If you have an EMRN account, sign in and check My Orders for invoices and order details. For an old invoice or a copy with company information, contact EMRN with the order number, company name, or email used for the order: ${contactLink}`,
+      `Si vous avez un compte EMRN, connectez-vous et consultez Mes commandes pour les factures et détails. Pour une ancienne facture ou une copie avec renseignements d’entreprise, contactez EMRN avec le numéro de commande, le nom de l’entreprise ou le courriel utilisé: ${contactLink}`
+    );
+  }
+
+  if (/\b(stock|availability|available to order|in stock|confirm stock|not currently in stock|backorder|lead time)\b/i.test(text)) {
+    return answer(
+      `Availability appears on product pages near the options and cart area. “Available to order” means the item can be purchased, but may not be in the local warehouse for immediate shipment and may need supplier processing. For time-sensitive quantities, contact EMRN with the product name, SKU, and quantity before ordering: ${contactLink}`,
+      `La disponibilité apparaît sur les pages produit près des options et du panier. « Available to order » veut dire que l’article peut être commandé, mais qu’il n’est pas forcément en stock local pour expédition immédiate et peut nécessiter un traitement fournisseur. Pour une commande urgente ou une quantité précise, contactez EMRN avec le nom, SKU et quantité: ${contactLink}`
+    );
+  }
+
+  if (/\b(create.*account|make.*account|register|business account|enterprise account|doctor|doctor.s office|schools|clinics|ems|government|account benefits|purchase history|reorder)\b/i.test(text)) {
+    return answer(
+      `You can create an EMRN account from Sign In / Register: ${accountLink}. Business or enterprise accounts are useful for clinics, schools, EMS departments, companies, healthcare facilities, government organizations, and larger purchasing teams. Business solutions: ${businessSolutionsLink}. Apply here: ${businessLink}. You do not need to be a doctor’s office or have a business account to purchase many items, though some specialized products may have restrictions.`,
+      `Vous pouvez créer un compte EMRN depuis Connexion / Inscription: ${accountLink}. Les comptes entreprise sont utiles pour cliniques, écoles, services EMS, entreprises, établissements de santé, organisations gouvernementales et équipes d’achats. Solutions entreprise: ${businessSolutionsLink}. Demande ici: ${businessLink}. Il n’est pas nécessaire d’être un cabinet médical ou d’avoir un compte entreprise pour acheter plusieurs articles, mais certains produits spécialisés peuvent avoir des restrictions.`
+    );
+  }
+
+  if (/\b(business solutions|business medical supplies|medical supplies for business|clinic supplies|school supplies|ems department|healthcare facility|enterprise purchasing|institutional purchasing)\b/i.test(text)) {
+    return answer(
+      `EMRN supports business, clinic, school, EMS, healthcare facility, government, and institutional purchasing. Start with Business Medical Supplies here: ${businessSolutionsLink}. For account setup, use the business account application: ${businessLink}.`,
+      `EMRN soutient les achats pour entreprises, cliniques, écoles, services EMS, établissements de santé, gouvernements et institutions. Commencez avec Business Medical Supplies ici: ${businessSolutionsLink}. Pour créer le compte, utilisez la demande de compte entreprise: ${businessLink}.`
+    );
+  }
+
+  if (/\b(home medical supplies|home care|homecare|home product|home products|home health|home patient|dme|mobility aids|bathroom safety|wheelchair|walker|rollator|commode|shower chair)\b/i.test(text)) {
+    return answer(
+      `EMRN has home medical supplies and home-care products here: ${homeMedicalSuppliesLink}. You can search by product name, category, brand, size, or SKU, and I can help narrow options if you tell me what the item is for.`,
+      `EMRN propose des fournitures médicales pour la maison et soins à domicile ici: ${homeMedicalSuppliesLink}. Vous pouvez chercher par nom, catégorie, marque, taille ou SKU, et je peux aider à réduire les options si vous me dites l’usage prévu.`
+    );
+  }
+
+  if (/\b(return|exchange|returnable|wrong item|damaged|damage|opened|used|sterile|special order|non-returnable)\b/i.test(text)) {
+    return answer(
+      `Returns require a return merchandise authorization number from Customer Service, and the RMA must be clearly written on the outside of the carton. Items are not returnable after 15 days from the date received. Shipping and handling are non-refundable, and return transport may be at your expense when the return is due to preference or customer error. Returns are not authorized for non-returnable website items, special/custom orders, discontinued items, items not in original packaging, damaged or non-saleable items, and injectable medication or pharmaceutical products. An 18% restocking fee may apply. If a shipment arrives damaged, note the damage on the delivery bill, have the driver sign it, take a photo, and contact EMRN. Details: ${shippingReturnsLink}`,
+      `Les retours nécessitent un numéro d’autorisation de retour du service client, et le RMA doit être clairement inscrit à l’extérieur de la boîte. Les articles ne sont pas retournables après 15 jours suivant la réception. Les frais de livraison/manutention ne sont pas remboursables, et le transport de retour peut être à vos frais si le retour est dû à une préférence ou erreur du client. Les retours ne sont pas autorisés pour les articles indiqués non retournables, commandes spéciales/personnalisées, articles discontinués, articles hors emballage original, endommagés ou non revendables, ni médicaments injectables ou produits pharmaceutiques. Des frais de restockage de 18 % peuvent s’appliquer. Si l’expédition arrive endommagée, notez les dommages sur le bon de livraison, faites signer le chauffeur, prenez une photo et contactez EMRN. Détails: ${shippingReturnsLink}`
+    );
+  }
+
+  if (/\b(special pricing|business pricing|my special pricing|preferred pricing|contract pricing|prix special|prix spécial|prix entreprise)\b/i.test(text)) {
+    return answer(
+      `For business or special pricing, sign in and check My Special Pricing here: ${specialPricingLink}. If your organization needs pricing reviewed or does not yet have access, apply for a business account here: ${businessLink}, or contact EMRN for help: ${contactLink}`,
+      `Pour les prix entreprise ou prix spéciaux, connectez-vous et consultez My Special Pricing ici: ${specialPricingLink}. Si votre organisation doit faire vérifier ses prix ou n’a pas encore accès, faites une demande de compte entreprise ici: ${businessLink}, ou contactez EMRN: ${contactLink}`
+    );
+  }
+
+  if (/\b(payment|credit card|purchase order|po\b|tax exempt|tax-exempt|tax exemption|pay by po)\b/i.test(text)) {
+    return answer(
+      `Payment options are shown at checkout and may include major credit cards or other online payment methods depending on the order and account type. Purchase-order billing may be available for approved business, enterprise, institutional, government, or healthcare accounts. Tax-exempt organizations should contact EMRN before ordering so documentation and account setup can be reviewed: ${contactLink}`,
+      `Les modes de paiement sont affichés au paiement et peuvent inclure les cartes de crédit principales ou d’autres méthodes en ligne selon la commande et le type de compte. Les bons de commande peuvent être disponibles pour comptes entreprise, institutionnels, gouvernementaux ou santé approuvés. Les organisations exemptées de taxes devraient contacter EMRN avant de commander afin de vérifier les documents et le compte: ${contactLink}`
+    );
+  }
+
+  if (/\b(replacement part|compatible accessory|compatibility|right product|which product|do not know the sku|don't know the sku|photo|model number)\b/i.test(text)) {
+    return answer(
+      `Product pages include descriptions, images, specifications, and options when available. For help choosing the right item, replacement part, or compatible accessory, send EMRN the product name, brand, model number, SKU, photo if available, and how you plan to use it. I can also help search if you give me those details.`,
+      `Les pages produit incluent descriptions, images, spécifications et options lorsque disponibles. Pour choisir le bon article, une pièce de remplacement ou un accessoire compatible, envoyez à EMRN le nom, la marque, le modèle, le SKU, une photo si disponible et l’usage prévu. Je peux aussi chercher avec ces détails.`
+    );
+  }
+
+  if (/\b(help center|faq|frequently asked|customer support|still need help)\b/i.test(text)) {
+    return answer(
+      `The EMRN Help Center covers quotes, order status, tracking and shipping, invoices, accounts, returns, payments, purchase orders, tax-exempt ordering, and product help: ${helpLink}. The team can also help with quotes, product questions, order updates, tracking, invoices, and account support: ${contactLink}`,
+      `Le centre d’aide EMRN couvre les devis, statuts de commande, suivi et livraison, factures, comptes, retours, paiements, bons de commande, exemption de taxes et aide produit: ${helpLink}. L’équipe peut aussi aider avec devis, questions produit, mises à jour de commande, suivi, factures et comptes: ${contactLink}`
+    );
+  }
+
+  if (/\b(privacy|privacy policy|personal information|data policy|confidential|confidentiality)\b/i.test(text)) {
+    return answer(
+      `You can review EMRN’s privacy policy here: ${privacyLink}. For questions about personal information or account/order privacy, contact EMRN directly: ${contactLink}`,
+      `Vous pouvez consulter la politique de confidentialité d’EMRN ici: ${privacyLink}. Pour les questions sur les renseignements personnels ou la confidentialité du compte/de la commande, contactez EMRN directement: ${contactLink}`
+    );
+  }
+
+  if (
+    /\b(how.*quote|request.*quote|quote.*multiple|multiple.*quote|need.*account.*quote|quote.*account|how long.*quote|special pricing|large order|bulk price)\b/i.test(text) ||
+    /\b(comment.*devis|demander.*devis|devis.*plusieurs|plusieurs.*devis|compte.*devis|devis.*compte|combien.*temps.*devis|prix special|prix spécial|grande commande|grosse commande)\b/i.test(text)
+  ) {
+    return answer(
+      `To request a quote, open the product page and click “Add to Quote”. Add each item you need, then click “My Quote” at the top of the site to review and submit one quote request. You do not need an account, though an account can help with future orders and invoices. For large quantities, include the quantity needed so EMRN can review special pricing. Help Center: ${helpLink}`,
+      `Pour demander un devis, ouvrez la page produit et cliquez « Add to Quote ». Ajoutez chaque article, puis cliquez « My Quote » en haut du site pour réviser et soumettre une seule demande. Un compte n’est pas obligatoire, mais il peut aider pour les commandes et factures futures. Pour grandes quantités, indiquez la quantité afin qu’EMRN puisse vérifier les prix spéciaux. Aide: ${helpLink}`
+    );
+  }
+
+  return "";
+}
+
 async function productsFromPageContext(pageContext: ProductPageContext, language: "en" | "fr" | "unknown") {
   if (pageContext.sku) {
     const matches = await searchBySKU(pageContext.sku);
@@ -186,9 +363,16 @@ async function handleAssistantPost(req: NextRequest) {
 
   const priorAssistantAskedSupport = messages
     .slice(-3)
-    .some((message) => message.role === "assistant" && /support team|equipe de support|équipe de support/i.test(message.content));
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /support team|equipe de support|équipe de support|send a message to our team|nom, votre courriel et votre question|name, email, and question/i.test(
+          message.content
+        )
+    );
+  const looksLikeSupportDetailsReply = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest);
 
-  if (priorAssistantAskedSupport && isSupportYes(latest)) {
+  if (priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
     if (draft.request) {
       await Promise.all([
@@ -275,7 +459,22 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
+  if (!extractSkuCandidates(latest).length) {
+    const faqAnswer = faqAnswerText(latest, language);
+    if (faqAnswer) {
+      return new Response(textStream(faqAnswer), {
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+  }
+
   const shouldIgnorePriorQuoteFlow = isQuickActionPrompt(latest) && !isQuoteIntent(latest);
+
+  if (isContactIntent(latest)) {
+    return new Response(textStream(contactHelpText(language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
 
   if (isAvailabilityIntent(latest)) {
     const skuCandidates = extractSkuCandidates(latest);
@@ -303,7 +502,7 @@ async function handleAssistantPost(req: NextRequest) {
     isCartIntent(latest) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
       ? await productsFromPageContext(pageContext, language)
       : [];
-  const skuCandidates = isCartIntent(latest) ? extractSkuCandidates(latest) : [];
+  const skuCandidates = extractSkuCandidates(latest);
   const searchQuery = pageProductsForCart.length
     ? pageProductsForCart[0].sku || pageProductsForCart[0].name
     : skuCandidates.length
@@ -335,6 +534,18 @@ async function handleAssistantPost(req: NextRequest) {
     createdAt,
   });
 
+  if (isAccountIntent(latest)) {
+    await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
+          : "You can create or use an EMRN account from the account area on the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   if (isQuoteIntent(latest) || (!shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages)) || products.some((product) => product.quoteOnly)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
@@ -358,25 +569,14 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isAccountIntent(latest)) {
-    await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
-    return new Response(
-      textStream(
-        language === "fr"
-          ? "Je ne peux pas encore voir les informations de compte, d’expédition, de factures ou d’historique d’achat sans une intégration Buyer Portal authentifiée. Je peux toutefois envoyer votre demande à notre équipe ou vous aider à trouver les produits dans le catalogue."
-          : "I cannot view account details, shipping information, invoices, or purchase history yet without an authenticated Buyer Portal integration. I can send this to our team, or help you find the products in the catalog."
-      ),
-      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-    );
-  }
-
   if (!products.length) {
     await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
+    const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
     return new Response(
       textStream(
         language === "fr"
-          ? "Je n’ai pas trouvé de produit correspondant dans le catalogue. Voulez-vous que j’envoie votre demande à notre équipe de support pour un devis ou de l’aide?"
-          : "I did not find a matching product in the catalog. Would you like me to send this to our support team for a quote or help?"
+          ? `Je n’ai pas pu confirmer ce produit dans Pulse. Essayez d’abord la recherche manuelle en haut du site, ou utilisez ce lien: ${fallbackSearchUrl}\n\nSi vous ne le trouvez pas, je peux envoyer votre demande à notre équipe pour vérifier l’article ou préparer une demande de devis.`
+          : `I could not confirm this item in Pulse. Please try the manual search bar at the top of the site first, or use this search link: ${fallbackSearchUrl}\n\nIf you still cannot find it, I can send your request to our team to check the item or prepare a quote request.`
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -476,6 +676,10 @@ async function handleAssistantPost(req: NextRequest) {
       createdAt,
     });
   }
+
+  return new Response(textStream(productResultsText(products, language, searchQuery)), {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
 
   const stream = await streamAssistantResponse({ messages, products, language });
   await logAnalyticsEvent({

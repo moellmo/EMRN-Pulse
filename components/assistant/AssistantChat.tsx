@@ -22,7 +22,7 @@ type UiText = {
   error: string;
   proactivePrompt: string;
   proactiveDismiss: string;
-  quickActions: Array<{ label: string; prompt: string; icon: "search" | "quote" | "box" | "truck" }>;
+  quickActions: Array<{ label: string; prompt: string; icon: "search" | "quote" | "box" | "truck" | "mail" }>;
 };
 
 const brand = "#c34d50";
@@ -81,6 +81,7 @@ const ui: Record<"en" | "fr", UiText> = {
       { label: "Request a Quote", prompt: "I need a quote", icon: "quote" },
       { label: "Check Availability", prompt: "Can you check availability?", icon: "box" },
       { label: "Check Order Status", prompt: "Check order status", icon: "truck" },
+      { label: "Contact Us", prompt: "Contact support", icon: "mail" },
     ],
   },
   fr: {
@@ -105,6 +106,7 @@ const ui: Record<"en" | "fr", UiText> = {
       { label: "Demander un devis", prompt: "J’ai besoin d’un devis", icon: "quote" },
       { label: "Vérifier la disponibilité", prompt: "Pouvez-vous vérifier la disponibilité?", icon: "box" },
       { label: "Suivi de commande", prompt: "Je veux vérifier le statut de ma commande", icon: "truck" },
+      { label: "Nous contacter", prompt: "Contacter le support", icon: "mail" },
     ],
   },
 };

@@ -61,10 +61,20 @@ export function faqContext() {
 EMRN FAQ and policy context:
 - Quotes: Customers can request quotes for one or multiple items. They do not need an account for a quote request. Larger quantities may be reviewed for special pricing, but pricing must never be promised.
 - Stock and lead time: EMRN uses Grit Global BackOrder for customer-facing stock messages. "In stock. Typically ships within 1-3 business days." means available now. "Available to order. Extended lead time — typically 5-9 business days." means purchasable but not immediate stock. "Low stock. Order soon." means limited availability. If the supplied product context does not include one of these customer-facing messages, do not guess timing.
-- Shipping: EMRN ships across Canada. Many orders ship in 1-2 business days when available, but timing depends on product availability, warehouse, carrier, credit verification, supplier processing, and destination. Free shipping may apply to qualifying Canadian online orders over $150, excluding remote areas, territories, large/overweight items, hazardous/special handling items, and temperature-controlled freight.
+- Shipping: EMRN ships across Canada. Most orders ship in 1-2 business days when merchandise is available and credit/payment verification is complete, but timing depends on product availability, warehouse, carrier, supplier processing, and destination. Free shipping applies to qualifying online/web orders over $150 shipped within Canada, excluding territories, remote areas, large/overweight items, hazardous/special handling items, and temperature-controlled freight.
 - Returns: Returns require prior approval. Many eligible items must be requested within 15 calendar days from receipt. Shipping and handling are non-refundable. Some items are not returnable, including non-stock, special-order, sterile, opened, used, discontinued, custom, injectable, pharmaceutical, or product-page non-returnable items. Returns over $500 or exceptions need an RMA.
 - Contact: If a customer needs help or if you are unsure, offer to send the request to EMRN support. Do not show an email address unless a configured workflow explicitly requires it.
+- Business accounts: Customers can create or access an EMRN account from the site account area. For business pricing, company purchasing, special terms, or account setup help, explain that EMRN can help review the request and offer to send it to the team. Do not promise approval, pricing, or terms.
+- Order help: If a customer needs order status, collect their order number and email. If automated tracking is unavailable, send the request to support.
+- Product search fallback: If no product is found, suggest trying the site search and offer to send the item request to EMRN for quote/help. Never say a product does not exist unless the catalog/search confirms no match.
 - FAQ page: https://emrn.ca/faq-s/
+- Shipping and returns: https://emrn.ca/shipping-returns
+- Business account application: https://emrn.ca/business-account-application
+- Business pricing: https://emrn.ca/my-special-pricing
+- Business solutions: https://emrn.ca/business-medical-supplies
+- Home medical supplies: https://emrn.ca/home-medical-supplies/
+- Privacy policy: https://emrn.ca/privacy-policy
+- Contact page: https://emrn.ca/contact-us/
 `.trim();
 }
 

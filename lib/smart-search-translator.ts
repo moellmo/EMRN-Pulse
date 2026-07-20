@@ -1,6 +1,6 @@
 import { detectQueryLanguage, expandSearchQuery, getFallbackTerms, normalizeSearchText } from "./search-language";
 
-type SmartQueryResult = {
+export type SmartQueryResult = {
   original_query: string;
   search_query: string;
   language: "en" | "fr";
@@ -101,10 +101,11 @@ function preserveModifiers(original: string) {
   return Array.from(pieces).join(" ");
 }
 
-function buildManualQuery(original: string, expansions: string[]) {
+function buildManualQuery(original: string, expansions: string[], language: "en" | "fr") {
   if (!expansions.length) return "";
   const modifiers = preserveModifiers(original);
-  return cleanSearchQuery([original, ...expansions.slice(0, 6), modifiers].filter(Boolean).join(" "));
+  const parts = language === "fr" ? [expansions[0], modifiers] : [original, ...expansions.slice(0, 6), modifiers];
+  return cleanSearchQuery(parts.filter(Boolean).join(" "));
 }
 
 async function translateWithOpenAI(query: string, language: "en" | "fr") {
@@ -166,7 +167,7 @@ export async function buildSmartSearchQuery(query: string): Promise<SmartQueryRe
   const manual = expandSearchQuery(original);
   const language = manual.language || detectQueryLanguage(original);
 
-  let translated = buildManualQuery(original, manual.expansions);
+  let translated = buildManualQuery(original, manual.expansions, language);
   let translator: SmartQueryResult["translator"] = translated ? "manual" : "none";
   let aiStatus: SmartQueryResult["ai_status"] = "not_needed";
 

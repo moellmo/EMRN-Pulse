@@ -37,7 +37,7 @@ export function isMedicalAdviceRequest(text: string) {
 }
 
 export function isQuoteIntent(text: string) {
-  return /\b(quote|pricing|formal quote|request a quote|special pricing|bulk price|company pricing|purchase order|po\b|b2b|business account|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
+  return /\b(quote|pricing|formal quote|request a quote|special pricing|bulk price|company pricing|purchase order|po\b|b2b|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
 }
 
 export function isCartIntent(text: string) {
@@ -45,11 +45,15 @@ export function isCartIntent(text: string) {
 }
 
 export function isAccountIntent(text: string) {
-  return /\b(my account|logged in|login|shipping address|ship to|purchase history|reorder|last year|invoice|orders|company pricing|buyer portal|mon compte|adresse de livraison|historique|facture|mes commandes)\b/i.test(text);
+  return /\b(my account|business account|create an account|make an account|open an account|register|logged in|login|shipping address|ship to|purchase history|reorder|last year|invoice|orders|company pricing|buyer portal|mon compte|compte entreprise|creer un compte|créer un compte|adresse de livraison|historique|facture|mes commandes)\b/i.test(text);
 }
 
 export function isOrderStatusIntent(text: string) {
   return /\b(order status|order update|update on my order|update for my order|order tracking|track(?:ing)?|where is my order|shipment update|shipping update|check order|check my order|commande|suivi|statut de commande|ou est ma commande|où est ma commande)\b/i.test(text);
+}
+
+export function isContactIntent(text: string) {
+  return /\b(contact us|contact support|customer service|talk to support|talk to someone|human support|speak to someone|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|support humain|service client)\b/i.test(text);
 }
 
 export function isAvailabilityIntent(text: string) {
@@ -61,7 +65,7 @@ export function isFindProductPrompt(text: string) {
 }
 
 export function isQuickActionPrompt(text: string) {
-  return isFindProductPrompt(text) || isAvailabilityIntent(text) || isQuoteIntent(text) || isOrderStatusIntent(text);
+  return isFindProductPrompt(text) || isAvailabilityIntent(text) || isQuoteIntent(text) || isOrderStatusIntent(text) || isContactIntent(text);
 }
 
 export function isSupportYes(text: string) {
@@ -70,14 +74,24 @@ export function isSupportYes(text: string) {
 
 export function extractSkuCandidates(text: string) {
   const candidates: string[] = [];
+  const skuText = text
+    .replace(/\b(?:i|we)\s+(?:want|would like|need)\s+to\s+(?:purchase|buy|order)\b/gi, " ")
+    .replace(/\b(?:purchase|buy|order|add|cart|checkout|sku|item|product|produit|acheter|commander|panier)\b/gi, " ");
 
-  for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
+  for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
     candidates.push(match[1]);
   }
 
   const matches =
-    text.match(/\b(?:[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\+?|\d{4,}\+?)(?=\s|$|[,.!?])/gi) || [];
+    skuText.match(/\b(?:[A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9]*(?:-[A-Z0-9]+)*\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\+?|\d{4,}\+?)(?=\s|$|[,.!?])/gi) || [];
   candidates.push(...matches.filter((sku) => !/^sku\s*\d/i.test(sku)));
+
+  for (const match of skuText.matchAll(/(?:^|[^\w/-])(?=([A-Z0-9+/-]{3,30})(?=\s|$|[,.!?]))(?=[A-Z0-9+/-]*\d)([A-Z0-9][A-Z0-9+/-]{2,29}\+?)(?=\s|$|[,.!?])/gi)) {
+    const value = match[2] || match[1];
+    if (!value) continue;
+    if (/^\d{1,3}$/.test(value)) continue;
+    candidates.push(value);
+  }
 
   return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase())));
 }

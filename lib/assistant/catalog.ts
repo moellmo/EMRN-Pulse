@@ -1,6 +1,8 @@
 import { getTypesenseSearch } from "../typesense";
 import { absoluteStoreUrl, normalizeCommerceUrl } from "../store-url";
 import { buildSmartSearchQuery } from "../smart-search-translator";
+import type { SmartQueryResult } from "../smart-search-translator";
+import { normalizeSearchText } from "../search-language";
 import { withBackorderAvailability } from "./availability";
 import { mcpCreateCart, mcpSearchProducts } from "./bigcommerce-mcp";
 import type { CartRequest, CartResult, CatalogProduct, ProductSearchInput } from "./types";
@@ -9,6 +11,11 @@ const COLLECTION_NAME = "emrn_products";
 const STORE_HASH = process.env.BIGCOMMERCE_STORE_HASH;
 const ACCESS_TOKEN = process.env.BIGCOMMERCE_ACCESS_TOKEN;
 const BIGCOMMERCE_API_BASE = STORE_HASH ? `https://api.bigcommerce.com/stores/${STORE_HASH}/v3` : "";
+const SMARTSEARCH_API_BASE = (process.env.EMRN_SMARTSEARCH_API_BASE || process.env.EMRN_STORE_URL || "https://emrn.ca").replace(
+  /\/+$/,
+  ""
+);
+const SMARTSEARCH_FALLBACK_ENABLED = process.env.EMRN_SMARTSEARCH_FALLBACK !== "false";
 
 type SearchDocument = Partial<{
   id: string | number;
@@ -40,6 +47,10 @@ type SearchHit = {
 type TypesenseSearchResult = {
   hits?: SearchHit[];
   found?: number;
+};
+
+type SmartSearchApiResult = TypesenseSearchResult & {
+  grouped_hits?: SearchHit[];
 };
 
 type BigCommerceProduct = Partial<{
@@ -88,6 +99,9 @@ function hitDocument(hit: SearchHit | SearchDocument): SearchDocument {
 
 function mapProduct(hit: SearchHit | SearchDocument): CatalogProduct {
   const doc = hitDocument(hit);
+  const quoteOnly = doc.quote_only === true;
+  const explicitlyNotPurchasable = doc.purchasable === false;
+
   return {
     id: String(doc.id || ""),
     productId: Number(doc.product_id || 0),
@@ -105,9 +119,9 @@ function mapProduct(hit: SearchHit | SearchDocument): CatalogProduct {
     inventoryLevel: Number(doc.inventory_level || 0),
     availability: String(doc.availability || ""),
     availabilityDescription: String(doc.availability_description || ""),
-    purchasable: Boolean(doc.purchasable),
-    quoteOnly: Boolean(doc.quote_only),
-    purchaseAction: doc.quote_only ? "quote_only" : "cart",
+    purchasable: !quoteOnly && !explicitlyNotPurchasable,
+    quoteOnly,
+    purchaseAction: quoteOnly ? "quote_only" : "cart",
     purchaseMessage: String(doc.purchase_message || ""),
   };
 }
@@ -135,6 +149,216 @@ function skuSearchVariants(sku: string) {
   const compact = clean.replace(/\s+/g, "");
   const spaced = compact.replace(/^([A-Z]+)(\d+)$/, "$1 $2");
   return Array.from(new Set([clean, compact, spaced].filter(Boolean)));
+}
+
+function smartSearchHits(result: SmartSearchApiResult | null) {
+  return [...(result?.hits || []), ...(result?.grouped_hits || [])];
+}
+
+function hitKey(hit: SearchHit) {
+  const doc = hit.document || {};
+  return String(doc.id || `${doc.product_id || ""}:${doc.variant_id || ""}:${doc.sku || ""}`);
+}
+
+function mergeHits(...groups: SearchHit[][]) {
+  const seen = new Set<string>();
+  const merged: SearchHit[] = [];
+
+  for (const group of groups) {
+    for (const hit of group || []) {
+      const key = hitKey(hit);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(hit);
+    }
+  }
+
+  return merged;
+}
+
+function includesAny(text: string, terms: string[]) {
+  return terms.some((term) => text.includes(normalizeSearchText(term)));
+}
+
+function documentNameText(hit: SearchHit) {
+  const doc = hit.document || {};
+  return normalizeSearchText([doc.name, doc.parent_name].filter(Boolean).join(" "));
+}
+
+function documentCategoryText(hit: SearchHit) {
+  const categories = hit.document?.categories;
+  const values = Array.isArray(categories) ? categories : [categories];
+  return normalizeSearchText(values.map((value) => String(value || "")).join(" "));
+}
+
+function supplementalRecallQueries(originalQuery: string, translatedQuery: string, fallbackTerms: string[]) {
+  const query = normalizeSearchText(`${originalQuery} ${translatedQuery} ${fallbackTerms.join(" ")}`);
+  const recalls: string[] = [];
+  const add = (...terms: string[]) => {
+    for (const term of terms) {
+      const clean = term.trim();
+      if (clean && !recalls.includes(clean)) recalls.push(clean);
+    }
+  };
+
+  if (
+    includesAny(query, [
+      "medical bag",
+      "medical bags",
+      "medic bag",
+      "medic bags",
+      "trauma bag",
+      "trauma bags",
+      "ems bag",
+      "emt bag",
+      "jump bag",
+      "jump bags",
+      "first aid bag",
+      "first aid bags",
+      "sac medical",
+      "sacs medicaux",
+      "sac de premiers soins",
+      "sacs de premiers soins",
+      "sac d urgence",
+      "sacs d urgence",
+    ])
+  ) {
+    add("medical bag", "medical bags", "trauma bag", "ems bag", "first aid bag", "rescue bag", "medical backpack");
+  }
+
+  return recalls.slice(0, 8);
+}
+
+function rankMedicalBagHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeSearchText(`${originalQuery} ${translatedQuery}`);
+  const isMedicalBagQuery = includesAny(query, [
+    "medical bag",
+    "medical bags",
+    "medic bag",
+    "medic bags",
+    "trauma bag",
+    "trauma bags",
+    "ems bag",
+    "emt bag",
+    "first aid bag",
+    "first aid bags",
+    "jump bag",
+    "jump bags",
+    "rescue bag",
+    "rescue bags",
+    "sac medical",
+    "sacs medicaux",
+    "sac de premiers soins",
+    "sacs de premiers soins",
+    "sac d urgence",
+    "sacs d urgence",
+  ]);
+  if (!isMedicalBagQuery) return hits;
+
+  const coreBagTerms = [
+    "medical bag",
+    "medical bags",
+    "medic bag",
+    "medic bags",
+    "trauma bag",
+    "trauma bags",
+    "ems bag",
+    "ems bags",
+    "emt bag",
+    "emt bags",
+    "jump bag",
+    "jump bags",
+    "rescue bag",
+    "rescue bags",
+    "first aid bag",
+    "first aid bags",
+    "oxygen bag",
+    "oxygen bags",
+    "medical backpack",
+    "medical backpacks",
+    "ems backpack",
+    "ems backpacks",
+    "trauma backpack",
+    "trauma backpacks",
+    "medpac",
+    "statpack",
+    "statpacks",
+  ];
+  const weakContainerTerms = ["pouch", "pouches", "case", "cases", "pack", "packs", "backpack", "backpacks"];
+  const demoteTerms = ["sick bag", "emesis bag", "emesis bags", "amniotic sac", "amniotic sacs", "plastic bag", "bio bag", "bio bags"];
+
+  const score = (hit: SearchHit) => {
+    const name = ` ${documentNameText(hit)} `;
+    const categories = ` ${documentCategoryText(hit)} `;
+    let value = 0;
+
+    const namedCoreBag = includesAny(name, coreBagTerms);
+    const inMedicalBagsCategory = categories.includes(" medical bags ");
+    const namedWeakContainer = includesAny(name, weakContainerTerms);
+
+    if (namedCoreBag) value += 520;
+    else if (inMedicalBagsCategory) value += 220;
+    else value -= 500;
+    if (namedWeakContainer && !namedCoreBag && !inMedicalBagsCategory) value -= 220;
+    if (includesAny(name, demoteTerms)) value -= 420;
+
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+async function searchSmartSearchApiRaw(query: string, limit = 8): Promise<SmartSearchApiResult | null> {
+  if (!SMARTSEARCH_FALLBACK_ENABLED || !query.trim()) return null;
+
+  const url = new URL("/api/search", SMARTSEARCH_API_BASE);
+  url.searchParams.set("q", query);
+  url.searchParams.set("per_page", String(Math.min(Math.max(limit, 1), 24)));
+  url.searchParams.set("sort", "popularity");
+
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      console.error("[EMRN Pulse] SmartSearch fallback failed", response.status, url.toString());
+      return null;
+    }
+    return (await response.json()) as SmartSearchApiResult;
+  } catch (error) {
+    console.error("[EMRN Pulse] SmartSearch fallback failed", error);
+    return null;
+  }
+}
+
+async function searchSmartSearchApiProducts(query: string, limit = 8) {
+  const result = await searchSmartSearchApiRaw(query, limit);
+  const mapped = smartSearchHits(result).map(mapProduct).filter((product) => product.productId || product.sku);
+  return withBackorderAvailability(mapped.slice(0, limit));
+}
+
+async function searchSmartSearchApiBySKU(sku: string, limit = 8) {
+  const normalized = normalizeSku(sku);
+  const primaryProducts = new Map<string, CatalogProduct>();
+  const relatedProducts = new Map<string, CatalogProduct>();
+
+  for (const variant of skuSearchVariants(sku)) {
+    const result = await searchSmartSearchApiRaw(variant, limit);
+    for (const hit of smartSearchHits(result)) {
+      const doc = hitDocument(hit);
+      const isPrimarySkuMatch = normalizeSku(String(doc.sku || "")) === normalized;
+      const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizeSku(value) === normalized);
+      if (!isPrimarySkuMatch && !isRelatedSkuMatch) continue;
+
+      const product = mapProduct(hit);
+      const key = `${product.productId}:${product.variantId}:${product.sku}`;
+      if (isPrimarySkuMatch) primaryProducts.set(key, product);
+      else relatedProducts.set(key, product);
+    }
+  }
+
+  return withBackorderAvailability(Array.from((primaryProducts.size ? primaryProducts : relatedProducts).values()));
 }
 
 function bigCommerceHeaders() {
@@ -283,31 +507,92 @@ async function searchBySKUFallback(sku: string) {
   return keywordMatches.filter((product) => normalizeSku(product.sku) === normalized);
 }
 
+async function searchTypesenseProducts(query: string, input: ProductSearchInput) {
+  return (await getTypesenseSearch()
+    .collections(COLLECTION_NAME)
+    .documents()
+    .search({
+      q: query || "*",
+      query_by:
+        "sku,all_skus,name,parent_name,brand,sold_by,categories,variant_label,option_text,search_text,description,custom_fields_text",
+      query_by_weights: "30,24,16,12,8,7,7,6,6,4,2,2",
+      filter_by: productFilter(input),
+      sort_by: "_text_match:desc,popularity_score:desc,product_id:desc",
+      per_page: Math.min(Math.max(input.limit || 6, 1), 12),
+      num_typos: 2,
+      typo_tokens_threshold: 1,
+      prefix: true,
+    })) as TypesenseSearchResult;
+}
+
 export async function searchProducts(input: ProductSearchInput) {
-  const smartQuery = await buildSmartSearchQuery(input.query);
+  const rawQuery = input.query || "*";
+  let smartQuery: SmartQueryResult = {
+    original_query: rawQuery,
+    search_query: rawQuery,
+    language: input.language === "fr" ? "fr" as const : "en" as const,
+    expanded_query: rawQuery,
+    expansions: [] as string[],
+    translated_query: "",
+    translator: "none" as const,
+    ai_status: "not_needed" as const,
+    fallback_terms: [] as string[],
+  };
+
+  if (rawQuery && rawQuery !== "*") {
+    try {
+      smartQuery = await buildSmartSearchQuery(rawQuery);
+    } catch (error) {
+      console.error("[EMRN Pulse] search query expansion failed", error);
+    }
+  }
+
+  const shouldPreferTranslatedQuery =
+    (smartQuery.language === "fr" || input.language === "fr") && smartQuery.search_query && smartQuery.search_query !== rawQuery;
+  const primaryQuery =
+    input.language === "fr" && smartQuery.expansions.length
+      ? smartQuery.expansions[0]
+      : shouldPreferTranslatedQuery
+        ? smartQuery.search_query
+        : rawQuery;
   let result: TypesenseSearchResult = {};
+  let supplementalResults: TypesenseSearchResult[] = [];
 
   try {
-    result = (await getTypesenseSearch()
-      .collections(COLLECTION_NAME)
-      .documents()
-      .search({
-        q: smartQuery.search_query || input.query || "*",
-        query_by:
-          "sku,all_skus,name,parent_name,brand,sold_by,categories,variant_label,option_text,search_text,description,custom_fields_text",
-        query_by_weights: "40,32,18,14,10,9,8,6,6,4,2,2",
-        filter_by: productFilter(input),
-        sort_by: "_text_match:desc,popularity_score:desc,product_id:desc",
-        per_page: Math.min(Math.max(input.limit || 6, 1), 12),
-        num_typos: 2,
-        typo_tokens_threshold: 1,
-        prefix: true,
-      })) as TypesenseSearchResult;
+    const recallQueries = supplementalRecallQueries(rawQuery, smartQuery.search_query, smartQuery.fallback_terms);
+    const [primaryResult, ...recallResults] = (await Promise.all([
+      searchTypesenseProducts(primaryQuery, input),
+      ...recallQueries.map((recallQuery) => searchTypesenseProducts(recallQuery, input)),
+    ])) as TypesenseSearchResult[];
+    result = primaryResult;
+    supplementalResults = recallResults;
   } catch (error) {
     console.error("[EMRN Pulse] Typesense search failed", error);
   }
 
-  let products = await withBackorderAvailability((result.hits || []).map(mapProduct));
+  let mergedHits = mergeHits(
+    ...(supplementalResults.map((supplementalResult) => supplementalResult.hits || [])),
+    result.hits || []
+  );
+  mergedHits = rankMedicalBagHits(mergedHits, rawQuery, smartQuery.search_query);
+
+  let products = await withBackorderAvailability(mergedHits.map(mapProduct));
+
+  if (!products.length && rawQuery && rawQuery !== "*" && primaryQuery !== rawQuery) {
+    try {
+      result = await searchTypesenseProducts(rawQuery, input);
+      products = await withBackorderAvailability(rankMedicalBagHits(result.hits || [], rawQuery, smartQuery.search_query).map(mapProduct));
+    } catch (error) {
+      console.error("[EMRN Pulse] raw Typesense fallback search failed", error);
+    }
+  }
+
+  if (!products.length && input.query && input.query !== "*") {
+    products = await searchSmartSearchApiProducts(input.query, input.limit || 8);
+  }
+  if (!products.length && input.query && input.query !== "*" && smartQuery.search_query !== input.query) {
+    products = await searchSmartSearchApiProducts(smartQuery.search_query || input.query, input.limit || 8);
+  }
   if (!products.length && input.query && input.query !== "*") {
     products = await searchBigCommerceProducts(smartQuery.search_query || input.query, input.limit || 6);
   }
@@ -348,21 +633,28 @@ export async function searchBySKU(sku: string) {
     console.error("[EMRN Pulse] Typesense SKU search failed", error);
   }
   const normalized = normalizeSku(sku);
-  const products = new Map<string, CatalogProduct>();
+  const primaryProducts = new Map<string, CatalogProduct>();
+  const relatedProducts = new Map<string, CatalogProduct>();
 
   for (const result of results) {
     for (const hit of result.hits || []) {
       const doc = hitDocument(hit);
-      const isExactSkuMatch = skuValuesForDocument(doc).some((value) => normalizeSku(value) === normalized);
-      if (isExactSkuMatch) {
+      const isPrimarySkuMatch = normalizeSku(String(doc.sku || "")) === normalized;
+      const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizeSku(value) === normalized);
+      if (isPrimarySkuMatch || isRelatedSkuMatch) {
         const product = mapProduct(hit);
-        products.set(`${product.productId}:${product.variantId}:${product.sku}`, product);
+        const key = `${product.productId}:${product.variantId}:${product.sku}`;
+        if (isPrimarySkuMatch) primaryProducts.set(key, product);
+        else relatedProducts.set(key, product);
       }
     }
   }
 
-  const typesenseProducts = await withBackorderAvailability(Array.from(products.values()));
+  const typesenseProducts = await withBackorderAvailability(Array.from((primaryProducts.size ? primaryProducts : relatedProducts).values()));
   if (typesenseProducts.length) return typesenseProducts;
+
+  const smartSearchProducts = await searchSmartSearchApiBySKU(sku);
+  if (smartSearchProducts.length) return smartSearchProducts;
 
   const bigCommerceMatches = await searchBigCommerceBySKU(sku);
   if (bigCommerceMatches.length) return bigCommerceMatches;
