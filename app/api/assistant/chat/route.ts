@@ -77,6 +77,11 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
   return skus;
 }
 
+function cartItemsToken(items: Array<{ productId: number; variantId?: number; quantity: number }>) {
+  const payload = Buffer.from(JSON.stringify(items), "utf8").toString("base64");
+  return `\n\n[[EMRN_CART_ITEMS:${payload}]]`;
+}
+
 function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
 }
@@ -312,7 +317,7 @@ async function handleAssistantPost(req: NextRequest) {
           await Promise.all(
             skuCandidates.map(async (sku) => {
               const matches = await searchBySKU(sku);
-              return matches.filter((product) => normalizeSku(product.sku) === normalizeSku(sku));
+              return matches;
             })
           )
         ).flat(),
@@ -435,11 +440,18 @@ async function handleAssistantPost(req: NextRequest) {
     });
 
     if (cart.checkoutUrl) {
+      const lineItems =
+        cart.lineItems ||
+        cartProducts.slice(0, 8).map(({ product, quantity }) => ({
+          productId: product.productId,
+          variantId: product.variantId || undefined,
+          quantity,
+        }));
       return new Response(
         textStream(
           language === "fr"
-            ? `J’ai préparé votre panier avec les articles admissibles. Vous pouvez passer à la caisse ici: ${cart.checkoutUrl}`
-            : `I prepared your cart with the eligible items. You can continue to checkout here: ${cart.checkoutUrl}`
+            ? `J’ai trouvé l’article et je l’ajoute à votre panier maintenant. Si le panier ne s’ouvre pas automatiquement, vous pouvez l’ouvrir ici: https://emrn.ca/cart.php${cartItemsToken(lineItems)}`
+            : `I found the item and I’m adding it to your cart now. If the cart does not open automatically, you can open it here: https://emrn.ca/cart.php${cartItemsToken(lineItems)}`
         ),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );

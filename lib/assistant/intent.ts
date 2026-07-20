@@ -71,11 +71,12 @@ export function isSupportYes(text: string) {
 export function extractSkuCandidates(text: string) {
   const candidates: string[] = [];
 
-  for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)\b/gi)) {
+  for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
     candidates.push(match[1]);
   }
 
-  const matches = text.match(/\b(?:[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\+?|\d{4,}\+?)\b/gi) || [];
+  const matches =
+    text.match(/\b(?:[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\+?|\d{4,}\+?)(?=\s|$|[,.!?])/gi) || [];
   candidates.push(...matches.filter((sku) => !/^sku\s*\d/i.test(sku)));
 
   return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase())));

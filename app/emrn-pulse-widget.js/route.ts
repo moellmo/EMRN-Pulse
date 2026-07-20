@@ -97,6 +97,67 @@ export async function GET(req: Request) {
     );
   }
 
+  async function storefrontJson(url, options) {
+    var response = await fetch(url, Object.assign({
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      }
+    }, options || {}));
+    if (!response.ok) throw new Error("Storefront cart request failed: " + response.status);
+    var text = await response.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      return {};
+    }
+  }
+
+  async function getStorefrontCartId() {
+    try {
+      var payload = await storefrontJson("/api/storefront/carts");
+      var carts = payload && payload.data ? payload.data : payload;
+      if (Array.isArray(carts) && carts[0] && carts[0].id) return carts[0].id;
+      if (carts && carts.id) return carts.id;
+    } catch (error) {
+      return "";
+    }
+    return "";
+  }
+
+  function cartPayload(items) {
+    return {
+      lineItems: (items || []).map(function (item) {
+        var lineItem = {
+          quantity: Number(item.quantity || 1),
+          productId: Number(item.productId)
+        };
+        if (item.variantId) lineItem.variantId = Number(item.variantId);
+        return lineItem;
+      }).filter(function (item) {
+        return item.productId && item.quantity > 0;
+      })
+    };
+  }
+
+  async function addItemsToStorefrontCart(items) {
+    var payload = cartPayload(items);
+    if (!payload.lineItems.length) throw new Error("No cart items");
+    var cartId = await getStorefrontCartId();
+    if (cartId) {
+      return storefrontJson("/api/storefront/carts/" + encodeURIComponent(cartId) + "/items", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+    }
+    return storefrontJson("/api/storefront/carts", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  }
+
   function applySize(open, nudge) {
     iframe.style.width = open ? "430px" : nudge ? "350px" : "120px";
     iframe.style.height = open ? "780px" : nudge ? "150px" : "120px";
@@ -114,6 +175,27 @@ export async function GET(req: Request) {
     if (event.origin !== origin) return;
     if (!event.data || event.data.type !== "emrn-pulse:request-page-context") return;
     sendPageContext();
+  });
+
+  window.addEventListener("message", function (event) {
+    if (event.origin !== origin) return;
+    if (!event.data || event.data.type !== "emrn-pulse:add-to-cart") return;
+    addItemsToStorefrontCart(event.data.items || [])
+      .then(function () {
+        if (iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: "emrn-pulse:add-to-cart-result", ok: true }, origin);
+        }
+        window.location.href = "/cart.php";
+      })
+      .catch(function (error) {
+        if (iframe.contentWindow) {
+          iframe.contentWindow.postMessage({
+            type: "emrn-pulse:add-to-cart-result",
+            ok: false,
+            message: error && error.message ? error.message : "Could not add to cart"
+          }, origin);
+        }
+      });
   });
 
   iframe.addEventListener("load", sendPageContext);

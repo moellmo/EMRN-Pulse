@@ -1,4 +1,4 @@
-import type { CartRequest, CartResult, CommerceToolStatus } from "./types";
+import type { CartRequest, CartResult, CatalogProduct, CommerceToolStatus } from "./types";
 import { normalizeCommerceUrl } from "../store-url";
 
 const mcpUrl = process.env.BIGCOMMERCE_MCP_URL;
@@ -176,6 +176,109 @@ function unwrapMcpToolData(data: unknown): Record<string, unknown> {
   return record;
 }
 
+function textFromMcpData(data: unknown) {
+  const record = unwrapMcpToolData(data);
+  const content = Array.isArray(record.content) ? record.content : [];
+  const textItem = content.find(
+    (item): item is { type?: string; text?: string } =>
+      !!item && typeof item === "object" && (item as { type?: string }).type === "text"
+  );
+
+  return String(
+    textItem?.text ||
+      record.text ||
+      record.message ||
+      record.description ||
+      ""
+  );
+}
+
+function recordsFromUnknown(value: unknown): Record<string, unknown>[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap(recordsFromUnknown);
+  if (typeof value !== "object") return [];
+
+  const record = value as Record<string, unknown>;
+  const directArrays = [
+    record.products,
+    record.items,
+    record.results,
+    record.edges,
+    record.nodes,
+    record.data,
+    record.catalog,
+  ];
+  const directRecords = directArrays.flatMap(recordsFromUnknown);
+  if (directRecords.length) return directRecords;
+
+  if (record.node && typeof record.node === "object") return recordsFromUnknown(record.node);
+  if (record.product && typeof record.product === "object") return recordsFromUnknown(record.product);
+
+  const hasProductShape =
+    record.id !== undefined ||
+    record.entityId !== undefined ||
+    record.productEntityId !== undefined ||
+    record.name !== undefined ||
+    record.sku !== undefined;
+  return hasProductShape ? [record] : [];
+}
+
+function numberFromUnknown(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function stringFromUnknown(value: unknown) {
+  return String(value || "").trim();
+}
+
+function normalizeMcpSearchProducts(data: unknown): CatalogProduct[] {
+  const record = unwrapMcpToolData(data);
+  const structured = record.structuredContent && typeof record.structuredContent === "object"
+    ? (record.structuredContent as Record<string, unknown>)
+    : record;
+  const products = recordsFromUnknown(structured);
+  const text = textFromMcpData(data);
+
+  if (!products.length && text) {
+    return [];
+  }
+
+  return products
+    .map((product) => {
+      const productId = numberFromUnknown(product.productEntityId || product.entityId || product.productId || product.id);
+      const variantId = numberFromUnknown(product.variantEntityId || product.variantId);
+      const sku = stringFromUnknown(product.sku || product.variantSku);
+      const name = stringFromUnknown(product.name || product.title || product.productName);
+      const url = normalizeCommerceUrl(stringFromUnknown(product.url || product.path || product.productUrl));
+      const price = numberFromUnknown(product.price || product.calculatedPrice || product.salePrice);
+
+      return {
+        id: String(variantId || productId || sku || name),
+        productId,
+        variantId,
+        name,
+        parentName: stringFromUnknown(product.parentName || name),
+        sku,
+        brand: stringFromUnknown(product.brand || product.brandName),
+        manufacturer: stringFromUnknown(product.manufacturer || product.soldBy),
+        categories: Array.isArray(product.categories) ? product.categories.map(String) : [],
+        description: stringFromUnknown(product.description || product.summary),
+        price,
+        image: stringFromUnknown(product.image || product.imageUrl || product.defaultImage),
+        url,
+        inventoryLevel: numberFromUnknown(product.inventoryLevel || product.inventory_level),
+        availability: stringFromUnknown(product.availability),
+        availabilityDescription: stringFromUnknown(product.availabilityDescription || product.availability_description),
+        purchasable: product.purchasable === false ? false : true,
+        quoteOnly: false,
+        purchaseAction: "cart" as const,
+        purchaseMessage: "",
+      };
+    })
+    .filter((product) => product.productId && product.name);
+}
+
 async function callBigCommerceMcpTool(
   toolNameOrKind: string,
   args: Record<string, unknown>,
@@ -305,8 +408,29 @@ export async function mcpGetShippingInfo(): Promise<CommerceToolStatus<null>> {
   };
 }
 
-export async function mcpSearchProducts(query: string) {
-  return callBigCommerceMcpTool("searchProducts", { query }, "product-search");
+export async function mcpSearchProducts(query: string): Promise<CommerceToolStatus<CatalogProduct[]>> {
+  if (query.trim().length < 3) {
+    return {
+      available: false,
+      source: "bigcommerce-mcp",
+      message: "BigCommerce MCP product search requires at least 3 characters.",
+    };
+  }
+
+  const result = await callBigCommerceMcpTool("search_products", { term: query }, "product-search");
+  if (!result.available) {
+    return {
+      available: false,
+      source: "bigcommerce-mcp",
+      message: result.message,
+    };
+  }
+
+  return {
+    available: true,
+    source: "bigcommerce-mcp",
+    data: normalizeMcpSearchProducts(result.data),
+  };
 }
 
 export async function getBigCommerceMcpStatus() {

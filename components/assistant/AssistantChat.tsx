@@ -121,6 +121,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const [hasError, setHasError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const postedCartTokensRef = useRef<Set<string>>(new Set());
   const currentLanguage = language === "fr" ? "fr" : "en";
   const text = ui[currentLanguage];
 
@@ -247,7 +248,16 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
         const { done, value } = await reader.read();
         if (done) break;
         answer += decoder.decode(value, { stream: true });
-        setMessages([...nextMessages, { role: "assistant", content: answer, createdAt: new Date().toISOString() }]);
+        setMessages([...nextMessages, { role: "assistant", content: stripCartItemsToken(answer), createdAt: new Date().toISOString() }]);
+      }
+
+      const cartPayload = extractCartItemsToken(answer);
+      if (cartPayload && mode === "floating" && typeof window !== "undefined") {
+        const tokenKey = JSON.stringify(cartPayload.items);
+        if (!postedCartTokensRef.current.has(tokenKey)) {
+          postedCartTokensRef.current.add(tokenKey);
+          window.parent?.postMessage({ type: "emrn-pulse:add-to-cart", items: cartPayload.items }, "*");
+        }
       }
     } catch {
       setHasError(true);
@@ -555,6 +565,33 @@ function renderInlineMessage(text: string, isUser: boolean) {
 
     return <span key={`${part}-${index}`}>{part}</span>;
   });
+}
+
+function stripCartItemsToken(value: string) {
+  return value.replace(/\s*\[\[EMRN_CART_ITEMS:[A-Za-z0-9+/=]+]]\s*/g, "").trimEnd();
+}
+
+function extractCartItemsToken(value: string) {
+  const match = value.match(/\[\[EMRN_CART_ITEMS:([A-Za-z0-9+/=]+)]]/);
+  if (!match?.[1] || typeof window === "undefined") return null;
+
+  try {
+    const items = JSON.parse(window.atob(match[1])) as Array<{
+      productId: number;
+      variantId?: number;
+      quantity: number;
+    }>;
+    const cleanItems = items
+      .map((item) => ({
+        productId: Number(item.productId),
+        variantId: item.variantId ? Number(item.variantId) : undefined,
+        quantity: Math.max(1, Number(item.quantity || 1)),
+      }))
+      .filter((item) => item.productId && item.quantity > 0);
+    return cleanItems.length ? { items: cleanItems } : null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeDisplayedUrl(value: string) {

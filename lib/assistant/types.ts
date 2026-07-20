@@ -97,12 +97,17 @@ export type CartResult = {
   checkoutUrl?: string;
   cartId?: string;
   blockedItems: string[];
-  provider?: "bigcommerce-api" | "bigcommerce-mcp";
+  provider?: "bigcommerce-api" | "bigcommerce-mcp" | "storefront-browser";
+  lineItems?: Array<{
+    productId: number;
+    variantId?: number;
+    quantity: number;
+  }>;
 };
 
 export type CommerceToolStatus<T> = {
   available: boolean;
-  source: "bigcommerce-mcp" | "buyer-portal" | "bigcommerce-api";
+  source: "bigcommerce-mcp" | "buyer-portal" | "bigcommerce-api" | "storefront-browser";
   data?: T;
   message?: string;
 };

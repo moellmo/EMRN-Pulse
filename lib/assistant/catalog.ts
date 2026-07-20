@@ -2,7 +2,7 @@ import { getTypesenseSearch } from "../typesense";
 import { absoluteStoreUrl, normalizeCommerceUrl } from "../store-url";
 import { buildSmartSearchQuery } from "../smart-search-translator";
 import { withBackorderAvailability } from "./availability";
-import { mcpCreateCart } from "./bigcommerce-mcp";
+import { mcpCreateCart, mcpSearchProducts } from "./bigcommerce-mcp";
 import type { CartRequest, CartResult, CatalogProduct, ProductSearchInput } from "./types";
 
 const COLLECTION_NAME = "emrn_products";
@@ -17,6 +17,7 @@ type SearchDocument = Partial<{
   name: string;
   parent_name: string;
   sku: string;
+  all_skus: unknown[];
   brand: string;
   sold_by: string;
   categories: unknown[];
@@ -121,6 +122,12 @@ function productFilter(input: ProductSearchInput) {
 
 function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
+}
+
+function skuValuesForDocument(doc: SearchDocument) {
+  return [doc.sku, ...(Array.isArray(doc.all_skus) ? doc.all_skus : [])]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
 }
 
 function skuSearchVariants(sku: string) {
@@ -270,6 +277,12 @@ async function searchBigCommerceProducts(query: string, limit = 6) {
   return withBackorderAvailability(mapped.slice(0, limit));
 }
 
+async function searchBySKUFallback(sku: string) {
+  const normalized = normalizeSku(sku);
+  const keywordMatches = await searchBigCommerceProducts(sku, 12);
+  return keywordMatches.filter((product) => normalizeSku(product.sku) === normalized);
+}
+
 export async function searchProducts(input: ProductSearchInput) {
   const smartQuery = await buildSmartSearchQuery(input.query);
   let result: TypesenseSearchResult = {};
@@ -297,6 +310,12 @@ export async function searchProducts(input: ProductSearchInput) {
   let products = await withBackorderAvailability((result.hits || []).map(mapProduct));
   if (!products.length && input.query && input.query !== "*") {
     products = await searchBigCommerceProducts(smartQuery.search_query || input.query, input.limit || 6);
+  }
+  if (!products.length && input.query && input.query !== "*") {
+    const mcpMatches = await mcpSearchProducts(smartQuery.search_query || input.query);
+    if (mcpMatches.available && mcpMatches.data?.length) {
+      products = await withBackorderAvailability(mcpMatches.data.slice(0, input.limit || 6));
+    }
   }
 
   return {
@@ -332,15 +351,23 @@ export async function searchBySKU(sku: string) {
   const products = new Map<string, CatalogProduct>();
 
   for (const result of results) {
-    for (const product of (result.hits || []).map(mapProduct)) {
-      if (normalizeSku(product.sku) === normalized) {
+    for (const hit of result.hits || []) {
+      const doc = hitDocument(hit);
+      const isExactSkuMatch = skuValuesForDocument(doc).some((value) => normalizeSku(value) === normalized);
+      if (isExactSkuMatch) {
+        const product = mapProduct(hit);
         products.set(`${product.productId}:${product.variantId}:${product.sku}`, product);
       }
     }
   }
 
   const typesenseProducts = await withBackorderAvailability(Array.from(products.values()));
-  return typesenseProducts.length ? typesenseProducts : searchBigCommerceBySKU(sku);
+  if (typesenseProducts.length) return typesenseProducts;
+
+  const bigCommerceMatches = await searchBigCommerceBySKU(sku);
+  if (bigCommerceMatches.length) return bigCommerceMatches;
+
+  return searchBySKUFallback(sku);
 }
 
 export async function getProduct(productId: number, variantId?: number) {
@@ -412,10 +439,6 @@ export async function createCart(input: CartRequest): Promise<CartResult> {
     if (mcpResult.available && mcpResult.data) return mcpResult.data;
   }
 
-  if (!BIGCOMMERCE_API_BASE || !ACCESS_TOKEN) {
-    return { blockedItems: ["BigCommerce cart API is not configured."] };
-  }
-
   const checkedItems = await Promise.all(
     input.items.map(async (item) => ({
       item,
@@ -429,6 +452,25 @@ export async function createCart(input: CartRequest): Promise<CartResult> {
 
   const allowedItems = checkedItems.filter(({ product }) => product && product.purchasable && !product.quoteOnly);
   if (!allowedItems.length || blockedItems.length) return { blockedItems };
+
+  const lineItems = allowedItems.map(({ item }) => ({
+    productId: item.productId,
+    variantId: item.variantId,
+    quantity: item.quantity,
+  }));
+
+  if (process.env.EMRN_PULSE_BROWSER_CART !== "false") {
+    return {
+      checkoutUrl: `${process.env.EMRN_STORE_URL || "https://emrn.ca"}/cart.php`,
+      blockedItems: [],
+      provider: "storefront-browser",
+      lineItems,
+    };
+  }
+
+  if (!BIGCOMMERCE_API_BASE || !ACCESS_TOKEN) {
+    return { blockedItems: ["BigCommerce cart API is not configured."] };
+  }
 
   const response = await fetch(`${BIGCOMMERCE_API_BASE}/carts`, {
     method: "POST",
@@ -458,6 +500,7 @@ export async function createCart(input: CartRequest): Promise<CartResult> {
     checkoutUrl: normalizeCommerceUrl(data.data?.redirect_urls?.checkout_url || data.data?.redirect_urls?.cart_url),
     blockedItems: [],
     provider: "bigcommerce-api",
+    lineItems,
   };
 }
 
