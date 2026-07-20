@@ -46,7 +46,7 @@ async function readJsonl<T>(fileName: string): Promise<T[]> {
 }
 
 function googleSheetsWebhookUrl() {
-  const rawUrl = process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_URL;
+  const rawUrl = cleanWebhookUrl(process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_URL);
   if (!rawUrl) return "";
 
   const secret = process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET;
@@ -59,6 +59,17 @@ function googleSheetsWebhookUrl() {
   } catch {
     return rawUrl;
   }
+}
+
+function cleanWebhookUrl(value: string | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const markdownLink = raw.match(/\]\((https?:\/\/[^)\s]+)\)/);
+  if (markdownLink?.[1]) return markdownLink[1];
+
+  const directUrl = raw.match(/https?:\/\/\S+/);
+  return (directUrl?.[0] || raw).replace(/^["'<]+|[>"']+$/g, "");
 }
 
 async function mirrorToGoogleSheets(payload: SheetLogPayload): Promise<SheetMirrorResult> {
