@@ -173,7 +173,19 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     if (mode !== "floating" || typeof window === "undefined") return;
 
     function handleMessage(event: MessageEvent) {
-      if (!event.data || event.data.type !== "emrn-pulse:page-context") return;
+      if (!event.data) return;
+      if (event.data.type === "emrn-pulse:open") {
+        localStorage.setItem(NUDGE_DISMISSED_KEY, "true");
+        setShowNudge(false);
+        setIsOpen(true);
+        return;
+      }
+      if (event.data.type === "emrn-pulse:close") {
+        setShowNudge(false);
+        setIsOpen(false);
+        return;
+      }
+      if (event.data.type !== "emrn-pulse:page-context") return;
       setPageContext(event.data.pageContext || {});
     }
 
