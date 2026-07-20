@@ -247,6 +247,8 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
+  const shouldIgnorePriorQuoteFlow = isQuickActionPrompt(latest) && !isQuoteIntent(latest);
+
   if (isAvailabilityIntent(latest)) {
     const skuCandidates = extractSkuCandidates(latest);
     const pageProducts = skuCandidates.length
@@ -295,7 +297,7 @@ async function handleAssistantPost(req: NextRequest) {
     createdAt,
   });
 
-  if (isQuoteIntent(latest) || priorAssistantRequestedQuoteDetails(messages) || products.some((product) => product.quoteOnly)) {
+  if (isQuoteIntent(latest) || (!shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages)) || products.some((product) => product.quoteOnly)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
       await Promise.all([

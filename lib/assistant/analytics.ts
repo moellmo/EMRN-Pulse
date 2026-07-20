@@ -5,9 +5,13 @@ import type { AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "./ty
 const dataDir = path.join(process.cwd(), ".data", "assistant");
 
 async function appendJsonl(fileName: string, value: unknown) {
-  await mkdir(dataDir, { recursive: true });
-  const filePath = path.join(dataDir, fileName);
-  await writeFile(filePath, `${JSON.stringify(value)}\n`, { flag: "a" });
+  try {
+    await mkdir(dataDir, { recursive: true });
+    const filePath = path.join(dataDir, fileName);
+    await writeFile(filePath, `${JSON.stringify(value)}\n`, { flag: "a" });
+  } catch (error) {
+    console.warn("[EMRN Pulse] analytics log skipped", fileName, error);
+  }
 }
 
 async function readJsonl<T>(fileName: string): Promise<T[]> {
