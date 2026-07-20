@@ -534,11 +534,16 @@ function renderInlineMessage(text: string, isUser: boolean) {
 
   return parts.map((part, index) => {
     if (/^https?:\/\//.test(part)) {
-      const label = part.includes("/checkout") ? "Checkout" : part.includes("/cart.php") ? "Cart" : "View product";
+      const normalizedPart = normalizeDisplayedUrl(part);
+      const label = normalizedPart.includes("/checkout")
+        ? "Checkout"
+        : /\/cart(?:\.php)?(?:[?#]|$)/i.test(normalizedPart)
+          ? "Cart"
+          : "View product";
       return (
         <a
           key={`${part}-${index}`}
-          href={part}
+          href={normalizedPart}
           target="_blank"
           rel="noreferrer"
           className={isUser ? "underline decoration-white/70 underline-offset-2" : "emrn-pulse-message-link"}
@@ -550,6 +555,18 @@ function renderInlineMessage(text: string, isUser: boolean) {
 
     return <span key={`${part}-${index}`}>{part}</span>;
   });
+}
+
+function normalizeDisplayedUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (/^\/cart\/?$/i.test(url.pathname)) {
+      return "https://emrn.ca/cart.php";
+    }
+    return url.toString();
+  } catch {
+    return value;
+  }
 }
 
 function IconButton({

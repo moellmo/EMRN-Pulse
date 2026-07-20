@@ -42,10 +42,10 @@ export async function GET(req: Request) {
     var nodes = document.querySelectorAll("[itemprop='sku'], [data-product-sku], [data-sku], .sku, .productView-info-value, span, div, dd");
     for (var i = 0; i < Math.min(nodes.length, 600); i += 1) {
       var value = nodes[i] && nodes[i].textContent ? nodes[i].textContent.trim() : "";
-      var match = value.match(/(?:^|\\b)SKU\\s*[:#]?\\s*([A-Z]{1,6}\\s*-?\\s*\\d{3,}(?:-[A-Z0-9]+)*|[A-Z0-9-]{3,})\\b/i);
+      var match = value.match(/(?:^|\\b)SKU\\s*[:#]?\\s*([A-Z]{1,8}\\s*-?\\s*\\d{3,}(?:-[A-Z0-9]+)*\\+?|[A-Z0-9-]{3,}\\+?)\\b/i);
       if (match && match[1]) return match[1];
-      if (/^[A-Z]{1,6}\\s*-?\\s*\\d{3,}(?:-[A-Z0-9]+)*$/i.test(value)) return value;
-      if (/^\\d{3,}(?:-[A-Z0-9]+)*$/i.test(value)) return value;
+      if (/^[A-Z]{1,8}\\s*-?\\s*\\d{3,}(?:-[A-Z0-9]+)*\\+?$/i.test(value)) return value;
+      if (/^\\d{3,}(?:-[A-Z0-9]+)*\\+?$/i.test(value)) return value;
     }
     return "";
   }
@@ -60,7 +60,7 @@ export async function GET(req: Request) {
       text(".productView-info-value") ||
       skuFromPageText() ||
       "";
-    var skuMatch = skuText.match(/[A-Z]{1,6}\\s*-?\\s*\\d{3,}(?:-[A-Z0-9]+)*|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})*|\\b\\d{4,}\\b/i);
+    var skuMatch = skuText.match(/[A-Z]{1,8}\\s*-?\\s*\\d{3,}(?:-[A-Z0-9]+)*\\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})*\\+?|\\b\\d{4,}\\+?\\b/i);
 
     var productIdNode = document.querySelector("[data-product-id]");
     return {

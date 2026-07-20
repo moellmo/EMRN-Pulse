@@ -27,11 +27,11 @@ export function normalizeCommerceUrl(url?: string) {
 
   try {
     const parsed = new URL(absolute);
-    if (parsed.origin === STORE_URL && /^\/cart\/?$/i.test(parsed.pathname)) {
+    if (/^\/cart\/?$/i.test(parsed.pathname)) {
       parsed.pathname = "/cart.php";
       parsed.search = "";
       parsed.hash = "";
-      return parsed.toString();
+      return `${STORE_URL}/cart.php`;
     }
     return parsed.toString();
   } catch {

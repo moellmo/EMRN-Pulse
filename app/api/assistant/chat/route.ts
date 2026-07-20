@@ -78,7 +78,26 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
 }
 
 function normalizeSku(value: string) {
-  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
+}
+
+function cleanProductQuery(text: string) {
+  return String(text || "")
+    .replace(/\b(do you have|do you carry|can you find|find me|find|show me|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
+    .replace(/\b(a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits)\b/gi, " ")
+    .replace(/[?!.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function searchQueryForLatest(messages: AssistantMessage[], latest: string, products: CatalogProduct[]) {
+  const inferred = inferSearchQuery(messages, products);
+  const shouldUseContext =
+    /\b(more|another|same|these|those|them|it|this|that|one|ones|compatible|fit|accessor|accessory|accessories)\b/i.test(latest) ||
+    /\b(plus|autre|meme|même|ceci|cela|ceux|celles|compatible|accessoire|accessoires)\b/i.test(latest);
+
+  if (shouldUseContext && inferred) return cleanProductQuery(inferred) || inferred;
+  return cleanProductQuery(latest) || latest;
 }
 
 function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unknown") {
@@ -284,7 +303,7 @@ async function handleAssistantPost(req: NextRequest) {
     ? pageProductsForCart[0].sku || pageProductsForCart[0].name
     : skuCandidates.length
       ? skuCandidates.join(", ")
-      : inferSearchQuery(messages, []);
+      : searchQueryForLatest(messages, latest, []);
   const searchResult = pageProductsForCart.length
     ? { products: pageProductsForCart, found: pageProductsForCart.length }
     : skuCandidates.length
