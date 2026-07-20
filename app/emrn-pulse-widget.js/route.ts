@@ -21,8 +21,11 @@ export async function GET(req: Request) {
   iframe.style.height = "120px";
   iframe.style.border = "0";
   iframe.style.background = "transparent";
+  iframe.style.display = "block";
   iframe.style.zIndex = "2147483000";
   iframe.style.colorScheme = "normal";
+  iframe.setAttribute("allowtransparency", "true");
+  iframe.setAttribute("frameborder", "0");
   iframe.allow = "clipboard-write";
 
   function applySize(open) {
@@ -55,4 +58,3 @@ export async function GET(req: Request) {
     },
   });
 }
-
