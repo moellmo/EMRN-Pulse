@@ -1,4 +1,4 @@
-import { typesenseSearch } from "../typesense";
+import { getTypesenseSearch } from "../typesense";
 import { absoluteStoreUrl } from "../store-url";
 import { buildSmartSearchQuery } from "../smart-search-translator";
 import { withBackorderAvailability } from "./availability";
@@ -82,7 +82,7 @@ function productFilter(input: ProductSearchInput) {
 
 export async function searchProducts(input: ProductSearchInput) {
   const smartQuery = await buildSmartSearchQuery(input.query);
-  const result = (await typesenseSearch
+  const result = (await getTypesenseSearch()
     .collections(COLLECTION_NAME)
     .documents()
     .search({
@@ -109,7 +109,7 @@ export async function searchProducts(input: ProductSearchInput) {
 }
 
 export async function searchBySKU(sku: string) {
-  const result = (await typesenseSearch.collections(COLLECTION_NAME).documents().search({
+  const result = (await getTypesenseSearch().collections(COLLECTION_NAME).documents().search({
     q: sku,
     query_by: "sku,all_skus",
     query_by_weights: "40,32",
@@ -127,7 +127,7 @@ export async function searchBySKU(sku: string) {
 export async function getProduct(productId: number, variantId?: number) {
   const filter = [`product_id:=${productId}`, "is_visible:=true"];
   if (variantId) filter.push(`variant_id:=${variantId}`);
-  const result = (await typesenseSearch.collections(COLLECTION_NAME).documents().search({
+  const result = (await getTypesenseSearch().collections(COLLECTION_NAME).documents().search({
     q: "*",
     query_by: "name",
     filter_by: filter.join(" && "),
