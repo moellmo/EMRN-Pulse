@@ -118,7 +118,7 @@ export async function testGoogleSheetsMirror() {
 
 export async function logAnalyticsEvent(event: AssistantAnalyticsEvent) {
   await appendJsonl("analytics.jsonl", event);
-  await mirrorToGoogleSheets({ kind: "analytics", row: event });
+  void mirrorToGoogleSheets({ kind: "analytics", row: event });
 }
 
 export async function logQuoteRequest(request: QuoteRequest) {

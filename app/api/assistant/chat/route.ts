@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
@@ -88,11 +88,21 @@ function normalizeSku(value: string) {
 
 function cleanProductQuery(text: string) {
   return String(text || "")
-    .replace(/\b(do you have|do you carry|can you find|find me|find|show me|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
-    .replace(/\b(a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits)\b/gi, " ")
+    .replace(/\b(no,?\s+)?(do you have|do have|do u have|do you carry|can you find|find me|find|search for|search|show me|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
+    .replace(/\b(no|a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits)\b/gi, " ")
     .replace(/[?!.]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function looksLikeQuoteDetailsReply(text: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return false;
+  if (isProductSearchIntent(trimmed) || isQuickActionPrompt(trimmed)) return false;
+  if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(trimmed)) return true;
+  if (/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/.test(trimmed)) return true;
+  if (/\b(my name is|name is|i am|i'm|je m'appelle|mon nom est|company is|compagnie|entreprise)\b/i.test(trimmed)) return true;
+  return /^[A-Z][A-Za-z' -]{1,40}\s+[A-Z][A-Za-z' -]{1,40}$/.test(trimmed);
 }
 
 function searchQueryForLatest(messages: AssistantMessage[], latest: string, products: CatalogProduct[]) {
@@ -468,7 +478,9 @@ async function handleAssistantPost(req: NextRequest) {
     }
   }
 
-  const shouldIgnorePriorQuoteFlow = isQuickActionPrompt(latest) && !isQuoteIntent(latest);
+  const shouldIgnorePriorQuoteFlow = (isQuickActionPrompt(latest) || isProductSearchIntent(latest)) && !isQuoteIntent(latest);
+  const shouldContinuePriorQuoteFlow =
+    !shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages) && looksLikeQuoteDetailsReply(latest);
 
   if (isContactIntent(latest)) {
     return new Response(textStream(contactHelpText(language)), {
@@ -546,7 +558,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isQuoteIntent(latest) || (!shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages)) || products.some((product) => product.quoteOnly)) {
+  if (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || products.some((product) => product.quoteOnly)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
       await Promise.all([

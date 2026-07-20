@@ -64,8 +64,16 @@ export function isFindProductPrompt(text: string) {
   return /^\s*(find a product|find product|trouver un produit|je cherche un produit)\s*$/i.test(text);
 }
 
+export function isProductSearchIntent(text: string) {
+  if (isQuoteIntent(text) || isCartIntent(text) || isOrderStatusIntent(text) || isContactIntent(text) || isAccountIntent(text)) {
+    return false;
+  }
+
+  return /\b(do you have|do have|do u have|do you carry|carry|find|search|show me|looking for|look for|i need|we need|i want|we want|need|want|je cherche|cherche|avez-vous|avez vous|as-tu|as tu)\b/i.test(text);
+}
+
 export function isQuickActionPrompt(text: string) {
-  return isFindProductPrompt(text) || isAvailabilityIntent(text) || isQuoteIntent(text) || isOrderStatusIntent(text) || isContactIntent(text);
+  return isFindProductPrompt(text) || isProductSearchIntent(text) || isAvailabilityIntent(text) || isQuoteIntent(text) || isOrderStatusIntent(text) || isContactIntent(text);
 }
 
 export function isSupportYes(text: string) {
