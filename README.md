@@ -95,6 +95,25 @@ EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET=replace-with-a-long-secret
 
 The sheet will receive separate tabs named `analytics`, `quote`, `support`, and `ai_usage`.
 
+To test the connection after deploy, open:
+
+```text
+https://YOUR-VERCEL-DOMAIN.vercel.app/api/assistant/admin/sheets-test?token=YOUR_ADMIN_TOKEN
+```
+
+Expected success response:
+
+```json
+{ "configured": true, "ok": true, "status": 200, "body": "{\"ok\":true}" }
+```
+
+If it fails:
+
+- `configured: false` means `EMRN_GOOGLE_SHEETS_WEBHOOK_URL` is missing in Vercel.
+- `status: 401` or a body containing `unauthorized` usually means the Apps Script secret and Vercel secret do not match.
+- A Google HTML/error body usually means the Apps Script web app was not deployed with access set to “Anyone with the link”.
+- After changing Apps Script code, deploy a new web-app version and update/reuse the deployment URL.
+
 ## BigCommerce Script Manager
 
 Add this in BigCommerce Script Manager after Vercel deploy:

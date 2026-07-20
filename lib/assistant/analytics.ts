@@ -9,6 +9,14 @@ type SheetLogPayload = {
   row: unknown;
 };
 
+type SheetMirrorResult = {
+  configured: boolean;
+  ok: boolean;
+  status?: number;
+  body?: string;
+  error?: string;
+};
+
 const modelPricesPerMillion: Record<string, { input: number; output: number }> = {
   "gpt-4.1-mini": { input: 0.4, output: 1.6 },
   "gpt-4.1-nano": { input: 0.1, output: 0.4 },
@@ -37,9 +45,25 @@ async function readJsonl<T>(fileName: string): Promise<T[]> {
   }
 }
 
-async function mirrorToGoogleSheets(payload: SheetLogPayload) {
-  const url = process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_URL;
-  if (!url) return;
+function googleSheetsWebhookUrl() {
+  const rawUrl = process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_URL;
+  if (!rawUrl) return "";
+
+  const secret = process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET;
+  if (!secret) return rawUrl;
+
+  try {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.get("secret")) url.searchParams.set("secret", secret);
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+async function mirrorToGoogleSheets(payload: SheetLogPayload): Promise<SheetMirrorResult> {
+  const url = googleSheetsWebhookUrl();
+  if (!url) return { configured: false, ok: false };
 
   try {
     const response = await fetch(url, {
@@ -53,12 +77,32 @@ async function mirrorToGoogleSheets(payload: SheetLogPayload) {
       body: JSON.stringify(payload),
       cache: "no-store",
     });
+    const body = await response.text().catch(() => "");
     if (!response.ok) {
-      console.warn("[EMRN Pulse] Google Sheets log skipped", response.status, payload.kind);
+      console.warn("[EMRN Pulse] Google Sheets log skipped", response.status, payload.kind, body.slice(0, 300));
     }
+    return { configured: true, ok: response.ok, status: response.status, body: body.slice(0, 1000) };
   } catch (error) {
     console.warn("[EMRN Pulse] Google Sheets log skipped", payload.kind, error);
+    return {
+      configured: true,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+export async function testGoogleSheetsMirror() {
+  return mirrorToGoogleSheets({
+    kind: "analytics",
+    row: {
+      type: "sheets_test",
+      sessionId: "admin-test",
+      language: "en",
+      query: "Google Sheets webhook test",
+      createdAt: new Date().toISOString(),
+    },
+  });
 }
 
 export async function logAnalyticsEvent(event: AssistantAnalyticsEvent) {
