@@ -77,6 +77,10 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
   return skus;
 }
 
+function normalizeSku(value: string) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
 function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unknown") {
   const availability = product.availabilityDescription || product.availability || "Availability should be confirmed before relying on timing.";
   const price = product.quoteOnly ? "requires a quote" : product.price ? `$${product.price.toFixed(2)}` : "price unavailable";
@@ -271,15 +275,25 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
+  const pageProductsForCart =
+    isCartIntent(latest) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
+      ? await productsFromPageContext(pageContext, language)
+      : [];
   const skuCandidates = isCartIntent(latest) ? extractSkuCandidates(latest) : [];
-  const searchQuery = skuCandidates.length ? skuCandidates.join(", ") : inferSearchQuery(messages, []);
-  const searchResult = skuCandidates.length
+  const searchQuery = pageProductsForCart.length
+    ? pageProductsForCart[0].sku || pageProductsForCart[0].name
+    : skuCandidates.length
+      ? skuCandidates.join(", ")
+      : inferSearchQuery(messages, []);
+  const searchResult = pageProductsForCart.length
+    ? { products: pageProductsForCart, found: pageProductsForCart.length }
+    : skuCandidates.length
     ? {
         products: (
           await Promise.all(
             skuCandidates.map(async (sku) => {
               const matches = await searchBySKU(sku);
-              return matches.filter((product) => product.sku.toUpperCase() === sku);
+              return matches.filter((product) => normalizeSku(product.sku) === normalizeSku(sku));
             })
           )
         ).flat(),

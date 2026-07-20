@@ -69,8 +69,16 @@ export function isSupportYes(text: string) {
 }
 
 export function extractSkuCandidates(text: string) {
-  const matches = text.match(/\b(?:[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+|\d{4,})\b/gi) || [];
-  return Array.from(new Set(matches.map((sku) => sku.toUpperCase())));
+  const candidates: string[] = [];
+
+  for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z]{1,6}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*|\d{3,}(?:-[A-Z0-9]+)*)\b/gi)) {
+    candidates.push(match[1]);
+  }
+
+  const matches = text.match(/\b(?:[A-Z]{1,6}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+|\d{4,})\b/gi) || [];
+  candidates.push(...matches.filter((sku) => !/^sku\s*\d/i.test(sku)));
+
+  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase())));
 }
 
 export function allowsMultipleCartItems(text: string) {

@@ -80,6 +80,17 @@ function productFilter(input: ProductSearchInput) {
   return filters.join(" && ");
 }
 
+function normalizeSku(value: string) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function skuSearchVariants(sku: string) {
+  const clean = String(sku || "").trim().toUpperCase();
+  const compact = clean.replace(/\s+/g, "");
+  const spaced = compact.replace(/^([A-Z]+)(\d+)$/, "$1 $2");
+  return Array.from(new Set([clean, compact, spaced].filter(Boolean)));
+}
+
 export async function searchProducts(input: ProductSearchInput) {
   const smartQuery = await buildSmartSearchQuery(input.query);
   const result = (await getTypesenseSearch()
@@ -109,19 +120,33 @@ export async function searchProducts(input: ProductSearchInput) {
 }
 
 export async function searchBySKU(sku: string) {
-  const result = (await getTypesenseSearch().collections(COLLECTION_NAME).documents().search({
-    q: sku,
-    query_by: "sku,all_skus",
-    query_by_weights: "40,32",
-    filter_by: "is_visible:=true",
-    sort_by: "_text_match:desc,popularity_score:desc",
-    per_page: 6,
-    num_typos: 0,
-    prefix: false,
-  })) as TypesenseSearchResult;
-  return withBackorderAvailability(
-    (result.hits || []).map(mapProduct).filter((product) => product.sku.toUpperCase() === sku.toUpperCase())
-  );
+  const variants = skuSearchVariants(sku);
+  const results = (await Promise.all(
+    variants.map((variant) =>
+      getTypesenseSearch().collections(COLLECTION_NAME).documents().search({
+        q: variant,
+        query_by: "sku,all_skus",
+        query_by_weights: "40,32",
+        filter_by: "is_visible:=true",
+        sort_by: "_text_match:desc,popularity_score:desc",
+        per_page: 6,
+        num_typos: 0,
+        prefix: false,
+      })
+    )
+  )) as TypesenseSearchResult[];
+  const normalized = normalizeSku(sku);
+  const products = new Map<string, CatalogProduct>();
+
+  for (const result of results) {
+    for (const product of (result.hits || []).map(mapProduct)) {
+      if (normalizeSku(product.sku) === normalized) {
+        products.set(`${product.productId}:${product.variantId}:${product.sku}`, product);
+      }
+    }
+  }
+
+  return withBackorderAvailability(Array.from(products.values()));
 }
 
 export async function getProduct(productId: number, variantId?: number) {
