@@ -1,25 +1,18 @@
-import type { QuoteRequest, SupportRequest } from "@/lib/assistant/types";
+import { readAssistantAdminData } from "@/lib/assistant/analytics";
+import type { AssistantAiUsageEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
 
 export const dynamic = "force-dynamic";
 
 type AdminRow =
   | (QuoteRequest & { createdAt: string })
-  | (SupportRequest & { createdAt: string });
-
-async function getData() {
-  const base = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-  const response = await fetch(`${base}/api/assistant/admin`, {
-    cache: "no-store",
-    headers: process.env.EMRN_ASSISTANT_ADMIN_TOKEN
-      ? { Authorization: `Bearer ${process.env.EMRN_ASSISTANT_ADMIN_TOKEN}` }
-      : {},
-  });
-  if (!response.ok) return null;
-  return response.json();
-}
+  | (SupportRequest & { createdAt: string })
+  | AssistantAiUsageEvent;
 
 export default async function AssistantAdminPage() {
-  const data = await getData();
+  const data = await readAssistantAdminData().catch((error) => {
+    console.error("[EMRN Pulse] admin page data unavailable", error);
+    return null;
+  });
 
   return (
     <main className="min-h-screen bg-slate-50 p-6 text-slate-950">
@@ -47,6 +40,7 @@ export default async function AssistantAdminPage() {
             <section className="mt-8 grid gap-6 lg:grid-cols-2">
               <Panel title="Quote Requests" rows={data.quotes} />
               <Panel title="Support Escalations" rows={data.support} />
+              <Panel title="AI Usage" rows={data.aiUsage} />
             </section>
           </>
         )}
@@ -63,7 +57,7 @@ function Panel({ title, rows }: { title: string; rows: AdminRow[] }) {
         {rows?.length ? (
           rows.map((row, index) => (
             <article key={index} className="border-b border-slate-100 p-4">
-              <div className="font-semibold">{row.name || row.email}</div>
+              <div className="font-semibold">{rowTitle(row)}</div>
               <div className="text-sm text-slate-500">{row.createdAt}</div>
               <pre className="mt-3 whitespace-pre-wrap text-xs text-slate-700">
                 {JSON.stringify(row, null, 2)}
@@ -76,4 +70,9 @@ function Panel({ title, rows }: { title: string; rows: AdminRow[] }) {
       </div>
     </div>
   );
+}
+
+function rowTitle(row: AdminRow) {
+  if ("feature" in row) return `${row.feature} - ${row.model}`;
+  return row.name || row.email;
 }

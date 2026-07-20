@@ -681,7 +681,7 @@ async function handleAssistantPost(req: NextRequest) {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 
-  const stream = await streamAssistantResponse({ messages, products, language });
+  const stream = await streamAssistantResponse({ messages, products, language, sessionId, query: searchQuery });
   await logAnalyticsEvent({
     type: "conversation_completed",
     sessionId,

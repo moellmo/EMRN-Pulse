@@ -135,3 +135,16 @@ export type AssistantAnalyticsEvent =
       productIds?: number[];
       createdAt: string;
     };
+
+export type AssistantAiUsageEvent = {
+  createdAt: string;
+  feature: "search_translator" | "assistant_response";
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  sessionId?: string;
+  language?: AssistantLanguage;
+  query?: string;
+  status?: "called" | "error" | "missing_key" | "fallback";
+};

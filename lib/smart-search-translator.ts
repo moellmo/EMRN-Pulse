@@ -1,4 +1,5 @@
 import { detectQueryLanguage, expandSearchQuery, getFallbackTerms, normalizeSearchText } from "./search-language";
+import { logAiUsage } from "./assistant/analytics";
 
 export type SmartQueryResult = {
   original_query: string;
@@ -54,6 +55,10 @@ function cleanSearchQuery(query: string) {
 
 type OpenAIResponsePayload = {
   output_text?: unknown;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
   output?: Array<{
     content?: Array<{
       text?: unknown;
@@ -145,6 +150,15 @@ async function translateWithOpenAI(query: string, language: "en" | "fr") {
     }
 
     const payload = await res.json();
+    await logAiUsage({
+      feature: "search_translator",
+      model,
+      inputTokens: Number(payload.usage?.input_tokens || 0),
+      outputTokens: Number(payload.usage?.output_tokens || 0),
+      language,
+      query,
+      status: "called",
+    });
     const parsed = safeParseJson(extractOutputText(payload));
     const alternatives = Array.isArray(parsed?.alternatives)
       ? parsed.alternatives.map((item: unknown) => cleanSearchQuery(String(item || ""))).filter(Boolean)

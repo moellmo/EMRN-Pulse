@@ -1,3 +1,4 @@
+import { logAiUsage } from "./analytics";
 import { buildSystemPrompt, faqContext, productContext } from "./prompt";
 import type { AssistantLanguage, AssistantMessage, CatalogProduct } from "./types";
 
@@ -5,16 +6,21 @@ export async function streamAssistantResponse({
   messages,
   products,
   language,
+  sessionId,
+  query,
 }: {
   messages: AssistantMessage[];
   products: CatalogProduct[];
   language: AssistantLanguage;
+  sessionId?: string;
+  query?: string;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return fallbackStream(language);
   }
 
+  const model = process.env.OPENAI_ASSISTANT_MODEL || "gpt-4.1-mini";
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -22,7 +28,7 @@ export async function streamAssistantResponse({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_ASSISTANT_MODEL || "gpt-5.6-luna",
+      model,
       stream: true,
       instructions: buildSystemPrompt(language),
       input: [
@@ -44,10 +50,20 @@ export async function streamAssistantResponse({
     return fallbackStream(language);
   }
 
-  return response.body.pipeThrough(parseOpenAiSse());
+  return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query }));
 }
 
-function parseOpenAiSse() {
+function parseOpenAiSse({
+  model,
+  sessionId,
+  language,
+  query,
+}: {
+  model: string;
+  sessionId?: string;
+  language: AssistantLanguage;
+  query?: string;
+}) {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
@@ -69,6 +85,18 @@ function parseOpenAiSse() {
           const event = JSON.parse(line);
           if (event.type === "response.output_text.delta" && event.delta) {
             controller.enqueue(encoder.encode(event.delta));
+          }
+          if (event.type === "response.completed" && event.response?.usage) {
+            void logAiUsage({
+              feature: "assistant_response",
+              model,
+              inputTokens: Number(event.response.usage.input_tokens || 0),
+              outputTokens: Number(event.response.usage.output_tokens || 0),
+              sessionId,
+              language,
+              query,
+              status: "called",
+            });
           }
         } catch {
           continue;

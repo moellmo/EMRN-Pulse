@@ -1,8 +1,18 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
-import type { AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "./types";
+import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "./types";
 
 const dataDir = path.join(process.cwd(), ".data", "assistant");
+
+type SheetLogPayload = {
+  kind: "analytics" | "quote" | "support" | "ai_usage";
+  row: unknown;
+};
+
+const modelPricesPerMillion: Record<string, { input: number; output: number }> = {
+  "gpt-4.1-mini": { input: 0.4, output: 1.6 },
+  "gpt-4.1-nano": { input: 0.1, output: 0.4 },
+};
 
 async function appendJsonl(fileName: string, value: unknown) {
   try {
@@ -27,34 +37,83 @@ async function readJsonl<T>(fileName: string): Promise<T[]> {
   }
 }
 
+async function mirrorToGoogleSheets(payload: SheetLogPayload) {
+  const url = process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_URL;
+  if (!url) return;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET
+          ? { "X-EMRN-Pulse-Secret": process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET }
+          : {}),
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      console.warn("[EMRN Pulse] Google Sheets log skipped", response.status, payload.kind);
+    }
+  } catch (error) {
+    console.warn("[EMRN Pulse] Google Sheets log skipped", payload.kind, error);
+  }
+}
+
 export async function logAnalyticsEvent(event: AssistantAnalyticsEvent) {
   await appendJsonl("analytics.jsonl", event);
+  await mirrorToGoogleSheets({ kind: "analytics", row: event });
 }
 
 export async function logQuoteRequest(request: QuoteRequest) {
-  await appendJsonl("quotes.jsonl", {
+  const row = {
     ...request,
     createdAt: new Date().toISOString(),
-  });
+  };
+  await appendJsonl("quotes.jsonl", row);
+  await mirrorToGoogleSheets({ kind: "quote", row });
 }
 
 export async function logSupportRequest(request: SupportRequest) {
-  await appendJsonl("support.jsonl", {
+  const row = {
     ...request,
     createdAt: new Date().toISOString(),
-  });
+  };
+  await appendJsonl("support.jsonl", row);
+  await mirrorToGoogleSheets({ kind: "support", row });
+}
+
+export function estimateOpenAiCostUsd(model: string, inputTokens = 0, outputTokens = 0) {
+  const prices = modelPricesPerMillion[model] || modelPricesPerMillion[model.replace(/-\d{4}-\d{2}-\d{2}$/, "")];
+  if (!prices) return 0;
+  return roundCurrency((inputTokens / 1_000_000) * prices.input + (outputTokens / 1_000_000) * prices.output);
+}
+
+export async function logAiUsage(event: Omit<AssistantAiUsageEvent, "createdAt" | "estimatedCostUsd"> & { estimatedCostUsd?: number }) {
+  const row: AssistantAiUsageEvent = {
+    ...event,
+    createdAt: new Date().toISOString(),
+    estimatedCostUsd:
+      event.estimatedCostUsd ?? estimateOpenAiCostUsd(event.model, event.inputTokens, event.outputTokens),
+  };
+  await appendJsonl("ai-usage.jsonl", row);
+  await mirrorToGoogleSheets({ kind: "ai_usage", row });
 }
 
 export async function readAssistantAdminData() {
-  const [analytics, quotes, support] = await Promise.all([
+  const [analytics, quotes, support, aiUsage] = await Promise.all([
     readJsonl<AssistantAnalyticsEvent>("analytics.jsonl"),
     readJsonl<QuoteRequest & { createdAt: string }>("quotes.jsonl"),
     readJsonl<SupportRequest & { createdAt: string }>("support.jsonl"),
+    readJsonl<AssistantAiUsageEvent>("ai-usage.jsonl"),
   ]);
 
   const searches = analytics.filter((event) => event.type === "product_search");
   const noResults = analytics.filter((event) => event.type === "no_result_search");
   const completedConversations = analytics.filter((event) => event.type === "conversation_completed");
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const aiUsageThisMonth = aiUsage.filter((event) => event.createdAt.startsWith(monthPrefix));
   const languages = analytics.reduce<Record<string, number>>((acc, event) => {
     acc[event.language] = (acc[event.language] || 0) + 1;
     return acc;
@@ -70,6 +129,11 @@ export async function readAssistantAdminData() {
       noResultSearches: noResults.length,
       unansweredQuestions: analytics.filter((event) => event.type === "unanswered_question").length,
       productsRecommended: analytics.filter((event) => event.type === "product_recommended").length,
+      aiCallsThisMonth: aiUsageThisMonth.length,
+      aiInputTokensThisMonth: sum(aiUsageThisMonth.map((event) => event.inputTokens)),
+      aiOutputTokensThisMonth: sum(aiUsageThisMonth.map((event) => event.outputTokens)),
+      aiEstimatedCostThisMonth: roundCurrency(sum(aiUsageThisMonth.map((event) => event.estimatedCostUsd))),
+      aiEstimatedCostAllTime: roundCurrency(sum(aiUsage.map((event) => event.estimatedCostUsd))),
       languages,
       mostSearchedProducts: topCounts(searches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
       searchFailures: topCounts(noResults.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
@@ -79,6 +143,7 @@ export async function readAssistantAdminData() {
     },
     quotes: quotes.slice(-100).reverse(),
     support: support.slice(-100).reverse(),
+    aiUsage: aiUsage.slice(-100).reverse(),
   };
 }
 
@@ -96,4 +161,12 @@ function topCounts(values: string[]) {
 function average(values: number[]) {
   if (!values.length) return 0;
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + Number(value || 0), 0);
+}
+
+function roundCurrency(value: number) {
+  return Math.round(Number(value || 0) * 100000) / 100000;
 }
