@@ -55,7 +55,8 @@ html {
 
 button,
 textarea,
-input {
+input,
+select {
   font-family: inherit;
 }
 
@@ -440,9 +441,17 @@ input {
   background: transparent;
   color: var(--emrn-text);
   font: inherit;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 24px;
   overflow-y: auto;
+}
+
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 .emrn-pulse-input::placeholder {
