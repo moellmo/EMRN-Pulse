@@ -28,6 +28,49 @@ export async function GET(req: Request) {
   iframe.setAttribute("frameborder", "0");
   iframe.allow = "clipboard-write";
 
+  function text(selector) {
+    var node = document.querySelector(selector);
+    return node && node.textContent ? node.textContent.trim() : "";
+  }
+
+  function numberFrom(value) {
+    var parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+
+  function collectPageContext() {
+    var params = new URLSearchParams(window.location.search);
+    var bodyText = document.body && document.body.textContent ? document.body.textContent.slice(0, 12000) : "";
+    var skuText =
+      params.get("sku") ||
+      text("[data-product-sku]") ||
+      text(".productView-info-value") ||
+      (bodyText.match(/SKU\\s*[:#]?\\s*([A-Z0-9-]{3,})/i) || [])[1] ||
+      "";
+    var skuMatch = skuText.match(/[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})*|\\b\\d{4,}\\b/i);
+
+    var productIdNode = document.querySelector("[data-product-id]");
+    return {
+      url: window.location.href,
+      title:
+        text("h1.productView-title") ||
+        text("h1") ||
+        document.title ||
+        "",
+      sku: skuMatch ? skuMatch[0].toUpperCase() : "",
+      productId: numberFrom(params.get("product_id") || (productIdNode ? productIdNode.getAttribute("data-product-id") : "")),
+      variantId: numberFrom(params.get("variant_id") || params.get("variant"))
+    };
+  }
+
+  function sendPageContext() {
+    if (!iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      { type: "emrn-pulse:page-context", pageContext: collectPageContext() },
+      origin
+    );
+  }
+
   function applySize(open, nudge) {
     iframe.style.width = open ? "430px" : nudge ? "350px" : "120px";
     iframe.style.height = open ? "780px" : nudge ? "150px" : "120px";
@@ -40,6 +83,14 @@ export async function GET(req: Request) {
     if (!event.data || event.data.type !== "emrn-pulse:resize") return;
     applySize(Boolean(event.data.open), Boolean(event.data.nudge));
   });
+
+  window.addEventListener("message", function (event) {
+    if (event.origin !== origin) return;
+    if (!event.data || event.data.type !== "emrn-pulse:request-page-context") return;
+    sendPageContext();
+  });
+
+  iframe.addEventListener("load", sendPageContext);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {

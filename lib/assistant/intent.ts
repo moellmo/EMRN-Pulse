@@ -52,12 +52,24 @@ export function isOrderStatusIntent(text: string) {
   return /\b(order status|order update|update on my order|update for my order|order tracking|track(?:ing)?|where is my order|shipment update|shipping update|check order|check my order|commande|suivi|statut de commande|ou est ma commande|où est ma commande)\b/i.test(text);
 }
 
+export function isAvailabilityIntent(text: string) {
+  return /\b(availability|available|in stock|stock|check availability|lead time|ships|backorder|back order|disponibilite|disponibilité|disponible|en stock|delai|délai)\b/i.test(text);
+}
+
+export function isFindProductPrompt(text: string) {
+  return /^\s*(find a product|find product|trouver un produit|je cherche un produit)\s*$/i.test(text);
+}
+
+export function isQuickActionPrompt(text: string) {
+  return isFindProductPrompt(text) || isAvailabilityIntent(text) || isQuoteIntent(text) || isOrderStatusIntent(text);
+}
+
 export function isSupportYes(text: string) {
   return /^(yes|yeah|please|sure|ok|oui|svp|s'il vous plait|s’il vous plaît)/i.test(text.trim());
 }
 
 export function extractSkuCandidates(text: string) {
-  const matches = text.match(/\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/gi) || [];
+  const matches = text.match(/\b(?:[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+|\d{4,})\b/gi) || [];
   return Array.from(new Set(matches.map((sku) => sku.toUpperCase())));
 }
 

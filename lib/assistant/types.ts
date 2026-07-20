@@ -43,6 +43,14 @@ export type ProductSearchInput = {
   };
 };
 
+export type ProductPageContext = {
+  url?: string;
+  title?: string;
+  sku?: string;
+  variantId?: number;
+  productId?: number;
+};
+
 export type QuoteRequest = {
   name: string;
   company?: string;

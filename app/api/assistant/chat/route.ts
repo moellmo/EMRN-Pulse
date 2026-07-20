@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isCartIntent, isMedicalAdviceRequest, isOrderStatusIntent, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
-import type { AssistantMessage } from "@/lib/assistant/types";
+import type { AssistantMessage, CatalogProduct, ProductPageContext } from "@/lib/assistant/types";
 
 export const runtime = "nodejs";
 
@@ -77,11 +77,57 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
   return skus;
 }
 
+function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unknown") {
+  const availability = product.availabilityDescription || product.availability || "Availability should be confirmed before relying on timing.";
+  const price = product.quoteOnly ? "requires a quote" : product.price ? `$${product.price.toFixed(2)}` : "price unavailable";
+  const purchase =
+    product.quoteOnly || !product.purchasable
+      ? language === "fr"
+        ? "Cet article nécessite un devis de notre équipe des ventes."
+        : "This item requires a quotation from our sales team."
+      : language === "fr"
+        ? "Cet article peut être commandé en ligne."
+        : "This item can be ordered online.";
+
+  return language === "fr"
+    ? `${product.name}\nSKU: ${product.sku}\nPrix: ${price}\nDisponibilité: ${availability}\n${purchase}\n\nVoir le produit: ${product.url}`
+    : `${product.name}\nSKU: ${product.sku}\nPrice: ${price}\nAvailability: ${availability}\n${purchase}\n\nView product: ${product.url}`;
+}
+
+async function productsFromPageContext(pageContext: ProductPageContext, language: "en" | "fr" | "unknown") {
+  if (pageContext.sku) {
+    const matches = await searchBySKU(pageContext.sku);
+    if (matches.length) return matches;
+  }
+
+  const title = String(pageContext.title || "").replace(/\s*[-|]\s*EMRN.*$/i, "").trim();
+  if (title && !/^emrn pulse$/i.test(title)) {
+    return (await searchProducts({ query: title, language, limit: 6 })).products;
+  }
+
+  return [];
+}
+
 export async function POST(req: NextRequest) {
+  try {
+    return await handleAssistantPost(req);
+  } catch (error) {
+    console.error("[EMRN Pulse] assistant chat failed", error);
+    return new Response(
+      textStream(
+        "I’m sorry, I could not complete that request right now. Would you like me to send this to our support team?"
+      ),
+      { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+}
+
+async function handleAssistantPost(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const messages = (body?.messages || []) as AssistantMessage[];
   const sessionId = String(body?.sessionId || crypto.randomUUID());
   const language = body?.language || detectCustomerLanguage(messages);
+  const pageContext = (body?.pageContext || {}) as ProductPageContext;
   const latest = messages.at(-1)?.content || "";
   const createdAt = new Date().toISOString();
 
@@ -150,7 +196,10 @@ export async function POST(req: NextRequest) {
         /order status request|suivi de commande|statut de commande|order number/i.test(message.content)
     );
 
-  if (isOrderStatusIntent(latest) || priorAssistantRequestedOrderStatus) {
+  const looksLikeOrderDetailsReply =
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) || /\border\s*#?\s*\d{3,}\b|\b\d{5,}\b/i.test(latest);
+
+  if (isOrderStatusIntent(latest) || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
     const draft = buildOrderStatusDraft(messages, language);
     if (draft.request) {
       const orderStatus = await getOrderStatus({
@@ -185,6 +234,39 @@ export async function POST(req: NextRequest) {
     return new Response(textStream(orderStatusMissingText(draft.missing, language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  }
+
+  if (isFindProductPrompt(latest)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Bien sûr. Quel produit cherchez-vous? Vous pouvez me donner un nom, une marque, une catégorie, une utilisation médicale ou un SKU."
+          : "Sure. What product are you looking for? You can give me a name, brand, category, medical use, or SKU."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (isAvailabilityIntent(latest)) {
+    const skuCandidates = extractSkuCandidates(latest);
+    const pageProducts = skuCandidates.length
+      ? (await Promise.all(skuCandidates.map((sku) => searchBySKU(sku)))).flat()
+      : await productsFromPageContext(pageContext, language);
+
+    if (pageProducts.length) {
+      return new Response(textStream(availabilityText(pageProducts[0], language)), {
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Bien sûr. Donnez-moi le SKU ou le nom du produit, et je vérifierai la disponibilité."
+          : "Sure. Please send me the SKU or product name, and I’ll check availability."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
   }
 
   const skuCandidates = isCartIntent(latest) ? extractSkuCandidates(latest) : [];

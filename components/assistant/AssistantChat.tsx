@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import type { AssistantLanguage, AssistantMessage } from "@/lib/assistant/types";
+import type { AssistantLanguage, AssistantMessage, ProductPageContext } from "@/lib/assistant/types";
 
 type AssistantChatProps = {
   mode?: "embedded" | "floating";
@@ -116,6 +116,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const [busy, setBusy] = useState(false);
   const [isOpen, setIsOpen] = useState(mode === "embedded");
   const [showNudge, setShowNudge] = useState(false);
+  const [pageContext, setPageContext] = useState<ProductPageContext>({});
   const [lastPrompt, setLastPrompt] = useState("");
   const [hasError, setHasError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -165,6 +166,19 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     return () => window.clearTimeout(timer);
   }, [isOpen, mode]);
 
+  useEffect(() => {
+    if (mode !== "floating" || typeof window === "undefined") return;
+
+    function handleMessage(event: MessageEvent) {
+      if (!event.data || event.data.type !== "emrn-pulse:page-context") return;
+      setPageContext(event.data.pageContext || {});
+    }
+
+    window.addEventListener("message", handleMessage);
+    window.parent?.postMessage({ type: "emrn-pulse:request-page-context" }, "*");
+    return () => window.removeEventListener("message", handleMessage);
+  }, [mode]);
+
   function switchLanguage(nextLanguage: "en" | "fr") {
     setLanguage(nextLanguage);
     setMessages((current) => {
@@ -204,13 +218,14 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     setBusy(false);
   }
 
-  async function sendMessage(textToSend: string) {
+  async function sendMessage(textToSend: string, options: { freshContext?: boolean } = {}) {
     const clean = textToSend.trim();
     if (!clean || busy) return;
 
     setLastPrompt(clean);
     setHasError(false);
-    const nextMessages = [...messages, { role: "user" as const, content: clean, createdAt: new Date().toISOString() }];
+    const baseMessages = options.freshContext ? initialMessages(mode, currentLanguage) : messages;
+    const nextMessages = [...baseMessages, { role: "user" as const, content: clean, createdAt: new Date().toISOString() }];
     setMessages([...nextMessages, { role: "assistant", content: "", createdAt: new Date().toISOString() }]);
     setInput("");
     setBusy(true);
@@ -219,7 +234,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
       const response = await fetch("/api/assistant/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, sessionId, language: currentLanguage }),
+        body: JSON.stringify({ messages: nextMessages, sessionId, language: currentLanguage, pageContext }),
       });
 
       if (!response.ok || !response.body) throw new Error("Assistant request failed");
@@ -336,7 +351,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
             <button
               key={action.label}
               type="button"
-              onClick={() => void sendMessage(action.prompt)}
+              onClick={() => void sendMessage(action.prompt, { freshContext: true })}
               className="emrn-pulse-quick-action inline-flex min-h-9 items-center gap-2 rounded-full border bg-white px-3 text-[13px] font-semibold transition hover:bg-[#faf7f6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
               style={{ borderColor: brand, color: brand, outlineColor: brand }}
             >
