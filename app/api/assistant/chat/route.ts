@@ -36,8 +36,8 @@ function quoteMissingText(missing: string[], language: "en" | "fr" | "unknown") 
       : missing.join(", ");
 
   return language === "fr"
-    ? `Bien sûr. Je peux envoyer votre demande de devis à notre équipe. Il me manque: ${fields}.`
-    : `Of course. I can send your quote request to our team. I still need: ${fields}.`;
+    ? `Bien sûr. Je peux envoyer votre demande de devis à notre équipe ici dans le chat. Vous pouvez aussi demander un devis directement depuis une page produit en cliquant « Add to Quote », puis « My Quote » en haut du site pour réviser et soumettre la demande. Pour l’envoyer ici, il me manque: ${fields}.`
+    : `Of course. I can send your quote request to our team here in chat. You can also request a quote directly from a product page by clicking “Add to Quote”, then “My Quote” at the top of the site to review and submit it. To send it here, I still need: ${fields}.`;
 }
 
 function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unknown") {
