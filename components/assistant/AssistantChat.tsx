@@ -124,6 +124,8 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const postedCartTokensRef = useRef<Set<string>>(new Set());
+  const handledExternalRequestsRef = useRef<Set<string>>(new Set());
+  const [pendingExternalPrompt, setPendingExternalPrompt] = useState("");
   const currentLanguage = language === "fr" ? "fr" : "en";
   const text = ui[currentLanguage];
 
@@ -180,6 +182,21 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
         setIsOpen(true);
         return;
       }
+      if (event.data.type === "emrn-pulse:search-help") {
+        const requestId = String(event.data.requestId || event.data.query || "");
+        const query = String(event.data.query || "").replace(/\s+/g, " ").trim();
+        if (!query || handledExternalRequestsRef.current.has(requestId)) return;
+        handledExternalRequestsRef.current.add(requestId);
+        localStorage.setItem(NUDGE_DISMISSED_KEY, "true");
+        setShowNudge(false);
+        setIsOpen(true);
+        setPendingExternalPrompt(
+          currentLanguage === "fr"
+            ? `La recherche intelligente n’a pas trouvé « ${query} ». Est-ce qu’EMRN peut vérifier cet article, le trouver ou préparer un devis?`
+            : `Smart Search could not find “${query}”. Can EMRN check this item, source it, or prepare a quote?`
+        );
+        return;
+      }
       if (event.data.type === "emrn-pulse:close") {
         setShowNudge(false);
         setIsOpen(false);
@@ -192,7 +209,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     window.addEventListener("message", handleMessage);
     window.parent?.postMessage({ type: "emrn-pulse:request-page-context" }, "*");
     return () => window.removeEventListener("message", handleMessage);
-  }, [mode]);
+  }, [currentLanguage, mode]);
 
   function switchLanguage(nextLanguage: "en" | "fr") {
     setLanguage(nextLanguage);
@@ -287,6 +304,13 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!pendingExternalPrompt || busy) return;
+    const prompt = pendingExternalPrompt;
+    setPendingExternalPrompt("");
+    void sendMessage(prompt, { freshContext: true });
+  }, [busy, pendingExternalPrompt]);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

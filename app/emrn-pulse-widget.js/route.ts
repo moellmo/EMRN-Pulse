@@ -11,6 +11,7 @@ export async function GET(req: Request) {
 
   var origin = ${JSON.stringify(origin)};
   var desiredOpen = false;
+  var pendingSearchHelp = null;
   var iframe = document.createElement("iframe");
   iframe.src = origin + "/ai-assistant-widget";
   iframe.title = "EMRN Pulse";
@@ -177,6 +178,22 @@ export async function GET(req: Request) {
     applySize(true, false);
   }
 
+  function openWithSearchHelp(query) {
+    var cleanQuery = String(query || "").replace(/\\s+/g, " ").trim();
+    if (!cleanQuery) {
+      openPulse();
+      return;
+    }
+    desiredOpen = true;
+    pendingSearchHelp = {
+      type: "emrn-pulse:search-help",
+      query: cleanQuery,
+      requestId: String(Date.now()) + "-" + Math.random().toString(36).slice(2)
+    };
+    postToPulse(pendingSearchHelp);
+    applySize(true, false);
+  }
+
   function closePulse() {
     desiredOpen = false;
     postToPulse({ type: "emrn-pulse:close" });
@@ -185,11 +202,15 @@ export async function GET(req: Request) {
 
   window.EMRNPulse = Object.assign(window.EMRNPulse || {}, {
     open: openPulse,
+    openWithSearchHelp: openWithSearchHelp,
     close: closePulse,
     sendPageContext: sendPageContext
   });
 
   window.addEventListener("emrn-pulse:open", openPulse);
+  window.addEventListener("emrn-pulse:search-help", function (event) {
+    openWithSearchHelp(event && event.detail ? event.detail.query : "");
+  });
   window.addEventListener("emrn-pulse:close", closePulse);
 
   window.addEventListener("message", function (event) {
@@ -227,7 +248,11 @@ export async function GET(req: Request) {
 
   iframe.addEventListener("load", function () {
     sendPageContext();
-    if (desiredOpen) {
+    if (pendingSearchHelp) {
+      window.setTimeout(function () {
+        postToPulse(pendingSearchHelp);
+      }, 50);
+    } else if (desiredOpen) {
       window.setTimeout(openPulse, 50);
     }
   });
