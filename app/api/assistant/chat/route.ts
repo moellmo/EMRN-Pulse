@@ -226,6 +226,42 @@ function supportSummaryFromMessages(messages: AssistantMessage[]): SupportReques
   };
 }
 
+function supportCategoryFromMessages(messages: AssistantMessage[]): NonNullable<SupportRequest["category"]> {
+  const text = messages.map((message) => message.content).join("\n").toLowerCase();
+  if (/can.t confirm|can't confirm|compatible|compatibility|fit|fits|go with|works with|not compatible|manufacturer info/.test(text)) {
+    return "compatibility";
+  }
+  if (/could not confirm.*(?:sku|part number|item|product)|photo, brand, model number|manual search|missing product/.test(text)) {
+    return "product_missing";
+  }
+  if (/\bquote|devis|payment link|purchase link|checkout link\b/.test(text)) return "quote";
+  if (/\binvoice|receipt|facture|print invoice\b/.test(text)) return "invoice";
+  if (/\border status|tracking|shipment|commande|suivi\b/.test(text)) return "order_status";
+  if (/\bcart|panier|add to cart|remove from cart|checkout\b/.test(text)) return "cart";
+  return "other";
+}
+
+function priorAssistantAskedMissingProductInfo(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /could not confirm.*(?:sku|part number|item|product)|photo, brand, model number|photo, la marque, le modèle|manual search|recherche manuelle/i.test(
+          message.content
+        )
+    );
+}
+
+function missingProductFollowUpQuery(messages: AssistantMessage[], latest: string) {
+  const prior = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "assistant" && /could not confirm|je n’ai pas pu confirmer/i.test(message.content))?.content || "";
+  const priorSku = prior.match(/\b(?:SKU\/part number|sku\/numéro de pièce|part number)\s+([A-Z0-9+._-]{3,40})/i)?.[1] || "";
+  return [priorSku, latest].filter(Boolean).join(" ");
+}
+
 function orderHistoryEmail(messages: AssistantMessage[]) {
   return messages.map((message) => message.content).join("\n").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
 }
@@ -1783,6 +1819,7 @@ async function handleAssistantPost(req: NextRequest) {
     if (draft.request) {
       const supportRequest = {
         ...draft.request,
+        category: supportCategoryFromMessages(messages),
         summary: supportSummaryFromMessages(messages),
       };
       await Promise.all([
@@ -1860,6 +1897,7 @@ async function handleAssistantPost(req: NextRequest) {
   const shouldContinueInvoiceLookup = priorAssistantRequestedInvoiceLookup(messages) &&
     !isQuickActionPrompt(latest) &&
     (looksLikeOrderDetailsReply || Boolean(invoiceNumberFromText(latest)));
+  const shouldContinueMissingProductFlow = priorAssistantAskedMissingProductInfo(messages) && !isQuickActionPrompt(latest);
   const shouldContinueQuoteLookup = priorAssistantRequestedQuoteLookup(messages) &&
     !isQuickActionPrompt(latest) &&
     (Boolean(standaloneQuoteNumberFromText(latest)) || Boolean(quoteNumberFromText(latest)) || Boolean(orderHistoryEmail(messages)));
@@ -2306,6 +2344,8 @@ async function handleAssistantPost(req: NextRequest) {
       ? skuCandidates.join(", ")
       : rememberedContextProducts.length
         ? searchQueryForLatest(messages, latest, rememberedContextProducts)
+      : shouldContinueMissingProductFlow
+        ? missingProductFollowUpQuery(messages, latest)
       : searchQueryForLatest(messages, latest, []);
   let searchResult: { products: CatalogProduct[]; found: number; searchQuery?: string; language?: string };
   if (pageProductsForCart.length) {
@@ -2495,7 +2535,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow) {
+  if (!shouldContinueMissingProductFlow && (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
       await Promise.all([

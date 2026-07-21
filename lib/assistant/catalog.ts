@@ -5,6 +5,7 @@ import type { SmartQueryResult } from "../smart-search-translator";
 import { normalizeSearchText } from "../search-language";
 import { withBackorderAvailability } from "./availability";
 import { mcpCreateCart, mcpRemoveCartItem, mcpSearchProducts, mcpUpdateCartItem } from "./bigcommerce-mcp";
+import { readSkuConfigSync } from "./sku-config";
 import type { CartRequest, CartResult, CatalogProduct, ProductSearchInput } from "./types";
 
 const COLLECTION_NAME = "emrn_products";
@@ -156,21 +157,20 @@ function normalizeSku(value: string) {
 }
 
 function skuPrefixCandidates() {
-  return Array.from(
-    new Set(
-      (process.env.EMRN_SKU_PREFIXES || "DY,3M,MDS,LF,PP,SB,WA,ZZ,BD,PEL,AMD")
-        .split(",")
-        .map((value) => normalizeSku(value))
-        .filter(Boolean)
-    )
-  );
+  return readSkuConfigSync().prefixes.map((value) => normalizeSku(value)).filter(Boolean);
+}
+
+function skuSuffixCandidates() {
+  return readSkuConfigSync().suffixes.map((value) => normalizeSku(value)).filter(Boolean);
 }
 
 function skuMatchCandidates(sku: string) {
   const normalized = normalizeSku(sku);
   const candidates = new Set([normalized].filter(Boolean));
-  if (normalized && !normalized.endsWith("+")) candidates.add(`${normalized}+`);
-  if (normalized.endsWith("+")) candidates.add(normalized.slice(0, -1));
+  for (const suffix of skuSuffixCandidates()) {
+    if (normalized && suffix && !normalized.endsWith(suffix)) candidates.add(`${normalized}${suffix}`);
+    if (suffix && normalized.endsWith(suffix)) candidates.add(normalized.slice(0, -suffix.length));
+  }
   for (const prefix of skuPrefixCandidates()) {
     if (normalized.startsWith(prefix) && normalized.length > prefix.length + 2) {
       candidates.add(normalized.slice(prefix.length));
@@ -179,8 +179,6 @@ function skuMatchCandidates(sku: string) {
   if (/^[0-9][A-Z0-9]{2,}$/.test(normalized)) {
     for (const prefix of skuPrefixCandidates()) candidates.add(`${prefix}${normalized}`);
   }
-  if (/^[A-Z]{1,4}[0-9][A-Z0-9]*U$/.test(normalized)) candidates.add(normalized.slice(0, -1));
-  if (/^[A-Z]{1,4}[0-9][A-Z0-9]*$/.test(normalized) && !normalized.endsWith("U")) candidates.add(`${normalized}U`);
   return candidates;
 }
 

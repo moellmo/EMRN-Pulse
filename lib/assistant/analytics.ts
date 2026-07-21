@@ -313,6 +313,7 @@ export async function readAssistantAdminData() {
       languages,
       mostSearchedProducts: topCounts(searches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
       searchFailures: topCounts(failedSearches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
+      supportCategories: topCounts(support.map((event) => event.category || "other")),
       averageConversationLength: average(
         completedConversations.map((event) => ("messageCount" in event ? event.messageCount || 0 : 0))
       ),

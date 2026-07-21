@@ -86,6 +86,7 @@ export type SupportRequest = {
   name: string;
   email: string;
   question: string;
+  category?: "product_missing" | "compatibility" | "quote" | "invoice" | "order_status" | "cart" | "other";
   summary?: {
     customerQuestion: string;
     productContext?: string;

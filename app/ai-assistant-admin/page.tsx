@@ -1,4 +1,6 @@
 import { readAssistantAdminData } from "@/lib/assistant/analytics";
+import { readSkuConfigSync } from "@/lib/assistant/sku-config";
+import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
 import type { AssistantAiUsageEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +37,8 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
     console.error("[EMRN Pulse] admin page data unavailable", error);
     return null;
   });
+  const skuConfig = readSkuConfigSync();
+  const adminToken = Array.isArray(providedToken) ? providedToken[0] || "" : providedToken || "";
 
   return (
     <main className="min-h-screen bg-slate-50 p-6 text-slate-950">
@@ -64,6 +68,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
           </div>
         ) : (
           <>
+            <SkuConfigAdmin token={adminToken} prefixes={skuConfig.prefixes} suffixes={skuConfig.suffixes} />
             <section className="mt-8 grid gap-4 md:grid-cols-4">
               {Object.entries(data.metrics)
                 .filter(([, value]) => typeof value === "number")
@@ -79,6 +84,10 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
               <MetricPanel
                 title="Search Failures"
                 rows={data.metrics.searchFailures || []}
+              />
+              <MetricPanel
+                title="Support Categories"
+                rows={data.metrics.supportCategories || []}
               />
               <Panel title="Recent Failed Searches" rows={data.failedSearches || []} />
               <Panel title="Quote Lookups" rows={data.quoteLookups || []} />

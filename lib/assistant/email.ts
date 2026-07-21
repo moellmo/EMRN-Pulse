@@ -81,6 +81,7 @@ export async function sendSupportEmail(request: SupportRequest) {
       request.question,
       "",
       "Internal summary",
+      `Category: ${request.category || "other"}`,
       `Customer question: ${summary?.customerQuestion || request.question}`,
       `Product/SKU/page: ${summary?.productContext || "Not captured"}`,
       `EMRN data found: ${summary?.emrnDataFound || "Not captured"}`,
