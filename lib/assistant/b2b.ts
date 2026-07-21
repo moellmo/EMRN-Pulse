@@ -13,6 +13,7 @@ export type B2BQuoteLookupResult = {
   allowCheckout?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  expiredAt?: string;
   quoteUrl?: string;
   customerEmail?: string;
   companyName?: string;
@@ -139,6 +140,7 @@ function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
     allowCheckout: typeof record.allowCheckout === "boolean" ? record.allowCheckout : undefined,
     createdAt: text(record.createdAt || record.created_at || record.createdTime),
     updatedAt: text(record.updatedAt || record.updated_at || record.updatedTime),
+    expiredAt: text(record.expiredAt || record.expiresAt || record.expirationDate),
     quoteUrl: text(record.quoteUrl || record.url || record.checkoutUrl),
     customerEmail: text(record.userEmail || record.email || contact.email),
     companyName: text(record.company || record.companyName || company.companyName || company.name),

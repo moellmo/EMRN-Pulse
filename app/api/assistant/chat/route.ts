@@ -400,6 +400,9 @@ function quoteLookupText(
   const shipping = money(quote.shippingTotal) ? `\n${language === "fr" ? "Livraison" : "Shipping"}: ${money(quote.shippingTotal)}` : "";
   const tax = money(quote.taxTotal) ? `\n${language === "fr" ? "Taxes" : "Tax"}: ${money(quote.taxTotal)}` : "";
   const total = money(quote.total) ? `\n${language === "fr" ? "Total" : "Total"}: ${money(quote.total)}` : "";
+  const expires = quote.expiredAt
+    ? `\n${language === "fr" ? "Expiration" : "Expires"}: ${formatDateLike(quote.expiredAt)}`
+    : "";
   const link = quote.quoteUrl ? `\n${language === "fr" ? "Lien du devis" : "Quote link"}: ${quote.quoteUrl}` : "";
   const purchase = purchaseUrl
     ? `\n${language === "fr" ? "Lien de paiement" : "Purchase link"}: ${purchaseUrl}`
@@ -407,8 +410,45 @@ function quoteLookupText(
       ? `\n${language === "fr" ? "Voulez-vous que je crée un lien de paiement pour ce devis?" : "Would you like a purchase link for this quote?"}`
       : "";
   return language === "fr"
-    ? `J’ai trouvé le devis ${quote.quoteNumber || ""}${status ? ` — statut: ${status}` : ""}.${lines.length ? `\nArticles:\n${lines.join("\n")}` : ""}${subtotal}${discount}${shipping}${tax}${total}${link}${purchase}`
-    : `I found quote ${quote.quoteNumber || ""}${status ? ` — status: ${status}` : ""}.${lines.length ? `\nItems:\n${lines.join("\n")}` : ""}${subtotal}${discount}${shipping}${tax}${total}${link}${purchase}`;
+    ? `J’ai trouvé le devis ${quote.quoteNumber || ""}${status ? ` — statut: ${status}` : ""}.${lines.length ? `\nArticles:\n${lines.join("\n")}` : ""}${subtotal}${discount}${shipping}${tax}${total}${expires}${link}${purchase}`
+    : `I found quote ${quote.quoteNumber || ""}${status ? ` — status: ${status}` : ""}.${lines.length ? `\nItems:\n${lines.join("\n")}` : ""}${subtotal}${discount}${shipping}${tax}${total}${expires}${link}${purchase}`;
+}
+
+function formatDateLike(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const numeric = Number(trimmed);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric > 100000000000 ? numeric : numeric * 1000)
+    : new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return trimmed;
+  return date.toISOString().slice(0, 10);
+}
+
+function friendlyOrderStatusText(status: string | undefined, language: "en" | "fr" | "unknown") {
+  const raw = String(status || "").trim();
+  const normalized = raw.toLowerCase();
+  const en: Record<string, string> = {
+    "awaiting payment": "Awaiting payment — payment has not been completed or confirmed yet.",
+    "awaiting fulfillment": "Received and being processed — the order may be under review, picking, packing, or supplier processing.",
+    "awaiting shipment": "Being prepared for shipment — it may be in warehouse processing, waiting on supplier processing, waiting on stock availability, or awaiting carrier pickup.",
+    "partially shipped": "Partially shipped — some items shipped separately while other items are still pending.",
+    shipped: "Shipped — tracking should be available when the carrier has provided it.",
+    completed: "Completed — the order has been processed.",
+    cancelled: "Cancelled — the order is not currently active.",
+    refunded: "Refunded — the order has been refunded.",
+  };
+  const fr: Record<string, string> = {
+    "awaiting payment": "En attente de paiement — le paiement n’est pas encore complété ou confirmé.",
+    "awaiting fulfillment": "Reçue et en traitement — la commande peut être en révision, préparation, emballage ou traitement fournisseur.",
+    "awaiting shipment": "En préparation d’expédition — elle peut être en traitement entrepôt, en attente de traitement fournisseur, en attente de disponibilité du stock ou en attente de ramassage transporteur.",
+    "partially shipped": "Partiellement expédiée — certains articles ont été expédiés séparément et d’autres sont encore en attente.",
+    shipped: "Expédiée — le suivi devrait être disponible lorsque le transporteur l’a fourni.",
+    completed: "Complétée — la commande a été traitée.",
+    cancelled: "Annulée — la commande n’est pas active actuellement.",
+    refunded: "Remboursée — la commande a été remboursée.",
+  };
+  return (language === "fr" ? fr[normalized] : en[normalized]) || raw || (language === "fr" ? "non disponible" : "unavailable");
 }
 
 function quoteCheckoutText(
@@ -434,10 +474,11 @@ function orderTrackingText(
   const tracking = order.trackingLinks.length
     ? order.trackingLinks.join("\n")
     : order.trackingNumbers.join(", ");
+  const status = friendlyOrderStatusText(order.status, language);
 
   return language === "fr"
-    ? `J’ai trouvé votre commande ${order.orderNumber}. Statut: ${order.status || "non disponible"}.\n\nSuivi: ${tracking}`
-    : `I found your order ${order.orderNumber}. Status: ${order.status || "unavailable"}.\n\nTracking: ${tracking}`;
+    ? `J’ai trouvé votre commande ${order.orderNumber}. Statut: ${status}\n\nSuivi: ${tracking}`
+    : `I found your order ${order.orderNumber}. Status: ${status}\n\nTracking: ${tracking}`;
 }
 
 function checkoutSkusFromConversation(messages: AssistantMessage[]) {
@@ -1348,6 +1389,61 @@ function isPartsOrAccessoryQuestion(text: string) {
   return /\b(part|parts|replacement|replacements|accessory|accessories|go with|goes with|compatible with|fit|fits)\b/i.test(text);
 }
 
+function isCompatibilityQuestion(text: string) {
+  return /\b(compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|pour|compatible avec|fonctionne avec|va avec)\b/i.test(text);
+}
+
+function compatibilityTargetFromQuestion(question: string) {
+  const match =
+    question.match(/\b(?:compatible with|fit|fits|work with|works with|go with|goes with|for)\s+(.+)$/i) ||
+    question.match(/\b(?:compatible avec|fonctionne avec|va avec|pour)\s+(.+)$/i);
+  return (match?.[1] || "")
+    .replace(/[?.!]+$/g, "")
+    .replace(/\b(this|that|it|item|product|part|manikin|mannequin|aed|defibrillator|ce|cet|cette|produit|article|piece|pièce)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function meaningfulCompatibilityTokens(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+.-]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3)
+    .filter((token) => !/^(the|and|for|with|this|that|item|product|part|parts|accessory|accessories|compatible|compatibility|fit|fits|work|works|goes|manikin|mannequin|defibrillator|pour|avec|produit|article|piece|pièce)$/.test(token));
+}
+
+function catalogCompatibilityAnswer(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
+  if (!isCompatibilityQuestion(question)) return "";
+  const target = compatibilityTargetFromQuestion(question);
+  if (!target || /\b(this|that|it|ce|cet|cette)\b/i.test(target)) return "";
+
+  const haystack = `${product.name}\n${product.parentName}\n${product.sku}\n${product.brand}\n${product.manufacturer}\n${product.description}`.toLowerCase();
+  const targetTokens = meaningfulCompatibilityTokens(target);
+  if (!targetTokens.length) return "";
+
+  const hasNegative = /\b(not compatible|not for|does not fit|doesn't fit|not intended for|non compatible|n.est pas compatible|ne convient pas)\b/i.test(haystack);
+  const matchedTokens = targetTokens.filter((token) => haystack.includes(token));
+  const enoughMatch = matchedTokens.length >= Math.min(targetTokens.length, targetTokens.length >= 2 ? 2 : 1);
+
+  if (hasNegative && enoughMatch) {
+    return language === "fr"
+      ? `Not compatible: Les détails du produit EMRN pour **${product.name}** (SKU: ${product.sku}) indiquent que ce n’est pas compatible avec ${target}.\n\nSource: ${product.url}\n\nVoulez-vous que j’envoie cette question au support pour vérifier?`
+      : `Not compatible: EMRN product details for **${product.name}** (SKU: ${product.sku}) indicate it is not compatible with ${target}.\n\nSource: ${product.url}\n\nWould you like me to send this to support to double-check?`;
+  }
+
+  if (enoughMatch) {
+    return language === "fr"
+      ? `Confirmed compatible: Selon les détails du produit EMRN, **${product.name}** (SKU: ${product.sku}) correspond à ${target}.\n\nSource: ${product.url}\n\nVoulez-vous que je l’ajoute au panier ou que je prépare un devis?`
+      : `Confirmed compatible: Based on EMRN product details, **${product.name}** (SKU: ${product.sku}) matches ${target}.\n\nSource: ${product.url}\n\nWould you like me to add it to cart or prepare a quote?`;
+  }
+
+  return language === "fr"
+    ? `Can’t confirm: Je ne peux pas confirmer cette compatibilité à partir des détails EMRN seuls.\n\nPage produit EMRN: ${product.url}\n\nJe vais vérifier les renseignements fabricant si disponibles.`
+    : `Can’t confirm: I can’t confirm this compatibility from EMRN product details alone.\n\nEMRN product page: ${product.url}\n\nI’ll check manufacturer info if available.`;
+}
+
 function productFamilyForPartsSearch(product: CatalogProduct) {
   return (product.parentName || product.name)
     .replace(/\b(?:4[-\s]?pack|single|dark skin|light skin)\b/gi, " ")
@@ -1789,10 +1885,10 @@ async function handleAssistantPost(req: NextRequest) {
         textStream(
           language === "fr"
             ? orderStatus.verified
-              ? `J’ai trouvé votre commande ${draft.request.orderNumber}, mais je ne vois pas de numéro de suivi disponible. J’ai envoyé une demande au support afin qu’ils vérifient la commande et vous répondent par courriel sous peu.`
+              ? `J’ai trouvé votre commande ${draft.request.orderNumber}. Statut: ${friendlyOrderStatusText(orderStatus.status, language)}\n\nJe ne vois pas de numéro de suivi disponible pour le moment. J’ai envoyé une demande au support afin qu’ils vérifient la commande et vous répondent par courriel sous peu.`
               : "Je n’ai pas pu confirmer le suivi automatiquement avec les renseignements fournis. J’ai envoyé votre demande au support afin qu’ils la vérifient et vous répondent par courriel sous peu."
             : orderStatus.verified
-              ? `I found your order ${draft.request.orderNumber}, but I do not see tracking available yet. I sent a request to support so they can check the order and email you shortly.`
+              ? `I found your order ${draft.request.orderNumber}. Status: ${friendlyOrderStatusText(orderStatus.status, language)}\n\nI do not see tracking available yet. I sent a request to support so they can check the order and email you shortly.`
               : "I could not confirm the tracking automatically with the information provided. I sent your request to support so they can review it and email you shortly."
         ),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
@@ -2304,7 +2400,19 @@ async function handleAssistantPost(req: NextRequest) {
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
 
-    if (isPartsOrAccessoryQuestion(latest) && detailProducts.length) {
+    if (isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
+      const compatibilityAnswer = catalogCompatibilityAnswer(selectedDetailProducts[0], latest, language);
+      if (compatibilityAnswer && !/^Can’t confirm:|^Can.t confirm:|^Je ne peux pas confirmer/i.test(compatibilityAnswer)) {
+        return new Response(textStream(compatibilityAnswer), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
+
+    if (isPartsOrAccessoryQuestion(latest) && !isCompatibilityQuestion(latest) && detailProducts.length) {
       const [selectedProduct] = selectedDetailProducts;
       const baseProduct = selectedProduct || detailProducts[0];
       const partsQueries = relatedPartQueries(baseProduct);

@@ -91,8 +91,9 @@ function detailAnswerInstructions(language: AssistantLanguage) {
     "- Prefer manufacturer pages, manuals, PDFs, official product pages, or EMRN pages as proof.",
     "- Large medical suppliers and marketplaces such as Medline, McKesson, Henry Schein, Bound Tree, Grainger, or Amazon may support specifications or model matching, but do not treat marketplace text as stronger than a manufacturer compatibility list/manual.",
     "- If an exact EMRN or manufacturer source confirms compatibility or specifications, answer confidently, include the source URL, and use wording like \"Based on the product/manufacturer info I found...\".",
+    "- For compatibility questions, start with one of these labels exactly: \"Confirmed compatible:\", \"Not compatible:\", or \"Can’t confirm:\". Use Confirmed compatible only when EMRN/manufacturer/source text clearly supports the fit. Use Not compatible only when source text clearly says it does not fit or is for a different model. Use Can’t confirm when the source does not prove it.",
     "- If the best source is a marketplace, distributor, or supplier rather than EMRN/manufacturer, do not include the competitor URL or name. Say \"I found supporting product info, but not on EMRN or the manufacturer page\" and answer only if the match is exact.",
-    "- If sources are ambiguous, missing, or only suggest a possibility, use this exact answer once and include the EMRN product URL when a product URL is supplied: \"I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: [URL]. Would you like me to send this to support?\"",
+    "- If sources are ambiguous, missing, or only suggest a possibility, use this exact answer once and include the EMRN product URL when a product URL is supplied: \"Can’t confirm: I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: [URL]. Would you like me to send this to support?\"",
     "- If part of the answer is confirmed and part is not, state the confirmed part briefly, include the EMRN product URL when supplied, then use the exact support handoff sentence once.",
     "- Do not ask the customer to provide more details instead of using that exact support handoff when the current EMRN product context is ambiguous.",
     "- Never infer fit from similar names alone. Model numbers, SKUs, exact names, or official compatibility lists must support the answer.",
@@ -244,8 +245,8 @@ function fallbackStream(language: AssistantLanguage, products: CatalogProduct[] 
   const product = products.find((item) => item.url);
   const text = product
     ? language === "fr"
-      ? `Je ne peux pas confirmer cette information à partir des renseignements produit/fabricant disponibles. Voici la page produit EMRN: ${product.url}. Voulez-vous que j’envoie cette question au support?`
-      : `I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: ${product.url}. Would you like me to send this to support?`
+      ? `Can’t confirm: Je ne peux pas confirmer cette information à partir des renseignements produit/fabricant disponibles. Voici la page produit EMRN: ${product.url}. Voulez-vous que j’envoie cette question au support?`
+      : `Can’t confirm: I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: ${product.url}. Would you like me to send this to support?`
     : language === "fr"
       ? "Je peux vous aider, mais le service IA n’est pas configuré pour le moment. Voulez-vous que j’envoie votre question à notre équipe de support?"
       : "I can help, but the AI service is not configured right now. Would you like me to send your question to our support team?";
