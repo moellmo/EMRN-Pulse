@@ -188,6 +188,10 @@ function isAffirmative(text: string) {
   );
 }
 
+function isNegative(text: string) {
+  return /^(no|no thanks|not now|don'?t|do not|cancel|non|pas maintenant)$/i.test(String(text || "").trim());
+}
+
 function priorAssistantOfferedItemRequest(messages: AssistantMessage[]) {
   return messages
     .slice()
@@ -607,7 +611,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (!extractSkuCandidates(latest).length && !isProductDetailIntent(latest)) {
+  if (!extractSkuCandidates(latest).length && !isProductDetailIntent(latest) && !isAvailabilityIntent(latest)) {
     const faqAnswer = faqAnswerText(latest, language);
     if (faqAnswer) {
       return new Response(textStream(faqAnswer), {
@@ -622,6 +626,17 @@ async function handleAssistantPost(req: NextRequest) {
   const shouldContinueItemRequestFlow =
     !shouldIgnorePriorQuoteFlow && priorAssistantOfferedItemRequest(messages) && isAffirmative(latest);
 
+  if (priorAssistantOfferedCartAdd(messages) && isNegative(latest)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "D’accord, je ne l’ajouterai pas au panier. Je peux continuer à chercher ou comparer d’autres articles si vous voulez."
+          : "No problem, I won’t add it to your cart. I can keep searching or compare other items if you need."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   if (isContactIntent(latest)) {
     return new Response(textStream(contactHelpText(language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -632,10 +647,16 @@ async function handleAssistantPost(req: NextRequest) {
     const skuCandidates = extractSkuCandidates(latest);
     const pageProducts = skuCandidates.length
       ? (await Promise.all(skuCandidates.map((sku) => searchBySKU(sku)))).flat()
-      : await productsFromPageContext(pageContext, language);
+      : /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
+        ? await productsFromPageContext(pageContext, language)
+        : [];
+    const rememberedProducts = !skuCandidates.length && !pageProducts.length
+      ? await recentAssistantProducts(messages)
+      : [];
+    const availabilityProducts = pageProducts.length ? pageProducts : rememberedProducts;
 
-    if (pageProducts.length) {
-      return new Response(textStream(availabilityText(pageProducts[0], language)), {
+    if (availabilityProducts.length) {
+      return new Response(textStream(availabilityText(availabilityProducts[0], language)), {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
@@ -880,29 +901,6 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (products.length === 1) {
-    const product = products[0];
-    if (product.purchasable && !product.quoteOnly) {
-      const cart = await createCart({
-        sessionId,
-        items: [{
-          productId: product.productId,
-          variantId: product.variantId || undefined,
-          quantity: 1,
-        }],
-      });
-      const lineItems = cart.lineItems || [{
-        productId: product.productId,
-        variantId: product.variantId || undefined,
-        quantity: 1,
-      }];
-      if (cart.checkoutUrl) {
-        return new Response(
-          textStream(`${exactProductFoundText(product, language, skuCandidates[0] || searchQuery, false)}\n\n${cartReadyText(1, lineItems, language)}`),
-          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-        );
-      }
-    }
-
     return new Response(textStream(exactProductFoundText(products[0], language, skuCandidates[0] || searchQuery)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });

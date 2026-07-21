@@ -51,7 +51,7 @@ export function isCartIntent(text: string) {
 }
 
 export function isProductDetailIntent(text: string) {
-  return /\b(compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|accessory|accessories|part|handle|handles|wheelchair|manikin|mannequin|dimension|dimensions|measurements?|specs?|specifications?|size|sizing|height|width|depth|length|weight|diameter|capacity|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur)\b/i.test(text);
+  return /\b(how\s+big|how\s+large|how\s+long|how\s+much|what\s+color|what\s+colour|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|accessory|accessories|part|handle|handles|wheelchair|manikin|mannequin|dimension|dimensions|measurements?|specs?|specifications?|size|sizing|height|width|depth|length|weight|diameter|capacity|color|colour|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur)\b/i.test(text);
 }
 
 export function isAccountIntent(text: string) {
