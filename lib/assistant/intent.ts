@@ -46,8 +46,11 @@ export function isQuoteIntent(text: string) {
 
 export function isCartIntent(text: string) {
   return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
-    /\b(?:i|we)\s+(?:want|need|will take|would like|get|take)\s+\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|each|ones?)\b/i.test(text) ||
-    /^\s*\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|each|ones?)\s*$/i.test(text);
+    /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
+    /\b(?:i|we)\s*(?:'|’)?(?:ll|d)?\s*(?:take|get|buy|order|purchase|want|need)\s+(?:it|this|that|them|these|those|one|ones?)\b/i.test(text) ||
+    /\b(?:i|we)\s+(?:want|need|will take|would like|get|take)\s+\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\b/i.test(text) ||
+    /^\s*\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\s*$/i.test(text) ||
+    /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text);
 }
 
 export function isProductDetailIntent(text: string) {
@@ -127,8 +130,34 @@ export function allowsMultipleCartItems(text: string) {
 }
 
 export function extractQuantity(text: string) {
+  const normalized = String(text || "").trim().toLowerCase();
+  const selectedItem =
+    "(?:it|them|these|those|this|that|the\\s+first|first|the\\s+second|second|the\\s+third|third|the\\s+item|the\\s+product|each|ones?)";
+  const explicitQuantity =
+    normalized.match(/\b(?:qty|quantity|x)\s*(\d{1,5})\b/i) ||
+    normalized.match(new RegExp(`\\b(\\d{1,5})\\s+(?:of\\s+)?${selectedItem}\\b`, "i"));
+  if (explicitQuantity) return Number(explicitQuantity[1]);
+
+  if (
+    /^\s*#?\s*[1-9]\s*$/.test(normalized) ||
+    /\b(?:#|number|no\.?|option|item)\s*[1-9]\b/i.test(normalized) ||
+    /\b[1-9](?:st|nd|rd|th)\b/i.test(normalized)
+  ) {
+    return 1;
+  }
+
   const match = text.match(/\b(\d{1,5})\b/);
   return match ? Number(match[1]) : 1;
+}
+
+export function hasExplicitQuantity(text: string) {
+  const normalized = String(text || "").trim().toLowerCase();
+  const selectedItem =
+    "(?:it|them|these|those|this|that|the\\s+first|first|the\\s+second|second|the\\s+third|third|the\\s+item|the\\s+product|each|ones?)";
+  if (/\b(?:qty|quantity|x)\s*\d{1,5}\b/i.test(normalized)) return true;
+  if (new RegExp(`\\b\\d{1,5}\\s+(?:of\\s+)?${selectedItem}\\b`, "i").test(normalized)) return true;
+  if (/\b(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\b[^0-9]{0,24}\b(?:qty|quantity|x)\s*\d{1,5}\b/i.test(normalized)) return true;
+  return false;
 }
 
 export function extractOrdinalSelection(text: string, productCount = 0) {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractQuantity, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
@@ -159,9 +159,25 @@ function priorAssistantOfferedCartAdd(messages: AssistantMessage[]) {
     );
 }
 
+function priorAssistantAskedCartQuantity(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /how many would you like|quelle quantite voulez-vous|quelle quantité voulez-vous/i.test(message.content)
+    );
+}
+
 function isContextProductSelectionReply(text: string) {
   return /\b(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|ones?)\b/i.test(text) ||
-    /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5])\s*$/i.test(text);
+    /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text);
+}
+
+function isSelectionWithoutQuantity(text: string) {
+  return !hasExplicitQuantity(text) &&
+    (/\b(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
+      /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text));
 }
 
 function cartItemsToken(items: Array<{ productId: number; variantId?: number; quantity: number }>) {
@@ -244,7 +260,7 @@ function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unkn
 
 function productResultsText(products: CatalogProduct[], language: "en" | "fr" | "unknown", query: string) {
   const shown = products.slice(0, 5);
-  const lines = shown.map((product) => {
+  const lines = shown.map((product, index) => {
     const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
     const availability =
       product.availabilityDescription ||
@@ -259,8 +275,8 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
         : "Can be ordered online";
 
     return language === "fr"
-      ? `- **${product.name}** — SKU: ${product.sku || "non disponible"} — ${price}. ${availability}. ${action}. [Voir le produit](${product.url})`
-      : `- **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. ${action}. [View product](${product.url})`;
+      ? `${index + 1}. **${product.name}** — SKU: ${product.sku || "non disponible"} — ${price}. ${availability}. ${action}. [Voir le produit](${product.url})`
+      : `${index + 1}. **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. ${action}. [View product](${product.url})`;
   });
 
   const intro =
@@ -799,9 +815,11 @@ async function handleAssistantPost(req: NextRequest) {
   const skuCandidates = extractSkuCandidates(latest);
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !isProductDetailIntent(latest) && !isQuickActionPrompt(latest);
+  const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
   const shouldHandleCart =
     isCartIntent(latest) ||
     replyingToCartChoice ||
+    replyingToCartQuantity ||
     (priorAssistantOfferedCartAdd(messages) && isAffirmative(latest));
   const shouldUseRememberedProducts =
     shouldHandleCart ||
@@ -872,7 +890,7 @@ async function handleAssistantPost(req: NextRequest) {
     const selectedProducts = selectProductsForCart(latest, products);
     const purchasableProducts = selectedProducts.filter((product) => product.purchasable && !product.quoteOnly);
     const blockedProducts = selectedProducts.filter((product) => product.quoteOnly || !product.purchasable);
-    const requestedQuantity = extractQuantity(latest);
+    const requestedQuantity = replyingToCartQuantity ? Number(latest.trim()) : extractQuantity(latest);
 
     if (selectedProducts.length > 1 && !allowsMultipleCartItems(latest)) {
       return new Response(
@@ -897,6 +915,23 @@ async function handleAssistantPost(req: NextRequest) {
           language === "fr"
             ? "Cet article nécessite une soumission de notre équipe des ventes. Je ne peux pas l’ajouter au panier ni générer un lien de paiement. Je peux vous aider à demander un devis."
             : "This item requires a quotation from our sales team. I cannot add it to cart or generate a checkout link. I can help you request a quote."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    if (
+      isSelectionWithoutQuantity(latest) &&
+      selectedProducts.length === 1 &&
+      purchasableProducts.length === 1 &&
+      !priorAssistantAskedCartQuantity(messages)
+    ) {
+      const selected = purchasableProducts[0];
+      return new Response(
+        textStream(
+          language === "fr"
+            ? `D’accord, je peux ajouter **${selected.name}** (SKU: ${selected.sku}) au panier. Quelle quantité voulez-vous?`
+            : `Sure, I can add **${selected.name}** (SKU: ${selected.sku}) to your cart. How many would you like?`
         ),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
