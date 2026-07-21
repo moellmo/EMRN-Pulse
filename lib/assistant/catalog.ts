@@ -155,6 +155,14 @@ function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
 }
 
+function skuMatchCandidates(sku: string) {
+  const normalized = normalizeSku(sku);
+  const candidates = new Set([normalized].filter(Boolean));
+  if (normalized && !normalized.endsWith("+")) candidates.add(`${normalized}+`);
+  if (normalized.endsWith("+")) candidates.add(normalized.slice(0, -1));
+  return candidates;
+}
+
 function textFromHtml(value: string) {
   return String(value || "")
     .replace(/<br\s*\/?>/gi, "\n")
@@ -263,7 +271,9 @@ function skuSearchVariants(sku: string) {
   const clean = String(sku || "").trim().toUpperCase();
   const compact = clean.replace(/\s+/g, "");
   const spaced = compact.replace(/^([A-Z]+)(\d+)$/, "$1 $2");
-  return Array.from(new Set([clean, compact, spaced].filter(Boolean)));
+  const plusCompact = compact && !compact.endsWith("+") ? `${compact}+` : "";
+  const plusSpaced = spaced && !spaced.endsWith("+") ? `${spaced}+` : "";
+  return Array.from(new Set([clean, compact, spaced, plusCompact, plusSpaced].filter(Boolean)));
 }
 
 function smartSearchHits(result: SmartSearchApiResult | null) {
@@ -627,7 +637,7 @@ async function searchSmartSearchApiProducts(query: string, limit = 8) {
 }
 
 async function searchSmartSearchApiBySKU(sku: string, limit = 8) {
-  const normalized = normalizeSku(sku);
+  const normalizedCandidates = skuMatchCandidates(sku);
   const primaryProducts = new Map<string, CatalogProduct>();
   const relatedProducts = new Map<string, CatalogProduct>();
 
@@ -635,8 +645,8 @@ async function searchSmartSearchApiBySKU(sku: string, limit = 8) {
     const result = await searchSmartSearchApiRaw(variant, limit);
     for (const hit of smartSearchHits(result)) {
       const doc = hitDocument(hit);
-      const isPrimarySkuMatch = normalizeSku(String(doc.sku || "")) === normalized;
-      const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizeSku(value) === normalized);
+      const isPrimarySkuMatch = normalizedCandidates.has(normalizeSku(String(doc.sku || "")));
+      const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizedCandidates.has(normalizeSku(value)));
       if (!isPrimarySkuMatch && !isRelatedSkuMatch) continue;
 
       const product = mapProduct(hit);
@@ -728,7 +738,7 @@ function mapBigCommerceProduct(product: BigCommerceProduct, variant?: BigCommerc
 }
 
 async function searchBigCommerceBySKU(sku: string) {
-  const normalized = normalizeSku(sku);
+  const normalizedCandidates = skuMatchCandidates(sku);
   const products = new Map<string, CatalogProduct>();
 
   for (const variant of skuSearchVariants(sku)) {
@@ -739,12 +749,12 @@ async function searchBigCommerceBySKU(sku: string) {
       limit: 10,
     });
     for (const product of productPayload?.data || []) {
-      if (normalizeSku(String(product.sku || "")) === normalized) {
+      if (normalizedCandidates.has(normalizeSku(String(product.sku || "")))) {
         const mapped = mapBigCommerceProduct(product);
         products.set(`${mapped.productId}:${mapped.variantId}:${mapped.sku}`, mapped);
       }
       for (const productVariant of product.variants || []) {
-        if (normalizeSku(String(productVariant.sku || "")) === normalized) {
+        if (normalizedCandidates.has(normalizeSku(String(productVariant.sku || "")))) {
           const mapped = mapBigCommerceProduct(product, productVariant);
           products.set(`${mapped.productId}:${mapped.variantId}:${mapped.sku}`, mapped);
         }
@@ -756,7 +766,7 @@ async function searchBigCommerceBySKU(sku: string) {
       limit: 10,
     });
     for (const productVariant of variantPayload?.data || []) {
-      if (normalizeSku(String(productVariant.sku || "")) !== normalized || !productVariant.product_id) continue;
+      if (!normalizedCandidates.has(normalizeSku(String(productVariant.sku || ""))) || !productVariant.product_id) continue;
       const productPayloadById = await bigCommerceGet<{ data?: BigCommerceProduct }>(
         `/catalog/products/${productVariant.product_id}`,
         { include: "variants,images,custom_fields" }
@@ -790,9 +800,9 @@ async function searchBigCommerceProducts(query: string, limit = 6) {
 }
 
 async function searchBySKUFallback(sku: string) {
-  const normalized = normalizeSku(sku);
+  const normalizedCandidates = skuMatchCandidates(sku);
   const keywordMatches = await searchBigCommerceProducts(sku, 12);
-  return keywordMatches.filter((product) => normalizeSku(product.sku) === normalized);
+  return keywordMatches.filter((product) => normalizedCandidates.has(normalizeSku(product.sku)));
 }
 
 async function enrichProductFromBigCommerce(product: CatalogProduct) {
@@ -970,15 +980,15 @@ export async function searchBySKU(sku: string) {
   } catch (error) {
     console.error("[EMRN Pulse] Typesense SKU search failed", error);
   }
-  const normalized = normalizeSku(sku);
+  const normalizedCandidates = skuMatchCandidates(sku);
   const primaryProducts = new Map<string, CatalogProduct>();
   const relatedProducts = new Map<string, CatalogProduct>();
 
   for (const result of results) {
     for (const hit of result.hits || []) {
       const doc = hitDocument(hit);
-      const isPrimarySkuMatch = normalizeSku(String(doc.sku || "")) === normalized;
-      const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizeSku(value) === normalized);
+      const isPrimarySkuMatch = normalizedCandidates.has(normalizeSku(String(doc.sku || "")));
+      const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizedCandidates.has(normalizeSku(value)));
       if (isPrimarySkuMatch || isRelatedSkuMatch) {
         const product = mapProduct(hit);
         const key = `${product.productId}:${product.variantId}:${product.sku}`;
