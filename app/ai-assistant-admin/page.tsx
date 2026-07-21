@@ -51,6 +51,9 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
             <span className="ml-2">
               Sheets: {data.metrics.sheetsConfigured ? `configured, ${data.metrics.sheetsRows || 0} rows read` : "not configured"}
             </span>
+            {data.metrics.sheetsWebhookUrl ? (
+              <span className="ml-2">Webhook: {data.metrics.sheetsWebhookUrl}</span>
+            ) : null}
             {data.metrics.sheetsReadError ? (
               <span className="ml-2 text-amber-700">Sheets read-back: {data.metrics.sheetsReadError}</span>
             ) : null}

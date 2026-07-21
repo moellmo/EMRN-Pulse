@@ -70,6 +70,17 @@ function googleSheetsWebhookUrl() {
   }
 }
 
+function googleSheetsWebhookUrlHint() {
+  const rawUrl = cleanWebhookUrl(process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_URL);
+  if (!rawUrl) return "";
+  try {
+    const url = new URL(rawUrl);
+    return `${url.hostname}${url.pathname}`;
+  } catch {
+    return `invalid: ${rawUrl.slice(0, 120)}`;
+  }
+}
+
 function cleanWebhookUrl(value: string | undefined) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -346,6 +357,7 @@ export async function readAssistantAdminData() {
       ),
       dataSource: source,
       sheetsConfigured: Boolean(sheets),
+      sheetsWebhookUrl: googleSheetsWebhookUrlHint(),
       sheetsRows: (sheets?.analytics.length || 0) + (sheets?.quotes.length || 0) + (sheets?.support.length || 0) + (sheets?.aiUsage.length || 0),
       sheetsReadError: sheets?.readError || "",
     },
