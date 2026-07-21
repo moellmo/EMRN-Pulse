@@ -97,6 +97,22 @@ function hitDocument(hit: SearchHit | SearchDocument): SearchDocument {
   return hit as SearchDocument;
 }
 
+function productUrlFromDocument(doc: SearchDocument) {
+  const url = absoluteStoreUrl(doc.url);
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    const looksLikeImagePath = /\.(?:jpg|jpeg|png|gif|webp|svg)$/.test(path) || /-(?:jpg|jpeg|png|gif|webp|svg)$/.test(path);
+    if (!looksLikeImagePath) return url;
+  } catch {
+    return url;
+  }
+
+  const fallback = new URL("/search.php", process.env.EMRN_STORE_URL || "https://emrn.ca");
+  fallback.searchParams.set("search_query", String(doc.sku || doc.name || "").trim());
+  return fallback.toString();
+}
+
 function mapProduct(hit: SearchHit | SearchDocument): CatalogProduct {
   const doc = hitDocument(hit);
   const quoteOnly = doc.quote_only === true;
@@ -115,7 +131,7 @@ function mapProduct(hit: SearchHit | SearchDocument): CatalogProduct {
     description: String(doc.description || ""),
     price: Number(doc.price || 0),
     image: String(doc.image || ""),
-    url: absoluteStoreUrl(doc.url),
+    url: productUrlFromDocument(doc),
     inventoryLevel: Number(doc.inventory_level || 0),
     availability: String(doc.availability || ""),
     availabilityDescription: String(doc.availability_description || ""),
@@ -226,6 +242,27 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
     add("medical bag", "medical bags", "trauma bag", "ems bag", "first aid bag", "rescue bag", "medical backpack");
   }
 
+  if (
+    includesAny(query, [
+      "cpr manikin",
+      "cpr manikins",
+      "cpr mannequin",
+      "cpr mannequins",
+      "training manikin",
+      "training manikins",
+      "adult manikin",
+      "adult manikins",
+      "prestan manikin",
+      "prestan manikins",
+      "mannequin rcr",
+      "mannequins rcr",
+      "manikin rcr",
+      "manikins rcr",
+    ])
+  ) {
+    add("cpr manikin", "cpr manikins", "prestan manikin", "adult cpr manikin", "training manikin");
+  }
+
   return recalls.slice(0, 8);
 }
 
@@ -302,6 +339,65 @@ function rankMedicalBagHits(hits: SearchHit[], originalQuery: string, translated
     if (namedWeakContainer && !namedCoreBag && !inMedicalBagsCategory) value -= 220;
     if (includesAny(name, demoteTerms)) value -= 420;
 
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeSearchText(`${originalQuery} ${translatedQuery}`);
+  const isCprManikinQuery = includesAny(query, [
+    "cpr manikin",
+    "cpr manikins",
+    "cpr mannequin",
+    "cpr mannequins",
+    "training manikin",
+    "training manikins",
+    "adult manikin",
+    "adult manikins",
+    "prestan manikin",
+    "prestan manikins",
+    "mannequin rcr",
+    "mannequins rcr",
+    "manikin rcr",
+    "manikins rcr",
+  ]);
+  if (!isCprManikinQuery) return hits;
+
+  const coreTerms = [
+    "cpr manikin",
+    "cpr manikins",
+    "cpr mannequin",
+    "cpr mannequins",
+    "professional adult cpr",
+    "adult cpr manikin",
+    "infant cpr manikin",
+    "child cpr manikin",
+    "prestan professional",
+  ];
+  const accessoryTerms = [
+    "bag",
+    "carry bag",
+    "replacement",
+    "piston",
+    "skin",
+    "face shield",
+    "lung bag",
+    "airway",
+    "clothing",
+    "adapter",
+    "part",
+  ];
+
+  const score = (hit: SearchHit) => {
+    const name = ` ${documentNameText(hit)} `;
+    let value = 0;
+    if (includesAny(name, coreTerms)) value += 520;
+    if (/\bmanikin\b|\bmanikins\b|\bmannequin\b|\bmannequins\b/.test(name)) value += 160;
+    if (/\b(cpr training manikin|adult cpr training manikin|qcpr cpr training manikin|ultralite manikin)\b/.test(name)) value += 520;
+    if (/\b(carry bag|replacement|piston|skin|face shield|lung bag|airway|adapter)\b/.test(name)) value -= 900;
+    else if (includesAny(name, accessoryTerms)) value -= 180;
     return value;
   };
 
@@ -575,13 +671,19 @@ export async function searchProducts(input: ProductSearchInput) {
     result.hits || []
   );
   mergedHits = rankMedicalBagHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankCprManikinHits(mergedHits, rawQuery, smartQuery.search_query);
 
   let products = await withBackorderAvailability(mergedHits.map(mapProduct));
 
   if (!products.length && rawQuery && rawQuery !== "*" && primaryQuery !== rawQuery) {
     try {
       result = await searchTypesenseProducts(rawQuery, input);
-      products = await withBackorderAvailability(rankMedicalBagHits(result.hits || [], rawQuery, smartQuery.search_query).map(mapProduct));
+      const rankedHits = rankCprManikinHits(
+        rankMedicalBagHits(result.hits || [], rawQuery, smartQuery.search_query),
+        rawQuery,
+        smartQuery.search_query
+      );
+      products = await withBackorderAvailability(rankedHits.map(mapProduct));
     } catch (error) {
       console.error("[EMRN Pulse] raw Typesense fallback search failed", error);
     }
@@ -728,7 +830,7 @@ export async function checkPurchasable(product: CatalogProduct) {
 export async function createCart(input: CartRequest): Promise<CartResult> {
   if (process.env.BIGCOMMERCE_CART_PROVIDER === "mcp") {
     const mcpResult = await mcpCreateCart(input);
-    if (mcpResult.available && mcpResult.data) return mcpResult.data;
+    if (mcpResult.available && mcpResult.data?.checkoutUrl) return mcpResult.data;
   }
 
   const checkedItems = await Promise.all(

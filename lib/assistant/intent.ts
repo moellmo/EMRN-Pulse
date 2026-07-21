@@ -32,6 +32,10 @@ function directReplyFor(messages: AssistantMessage[], field: "name" | "company" 
   return cleaned;
 }
 
+function escapeRegExp(value: string) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function isMedicalAdviceRequest(text: string) {
   return /\b(should i use|what treatment|diagnose|diagnosis|symptoms|medication|dose|dosage|prescribe|wound infected|is this safe for my condition)\b/i.test(text);
 }
@@ -41,7 +45,13 @@ export function isQuoteIntent(text: string) {
 }
 
 export function isCartIntent(text: string) {
-  return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text);
+  return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
+    /\b(?:i|we)\s+(?:want|need|will take|would like|get|take)\s+\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|each|ones?)\b/i.test(text) ||
+    /^\s*\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|each|ones?)\s*$/i.test(text);
+}
+
+export function isProductDetailIntent(text: string) {
+  return /\b(compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|accessory|accessories|part|handle|handles|wheelchair|manikin|mannequin|dimension|dimensions|measurements?|specs?|specifications?|size|sizing|height|width|depth|length|weight|diameter|capacity|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur)\b/i.test(text);
 }
 
 export function isAccountIntent(text: string) {
@@ -101,11 +111,19 @@ export function extractSkuCandidates(text: string) {
     candidates.push(value);
   }
 
-  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase())));
+  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase()).filter((sku) => {
+    if (/^\d{1,3}G$/i.test(sku)) return false;
+    if (/^OF\d{1,5}$/i.test(sku)) return false;
+    if (/^X\d{1,5}$/i.test(sku)) return false;
+    if (/^\d{1,3}(?:ML|MM|CM|IN)?$/i.test(sku)) return false;
+    return true;
+  })));
 }
 
 export function allowsMultipleCartItems(text: string) {
-  return /\b(all|both|these|them|tous|les deux)\b/i.test(text) || extractSkuCandidates(text).length > 1;
+  return /\b(all|both|these|them|tous|les deux)\b/i.test(text) ||
+    ordinalIndexesInText(text, 8).length > 1 ||
+    extractSkuCandidates(text).length > 1;
 }
 
 export function extractQuantity(text: string) {
@@ -113,7 +131,92 @@ export function extractQuantity(text: string) {
   return match ? Number(match[1]) : 1;
 }
 
-export function selectProductsForCart(text: string, products: CatalogProduct[]) {
+export function extractOrdinalSelection(text: string, productCount = 0) {
+  const normalized = String(text || "").toLowerCase();
+  const ordinals: Array<[RegExp, number]> = [
+    [/\b(first|1st|top|the one at the top|premier|premiere|première)\b/i, 0],
+    [/\b(second|2nd|deuxieme|deuxième)\b/i, 1],
+    [/\b(third|3rd|troisieme|troisième)\b/i, 2],
+    [/\b(fourth|4th|quatrieme|quatrième)\b/i, 3],
+    [/\b(fifth|5th|cinquieme|cinquième)\b/i, 4],
+  ];
+
+  for (const [pattern, index] of ordinals) {
+    if (pattern.test(normalized) && (!productCount || index < productCount)) return index;
+  }
+
+  if (/\b(last|final|dernier|derniere|dernière)\b/i.test(normalized) && productCount > 0) return productCount - 1;
+
+  const explicitNumeric = normalized.match(/\b(?:#|number|no\.?|option|item)\s*([1-9])\b|\b([1-9])(?:st|nd|rd|th)\b/i);
+  const standaloneNumeric = normalized.match(/^\s*#?\s*([1-9])\s*$/);
+  const numeric = explicitNumeric?.[1] || explicitNumeric?.[2] || standaloneNumeric?.[1];
+  if (numeric) {
+    const index = Number(numeric) - 1;
+    if (index >= 0 && (!productCount || index < productCount)) return index;
+  }
+
+  return null;
+}
+
+function ordinalIndexesInText(text: string, productCount: number) {
+  const normalized = String(text || "").toLowerCase();
+  const ordinals: Array<[RegExp, number]> = [
+    [/\b(first|1st|top|the one at the top|premier|premiere|première)\b/i, 0],
+    [/\b(second|2nd|deuxieme|deuxième)\b/i, 1],
+    [/\b(third|3rd|troisieme|troisième)\b/i, 2],
+    [/\b(fourth|4th|quatrieme|quatrième)\b/i, 3],
+    [/\b(fifth|5th|cinquieme|cinquième)\b/i, 4],
+  ];
+  const indexes = new Set<number>();
+
+  for (const [pattern, index] of ordinals) {
+    if (pattern.test(normalized) && index < productCount) indexes.add(index);
+  }
+
+  for (const match of normalized.matchAll(/\b(?:#|number|no\.?|option|item)\s*([1-9])\b|\b([1-9])(?:st|nd|rd|th)\b/gi)) {
+    const value = match[1] || match[2];
+    const index = Number(value) - 1;
+    if (index >= 0 && index < productCount) indexes.add(index);
+  }
+
+  return Array.from(indexes).sort((a, b) => a - b);
+}
+
+function normalizedTokens(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length >= 3 && !/^(the|and|for|with|this|that|one|add|cart|buy|get|please|item|product)$/.test(term));
+}
+
+function scoreProductForText(text: string, product: CatalogProduct) {
+  const haystack = [product.name, product.parentName, product.sku, product.brand, product.manufacturer]
+    .join(" ")
+    .toLowerCase();
+  const tokens = normalizedTokens(text);
+  if (!tokens.length) return 0;
+
+  let score = 0;
+  for (const token of tokens) {
+    if (product.sku && token === product.sku.toLowerCase()) score += 50;
+    else if (haystack.includes(token)) score += token.length >= 5 ? 8 : 4;
+    else score -= 1;
+  }
+
+  const phrase = tokens.join(" ");
+  if (phrase.length >= 5 && haystack.includes(phrase)) score += 20;
+  return score;
+}
+
+export function selectProductsForRequest(text: string, products: CatalogProduct[]) {
+  if (/\b(all|both|these|those|them|tous|les deux)\b/i.test(text)) return products;
+
+  const ordinalIndexes = ordinalIndexesInText(text, products.length);
+  if (ordinalIndexes.length > 1) return ordinalIndexes.map((index) => products[index]).filter(Boolean);
+
+  const ordinalIndex = extractOrdinalSelection(text, products.length);
+  if (ordinalIndex !== null) return products[ordinalIndex] ? [products[ordinalIndex]] : [];
+
   const normalized = text.toLowerCase();
   const skuMatch = products.filter((product) => product.sku && normalized.includes(product.sku.toLowerCase()));
   if (skuMatch.length) return skuMatch;
@@ -143,15 +246,52 @@ export function selectProductsForCart(text: string, products: CatalogProduct[]) 
     if (optionMatch.length) return optionMatch;
   }
 
-  const nameMatch = products.filter((product) => {
-    const terms = product.name
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((term) => term.length >= 4);
-    return terms.length > 0 && terms.some((term) => normalized.includes(term));
-  });
+  const scoredMatches = products
+    .map((product) => ({ product, score: scoreProductForText(text, product) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
 
-  return nameMatch.length ? nameMatch : products;
+  if (scoredMatches.length) {
+    const bestScore = scoredMatches[0].score;
+    const closeMatches = scoredMatches.filter((item) => item.score >= Math.max(1, bestScore - 2));
+    if (bestScore >= 12 || closeMatches.length < products.length) return closeMatches.map((item) => item.product);
+  }
+
+  return products;
+}
+
+export function selectProductsForCart(text: string, products: CatalogProduct[]) {
+  return selectProductsForRequest(text, products);
+}
+
+function ordinalQuantityForText(text: string, index: number) {
+  const terms = [
+    ["first", "1st", "top", "premier", "premiere", "première"],
+    ["second", "2nd", "deuxieme", "deuxième"],
+    ["third", "3rd", "troisieme", "troisième"],
+    ["fourth", "4th", "quatrieme", "quatrième"],
+    ["fifth", "5th", "cinquieme", "cinquième"],
+  ][index];
+  if (!terms) return 0;
+  const termPattern = terms.map(escapeRegExp).join("|");
+  const before = new RegExp(`\\b(\\d{1,5})\\s+(?:of\\s+)?(?:the\\s+)?(?:${termPattern})(?:\\s+(?:one|item|product))?\\b`, "i");
+  const after = new RegExp(`\\b(?:${termPattern})(?:\\s+(?:one|item|product))?\\b[^\\d]{0,24}\\b(?:qty|quantity|x)?\\s*(\\d{1,5})\\b`, "i");
+  return Number(text.match(before)?.[1] || text.match(after)?.[1] || 0);
+}
+
+export function quantityForProductSelection(text: string, product: CatalogProduct, index: number, fallbackQuantity = 1) {
+  const ordinalQuantity = ordinalQuantityForText(text, index);
+  if (ordinalQuantity > 0) return ordinalQuantity;
+
+  const sku = product.sku ? escapeRegExp(product.sku) : "";
+  if (sku) {
+    const skuBefore = new RegExp(`\\b(\\d{1,5})\\s+(?:of\\s+)?(?:sku\\s*)?${sku}\\b`, "i");
+    const skuAfter = new RegExp(`\\b(?:sku\\s*)?${sku}\\b[^\\d]{0,24}\\b(?:qty|quantity|x)?\\s*(\\d{1,5})\\b`, "i");
+    const skuQuantity = Number(text.match(skuBefore)?.[1] || text.match(skuAfter)?.[1] || 0);
+    if (skuQuantity > 0) return skuQuantity;
+  }
+
+  return fallbackQuantity;
 }
 
 export function inferSearchQuery(messages: AssistantMessage[], products: CatalogProduct[]) {
@@ -206,6 +346,33 @@ function extractRequestedProductText(messages: AssistantMessage[]) {
   return (quoteMessage || productMessages.at(-1) || "").replace(emailPattern, "").trim();
 }
 
+function quoteSelectionText(messages: AssistantMessage[]) {
+  const candidates = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content.trim())
+    .filter((message) => {
+      if (!message) return false;
+      if (emailPattern.test(message) && message.length < 90) return false;
+      if (/^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|oui|d'accord|vas-y)$/i.test(message)) return false;
+      return isQuoteIntent(message) || isCartIntent(message) || /\b(all|both|these|those|them|first|second|third|fourth|fifth|last|\d{1,5}\s+of|qty|quantity|sku)\b/i.test(message);
+    });
+
+  return candidates.at(-1) || messages.filter((message) => message.role === "user").at(-1)?.content || "";
+}
+
+function recentlyOfferedSkus(messages: AssistantMessage[]) {
+  const assistantMessage = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "assistant" && /\bSKU\s*:/i.test(message.content));
+  if (!assistantMessage) return [];
+
+  const skus = Array.from(assistantMessage.content.matchAll(/\bSKU\s*:\s*([A-Z0-9+._-]{3,40})\b/gi))
+    .map((match) => match[1]?.replace(/[.,;:)\]]+$/, "").toUpperCase())
+    .filter(Boolean);
+  return Array.from(new Set(skus));
+}
+
 export function buildQuoteDraft(
   messages: AssistantMessage[],
   language: AssistantLanguage,
@@ -220,18 +387,25 @@ export function buildQuoteDraft(
   const company =
     text.match(/(?:company is|from|for|compagnie|entreprise)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||
     directReplyFor(messages, "company");
-  const quantity = extractQuantity(text);
-  const requestedProducts = products.length
-    ? products.slice(0, 5).map((product) => ({
+  const selectionText = quoteSelectionText(messages);
+  const fallbackQuantity = extractQuantity(selectionText);
+  const offeredSkus = recentlyOfferedSkus(messages);
+  const productPool =
+    offeredSkus.length && /\b(all|both|these|those|them|tous|les deux)\b/i.test(selectionText)
+      ? products.filter((product) => offeredSkus.includes(product.sku.toUpperCase()))
+      : products;
+  const selectedProducts = productPool.length ? selectProductsForRequest(selectionText, productPool).slice(0, 8) : [];
+  const requestedProducts = selectedProducts.length
+    ? selectedProducts.map((product) => ({
         name: product.name,
         sku: product.sku,
-        quantity,
+        quantity: quantityForProductSelection(selectionText, product, products.indexOf(product), fallbackQuantity),
         url: product.url,
       }))
     : [
         {
           name: extractRequestedProductText(messages),
-          quantity,
+          quantity: fallbackQuantity,
           description: extractRequestedProductText(messages),
         },
       ].filter((product) => product.name.length >= 3);
@@ -240,7 +414,7 @@ export function buildQuoteDraft(
     !name ? "name" : "",
     !email ? "email" : "",
     !requestedProducts.length ? "products" : "",
-    !quantity ? "quantities" : "",
+    !requestedProducts.every((product) => product.quantity > 0) ? "quantities" : "",
   ].filter(Boolean);
 
   if (missing.length) return { missing };

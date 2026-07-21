@@ -233,7 +233,6 @@ export async function GET(req: Request) {
         if (iframe.contentWindow) {
           iframe.contentWindow.postMessage({ type: "emrn-pulse:add-to-cart-result", ok: true }, origin);
         }
-        window.location.href = "/cart.php";
       })
       .catch(function (error) {
         if (iframe.contentWindow) {

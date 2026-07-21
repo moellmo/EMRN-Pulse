@@ -364,7 +364,7 @@ export async function mcpCreateCart(input: CartRequest): Promise<CommerceToolSta
     latestCart = result.data;
   }
 
-  const checkoutToolName = await resolveCheckoutToolName();
+  const checkoutToolName = await resolveCheckoutToolName().catch(() => "");
   let checkoutUrl = "";
   if (checkoutToolName) {
     const checkout = await callBigCommerceMcpTool(checkoutToolName, {});

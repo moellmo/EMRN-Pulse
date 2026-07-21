@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractQuantity, extractSkuCandidates, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
@@ -75,6 +75,83 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
     }
   }
   return skus;
+}
+
+function recentAssistantProductSkus(messages: AssistantMessage[]) {
+  const skus: string[] = [];
+  const seen = new Set<string>();
+  const assistantMessages = messages
+    .slice(0, -1)
+    .filter((message) => message.role === "assistant")
+    .slice(-4)
+    .reverse();
+
+  const addSku = (value: string) => {
+    const sku = normalizeSku(value);
+    if (!sku || seen.has(sku)) return;
+    seen.add(sku);
+    skus.push(sku);
+  };
+
+  for (const message of assistantMessages) {
+    const content = message.content || "";
+    const looksProductRelated =
+      /products I found|produits que j’ai trouvés|which one would you like added|laquelle voulez-vous ajouter|SKU\s*:/i.test(
+        content
+      );
+    if (!looksProductRelated) continue;
+
+    for (const match of content.matchAll(/\bSKU:\s*([A-Z0-9+/-]{3,40})/gi)) addSku(match[1] || "");
+    for (const match of content.matchAll(/\(([A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9-]*\+?)\)/gi)) addSku(match[1] || "");
+    if (skus.length) break;
+  }
+
+  return skus.slice(0, 8);
+}
+
+async function recentAssistantProducts(messages: AssistantMessage[]) {
+  const skus = recentAssistantProductSkus(messages);
+  const products = (
+    await Promise.all(
+      skus.map(async (sku) => {
+        const [product] = await searchBySKU(sku);
+        return product || null;
+      })
+    )
+  ).filter((product): product is CatalogProduct => Boolean(product));
+
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = `${product.productId}:${product.variantId}:${normalizeSku(product.sku)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function priorAssistantAskedCartChoice(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /which one would you like added to cart|laquelle voulez-vous ajouter au panier/i.test(message.content)
+    );
+}
+
+function priorAssistantOfferedCartAdd(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /would you like me to add it to your cart|voulez-vous que je l’ajoute au panier/i.test(message.content)
+    );
+}
+
+function isContextProductSelectionReply(text: string) {
+  return /\b(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|ones?)\b/i.test(text) ||
+    /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5])\s*$/i.test(text);
 }
 
 function cartItemsToken(items: Array<{ productId: number; variantId?: number; quantity: number }>) {
@@ -184,6 +261,49 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
   return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
 }
 
+function exactProductFoundText(product: CatalogProduct, language: "en" | "fr" | "unknown", query: string, includeNextAction = true) {
+  const price = product.quoteOnly
+    ? language === "fr"
+      ? "devis requis"
+      : "quote required"
+    : product.price
+      ? `$${product.price.toFixed(2)}`
+      : language === "fr"
+        ? "prix non disponible"
+        : "price unavailable";
+  const availability =
+    product.availabilityDescription ||
+    product.availability ||
+    (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
+  const purchaseAction =
+    product.quoteOnly || !product.purchasable
+      ? language === "fr"
+        ? "Cet article nécessite un devis de notre équipe des ventes. Voulez-vous que je prépare une demande de devis?"
+        : "This item requires a quotation from our sales team. Would you like me to prepare a quote request?"
+      : language === "fr"
+        ? "Voulez-vous que je l’ajoute au panier?"
+        : "Would you like me to add it to your cart?";
+
+  const foundText = language === "fr"
+    ? `J’ai trouvé cet article pour « ${query} »:\n\n- **${product.name}** — SKU: ${product.sku || "non disponible"} — ${price}. ${availability}. [Voir le produit](${product.url})`
+    : `I found this item for “${query}”:\n\n- **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. [View product](${product.url})`;
+
+  return includeNextAction ? `${foundText}\n\n${purchaseAction}` : foundText;
+}
+
+function cartReadyText(itemCount: number, lineItems: Array<{ productId: number; variantId?: number; quantity: number }>, language: "en" | "fr" | "unknown") {
+  const token = cartItemsToken(lineItems);
+  if (language === "fr") {
+    return itemCount > 1
+      ? `J’ai ajouté ces articles au panier. Vous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`
+      : `J’ai ajouté l’article au panier. Vous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`;
+  }
+
+  return itemCount > 1
+    ? `I added those items to your cart. You can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`
+    : `I added the item to your cart. You can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`;
+}
+
 function siteSearchUrl(query: string) {
   const url = new URL("/search.php", process.env.EMRN_STORE_URL || "https://emrn.ca");
   url.searchParams.set("search_query", query);
@@ -197,7 +317,6 @@ function contactHelpText(language: "en" | "fr" | "unknown") {
 }
 
 function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
-  const normalized = text.toLowerCase();
   const helpLink = "https://emrn.ca/faq-s/";
   const contactLink = "https://emrn.ca/contact-us/";
   const shippingReturnsLink = "https://emrn.ca/shipping-returns";
@@ -488,7 +607,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (!extractSkuCandidates(latest).length) {
+  if (!extractSkuCandidates(latest).length && !isProductDetailIntent(latest)) {
     const faqAnswer = faqAnswerText(latest, language);
     if (faqAnswer) {
       return new Response(textStream(faqAnswer), {
@@ -532,30 +651,58 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   const pageProductsForCart =
-    isCartIntent(latest) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
+    (isCartIntent(latest) || isQuoteIntent(latest) || isProductDetailIntent(latest)) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
       ? await productsFromPageContext(pageContext, language)
       : [];
   const skuCandidates = extractSkuCandidates(latest);
+  const replyingToCartChoice =
+    priorAssistantAskedCartChoice(messages) && !isProductDetailIntent(latest) && !isQuickActionPrompt(latest);
+  const shouldHandleCart =
+    isCartIntent(latest) ||
+    replyingToCartChoice ||
+    (priorAssistantOfferedCartAdd(messages) && isAffirmative(latest));
+  const shouldUseRememberedProducts =
+    shouldHandleCart ||
+    isQuoteIntent(latest) ||
+    shouldContinuePriorQuoteFlow ||
+    shouldContinueItemRequestFlow ||
+    isProductDetailIntent(latest) ||
+    isContextProductSelectionReply(latest);
+  const rememberedCartProducts = shouldHandleCart && !skuCandidates.length && !pageProductsForCart.length
+    ? await recentAssistantProducts(messages)
+    : [];
+  const rememberedContextProducts = shouldUseRememberedProducts && !skuCandidates.length && !pageProductsForCart.length
+    ? rememberedCartProducts.length
+      ? rememberedCartProducts
+      : await recentAssistantProducts(messages)
+    : [];
   const searchQuery = pageProductsForCart.length
     ? pageProductsForCart[0].sku || pageProductsForCart[0].name
     : skuCandidates.length
       ? skuCandidates.join(", ")
+      : rememberedContextProducts.length
+        ? searchQueryForLatest(messages, latest, rememberedContextProducts)
       : searchQueryForLatest(messages, latest, []);
-  const searchResult = pageProductsForCart.length
-    ? { products: pageProductsForCart, found: pageProductsForCart.length }
-    : skuCandidates.length
-    ? {
-        products: (
-          await Promise.all(
-            skuCandidates.map(async (sku) => {
-              const matches = await searchBySKU(sku);
-              return matches;
-            })
-          )
-        ).flat(),
-        found: skuCandidates.length,
-      }
-    : await searchProducts({ query: searchQuery, language, limit: 8 });
+  let searchResult;
+  if (pageProductsForCart.length) {
+    searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
+  } else if (skuCandidates.length) {
+    const skuProducts = (
+      await Promise.all(
+        skuCandidates.map(async (sku) => {
+          const matches = await searchBySKU(sku);
+          return matches;
+        })
+      )
+    ).flat();
+    searchResult = skuProducts.length
+      ? { products: skuProducts, found: skuCandidates.length }
+      : await searchProducts({ query: latest, language, limit: 8 });
+  } else if (rememberedContextProducts.length) {
+    searchResult = { products: rememberedContextProducts, found: rememberedContextProducts.length };
+  } else {
+    searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
+  }
   const products = searchResult.products;
 
   await logAnalyticsEvent({
@@ -579,46 +726,11 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow || products.some((product) => product.quoteOnly)) {
-    const draft = buildQuoteDraft(messages, language, products);
-    if (draft.request) {
-      await Promise.all([
-        logQuoteRequest(draft.request),
-        sendQuoteRequestEmail(draft.request),
-        logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
-      ]);
-      return new Response(
-        textStream(
-          language === "fr"
-            ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
-            : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly."
-        ),
-        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-      );
-    }
-
-    return new Response(textStream(quoteMissingText(draft.missing, language)), {
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  }
-
-  if (!products.length) {
-    await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
-    const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
-    return new Response(
-      textStream(
-        language === "fr"
-          ? `Je n’ai pas pu confirmer ce produit dans Pulse. Essayez d’abord la recherche manuelle en haut du site, ou utilisez ce lien: ${fallbackSearchUrl}\n\nSi vous ne le trouvez pas, je peux envoyer votre demande à notre équipe pour vérifier l’article ou préparer une demande de devis.`
-          : `I could not confirm this item in Pulse. Please try the manual search bar at the top of the site first, or use this search link: ${fallbackSearchUrl}\n\nIf you still cannot find it, I can send your request to our team to check the item or prepare a quote request.`
-      ),
-      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-    );
-  }
-
-  if (isCartIntent(latest) && products.length) {
+  if (shouldHandleCart && products.length) {
     const selectedProducts = selectProductsForCart(latest, products);
     const purchasableProducts = selectedProducts.filter((product) => product.purchasable && !product.quoteOnly);
     const blockedProducts = selectedProducts.filter((product) => product.quoteOnly || !product.purchasable);
+    const requestedQuantity = extractQuantity(latest);
 
     if (selectedProducts.length > 1 && !allowsMultipleCartItems(latest)) {
       return new Response(
@@ -660,7 +772,7 @@ async function handleAssistantPost(req: NextRequest) {
     const selectedSkuSet = new Set(purchasableProducts.map((product) => product.sku.toUpperCase()));
     const cartProducts = [
       ...previousCartProducts.filter((item) => item && !selectedSkuSet.has(item.product.sku.toUpperCase())),
-      ...purchasableProducts.map((product) => ({ product, quantity: 1 })),
+      ...purchasableProducts.map((product) => ({ product, quantity: requestedQuantity })),
     ];
 
     const cart = await createCart({
@@ -681,11 +793,7 @@ async function handleAssistantPost(req: NextRequest) {
           quantity,
         }));
       return new Response(
-        textStream(
-          language === "fr"
-            ? `J’ai trouvé l’article et je l’ajoute à votre panier maintenant. Si le panier ne s’ouvre pas automatiquement, vous pouvez l’ouvrir ici: https://emrn.ca/cart.php${cartItemsToken(lineItems)}`
-            : `I found the item and I’m adding it to your cart now. If the cart does not open automatically, you can open it here: https://emrn.ca/cart.php${cartItemsToken(lineItems)}`
-        ),
+        textStream(cartReadyText(purchasableProducts.length, lineItems, language)),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }
@@ -695,6 +803,42 @@ async function handleAssistantPost(req: NextRequest) {
         language === "fr"
           ? "Je n’ai pas pu créer le panier automatiquement pour le moment. Les articles admissibles peuvent être achetés en ligne depuis leurs pages produit, et je peux envoyer les articles non admissibles à l’équipe des ventes pour un devis."
           : "I could not create the cart automatically right now. Eligible items can still be purchased online from their product pages, and I can send any non-eligible items to sales for a quote."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow) {
+    const draft = buildQuoteDraft(messages, language, products);
+    if (draft.request) {
+      await Promise.all([
+        logQuoteRequest(draft.request),
+        sendQuoteRequestEmail(draft.request),
+        logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
+      ]);
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
+            : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    return new Response(textStream(quoteMissingText(draft.missing, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (!products.length) {
+    await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
+    const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
+    return new Response(
+      textStream(
+        language === "fr"
+          ? `Je n’ai pas pu confirmer ce produit dans Pulse. Essayez d’abord la recherche manuelle en haut du site, ou utilisez ce lien: ${fallbackSearchUrl}\n\nSi vous ne le trouvez pas, je peux envoyer votre demande à notre équipe pour vérifier l’article ou préparer une demande de devis.`
+          : `I could not confirm this item in Pulse. Please try the manual search bar at the top of the site first, or use this search link: ${fallbackSearchUrl}\n\nIf you still cannot find it, I can send your request to our team to check the item or prepare a quote request.`
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -710,23 +854,61 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
+  if (isProductDetailIntent(latest)) {
+    const stream = await streamAssistantResponse({
+      messages,
+      products,
+      language,
+      sessionId,
+      query: searchQuery,
+      trustedWebSearch: true,
+    });
+    await logAnalyticsEvent({
+      type: "conversation_completed",
+      sessionId,
+      language,
+      messageCount: messages.length,
+      createdAt: new Date().toISOString(),
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  if (products.length === 1) {
+    const product = products[0];
+    if (product.purchasable && !product.quoteOnly) {
+      const cart = await createCart({
+        sessionId,
+        items: [{
+          productId: product.productId,
+          variantId: product.variantId || undefined,
+          quantity: 1,
+        }],
+      });
+      const lineItems = cart.lineItems || [{
+        productId: product.productId,
+        variantId: product.variantId || undefined,
+        quantity: 1,
+      }];
+      if (cart.checkoutUrl) {
+        return new Response(
+          textStream(`${exactProductFoundText(product, language, skuCandidates[0] || searchQuery, false)}\n\n${cartReadyText(1, lineItems, language)}`),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+    }
+
+    return new Response(textStream(exactProductFoundText(products[0], language, skuCandidates[0] || searchQuery)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
   return new Response(textStream(productResultsText(products, language, searchQuery)), {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
-  });
-
-  const stream = await streamAssistantResponse({ messages, products, language, sessionId, query: searchQuery });
-  await logAnalyticsEvent({
-    type: "conversation_completed",
-    sessionId,
-    language,
-    messageCount: messages.length,
-    createdAt: new Date().toISOString(),
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
   });
 }
