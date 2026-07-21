@@ -322,6 +322,11 @@ function cartItemsToken(items: Array<{ productId: number; variantId?: number; qu
   return `\n\n[[EMRN_CART_ITEMS:${payload}]]`;
 }
 
+function cartActionToken(action: Record<string, unknown>) {
+  const payload = Buffer.from(JSON.stringify(action), "utf8").toString("base64");
+  return `\n\n[[EMRN_CART_ACTION:${payload}]]`;
+}
+
 function isClearCartIntent(text: string) {
   return /\b(clear cart|empty cart|clear the cart|clear it|vider le panier)\b/i.test(text);
 }
@@ -337,30 +342,33 @@ function isSetQuantityCartIntent(text: string) {
 function mcpCartEditText(
   action: "remove" | "set_quantity" | "clear",
   language: "en" | "fr" | "unknown",
-  checkoutUrl?: string
+  checkoutUrl?: string,
+  browserAction?: Record<string, unknown>
 ) {
+  const token = browserAction ? cartActionToken(browserAction) : "";
   if (action === "clear") {
     return language === "fr"
-      ? "D’accord, j’ai vidé le panier."
-      : "Okay, I cleared the cart.";
+      ? `D’accord, j’ai vidé le panier.${token}`
+      : `Okay, I cleared the cart.${token}`;
   }
 
   const link = checkoutUrl || "https://emrn.ca/cart.php";
   if (action === "remove") {
     return language === "fr"
-      ? `D’accord, j’ai retiré cet article du panier. Vous pouvez continuer à magasiner ici, ou ouvrir votre panier quand vous êtes prêt: ${link}`
-      : `Okay, I removed that item from the cart. You can keep shopping here, or open your cart when you’re ready: ${link}`;
+      ? `D’accord, j’ai retiré cet article du panier. Vous pouvez continuer à magasiner ici, ou ouvrir votre panier quand vous êtes prêt: ${link}${token}`
+      : `Okay, I removed that item from the cart. You can keep shopping here, or open your cart when you’re ready: ${link}${token}`;
   }
 
   return language === "fr"
-    ? `D’accord, j’ai changé cette quantité dans le panier. Vous pouvez continuer à magasiner ici, ou ouvrir votre panier quand vous êtes prêt: ${link}`
-    : `Okay, I updated that quantity in the cart. You can keep shopping here, or open your cart when you’re ready: ${link}`;
+    ? `D’accord, j’ai changé cette quantité dans le panier. Vous pouvez continuer à magasiner ici, ou ouvrir votre panier quand vous êtes prêt: ${link}${token}`
+    : `Okay, I updated that quantity in the cart. You can keep shopping here, or open your cart when you’re ready: ${link}${token}`;
 }
 
-function mcpCartEmptyAfterRemoveText(language: "en" | "fr" | "unknown") {
+function mcpCartEmptyAfterRemoveText(language: "en" | "fr" | "unknown", browserAction?: Record<string, unknown>) {
+  const token = browserAction ? cartActionToken(browserAction) : "";
   return language === "fr"
-    ? "D’accord, j’ai retiré cet article du panier. Le panier est maintenant vide."
-    : "Okay, I removed that item from the cart. The cart is now empty.";
+    ? `D’accord, j’ai retiré cet article du panier. Le panier est maintenant vide.${token}`
+    : `Okay, I removed that item from the cart. The cart is now empty.${token}`;
 }
 
 function normalizeSku(value: string) {
@@ -1373,7 +1381,7 @@ async function handleAssistantPost(req: NextRequest) {
         if (removableItems.length) {
           for (const item of removableItems) await removeMcpCartItem(item.itemId!);
           trackedCarts.delete(sessionId);
-          return new Response(textStream(mcpCartEditText("clear", language)), {
+          return new Response(textStream(mcpCartEditText("clear", language, undefined, { action: "clear" })), {
             headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
         }
@@ -1382,6 +1390,12 @@ async function handleAssistantPost(req: NextRequest) {
       if (selectedTrackedItem?.itemId && isRemoveCartIntent(latest)) {
         const result = await removeMcpCartItem(selectedTrackedItem.itemId);
         if (!result.blockedItems.length) {
+          const browserAction = {
+            action: "remove",
+            sku: selectedTrackedItem.sku,
+            productId: selectedTrackedItem.productId,
+            variantId: selectedTrackedItem.variantId,
+          };
           const nextCart = {
             ...trackedCart,
             items: trackedCart.items.filter((item) => item.itemId !== selectedTrackedItem.itemId),
@@ -1389,12 +1403,12 @@ async function handleAssistantPost(req: NextRequest) {
           };
           if (nextCart.items.length) {
             trackedCarts.set(sessionId, nextCart);
-            return new Response(textStream(mcpCartEditText("remove", language, result.checkoutUrl || trackedCart.checkoutUrl)), {
+            return new Response(textStream(mcpCartEditText("remove", language, result.checkoutUrl || trackedCart.checkoutUrl, browserAction)), {
               headers: { "Content-Type": "text/plain; charset=utf-8" },
             });
           }
           trackedCarts.delete(sessionId);
-          return new Response(textStream(mcpCartEmptyAfterRemoveText(language)), {
+          return new Response(textStream(mcpCartEmptyAfterRemoveText(language, browserAction)), {
             headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
         }
@@ -1409,11 +1423,18 @@ async function handleAssistantPost(req: NextRequest) {
           quantity,
         });
         if (!result.blockedItems.length) {
+          const browserAction = {
+            action: "set_quantity",
+            sku: selectedTrackedItem.sku,
+            productId: selectedTrackedItem.productId,
+            variantId: selectedTrackedItem.variantId,
+            quantity,
+          };
           updateTrackedCartFromResult(sessionId, trackedCart, result);
           const currentCart = trackedCarts.get(sessionId) || trackedCart;
           const currentItem = currentCart.items.find((item) => item.itemId === selectedTrackedItem.itemId);
           if (currentItem) currentItem.quantity = quantity;
-          return new Response(textStream(mcpCartEditText("set_quantity", language, result.checkoutUrl || trackedCart.checkoutUrl)), {
+          return new Response(textStream(mcpCartEditText("set_quantity", language, result.checkoutUrl || trackedCart.checkoutUrl, browserAction)), {
             headers: { "Content-Type": "text/plain; charset=utf-8" },
           });
         }
