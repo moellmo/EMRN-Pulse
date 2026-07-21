@@ -428,26 +428,30 @@ function quoteStatusText(
   language: "en" | "fr" | "unknown",
   allowCheckout?: boolean
 ) {
-  if (allowCheckout) return language === "fr" ? "Prêt à acheter" : "Ready to purchase";
+  if (allowCheckout) {
+    return language === "fr"
+      ? "Prêt à acheter - vous pouvez utiliser le lien de paiement ci-dessous"
+      : "Ready to purchase - you can use the payment link below";
+  }
   const value = String(status || "").trim();
   const en: Record<string, string> = {
-    "0": "New",
-    "1": "Submitted",
-    "2": "In process",
-    "3": "Updated by customer",
-    "4": "Ordered",
+    "0": "Under review",
+    "1": "Submitted to EMRN for review",
+    "2": "Under review",
+    "3": "Waiting for customer update",
+    "4": "Converted to an order",
     "5": "Expired",
   };
   const fr: Record<string, string> = {
-    "0": "Nouveau",
-    "1": "Soumis",
-    "2": "En traitement",
-    "3": "Mis à jour par le client",
-    "4": "Commandé",
+    "0": "En révision",
+    "1": "Soumis à EMRN pour révision",
+    "2": "En révision",
+    "3": "En attente d’une mise à jour du client",
+    "4": "Converti en commande",
     "5": "Expiré",
   };
   if (!value) return "";
-  return (language === "fr" ? fr[value] : en[value]) || value;
+  return (language === "fr" ? fr[value] : en[value]) || (language === "fr" ? "En révision" : "Under review");
 }
 
 function quoteLookupText(
@@ -1768,7 +1772,7 @@ async function handleAssistantPost(req: NextRequest) {
     .some(
       (message) =>
         message.role === "assistant" &&
-        /support team|equipe de support|équipe de support|send a message to our team|nom, votre courriel et votre question|name, email, and question/i.test(
+        /support team|equipe de support|équipe de support|send a message to our team|send this to support|send it to support|envoyer.*support|nom, votre courriel et votre question|name, email, and question/i.test(
           message.content
         )
     );
@@ -2303,7 +2307,7 @@ async function handleAssistantPost(req: NextRequest) {
       : rememberedContextProducts.length
         ? searchQueryForLatest(messages, latest, rememberedContextProducts)
       : searchQueryForLatest(messages, latest, []);
-  let searchResult;
+  let searchResult: { products: CatalogProduct[]; found: number; searchQuery?: string; language?: string };
   if (pageProductsForCart.length) {
     searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
   } else if (skuCandidates.length) {
@@ -2317,7 +2321,7 @@ async function handleAssistantPost(req: NextRequest) {
     ).flat();
     searchResult = skuProducts.length
       ? { products: skuProducts, found: skuCandidates.length }
-      : await searchProducts({ query: latest, language, limit: 8 });
+      : { products: [], found: 0, searchQuery: skuCandidates.join(", "), language };
   } else if (rememberedContextProducts.length) {
     searchResult = { products: rememberedContextProducts, found: rememberedContextProducts.length };
   } else {
@@ -2517,11 +2521,12 @@ async function handleAssistantPost(req: NextRequest) {
   if (!products.length) {
     await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
     const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
+    const skuText = skuCandidates.length ? ` SKU/part number ${skuCandidates.join(", ")}` : "";
     return new Response(
       textStream(
         language === "fr"
-          ? `Je n’ai pas pu confirmer ce produit dans Pulse. Essayez d’abord la recherche manuelle en haut du site, ou utilisez ce lien: ${fallbackSearchUrl}\n\nSi vous ne le trouvez pas, je peux envoyer votre demande à notre équipe pour vérifier l’article ou préparer une demande de devis.`
-          : `I could not confirm this item in Pulse. Please try the manual search bar at the top of the site first, or use this search link: ${fallbackSearchUrl}\n\nIf you still cannot find it, I can send your request to our team to check the item or prepare a quote request.`
+          ? `Je n’ai pas pu confirmer${skuText ? ` le${skuText}` : " ce produit"} dans Pulse. Pouvez-vous envoyer une photo, la marque, le modèle, le numéro de pièce, ou une description de l’usage?\n\nVous pouvez aussi essayer la recherche manuelle: ${fallbackSearchUrl}\n\nJe peux envoyer cette demande au support pour vérifier l’article ou préparer une demande de devis.`
+          : `I could not confirm${skuText ? ` the${skuText}` : " this item"} in Pulse. Can you send a photo, brand, model number, part number, or what it is used for?\n\nYou can also try the manual search here: ${fallbackSearchUrl}\n\nI can send this to support to check the item or prepare a quote request.`
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );

@@ -41,6 +41,14 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
       <div className="mx-auto max-w-6xl">
         <h1 className="text-3xl font-bold">EMRN Pulse Admin</h1>
         <p className="mt-2 text-slate-600">Quote requests, support escalations, and assistant metrics.</p>
+        {data ? (
+          <p className="mt-2 text-sm text-slate-500">
+            Data source: <span className="font-semibold">{String(data.metrics.dataSource || "local").replace(/_/g, " ")}</span>
+            {data.metrics.sheetsReadError ? (
+              <span className="ml-2 text-amber-700">Sheets read-back: {data.metrics.sheetsReadError}</span>
+            ) : null}
+          </p>
+        ) : null}
 
         {!data ? (
           <div className="mt-8 rounded-md border border-red-200 bg-white p-5 text-red-700">
@@ -51,8 +59,8 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
             No local admin logs are available here yet. Vercel does not keep durable local log files, so production
             history should be mirrored through the Google Sheets webhook. Set <code>EMRN_GOOGLE_SHEETS_WEBHOOK_URL</code> and
             <code className="ml-1">EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET</code>, redeploy, then send a few Pulse test messages.
-            This page will show local runtime logs when available; for permanent production reporting, use the Google
-            Sheet or add a database/Sheets read-back API later.
+            This page will show local runtime logs when available and Google Sheets production logs when the Apps Script
+            supports <code className="mx-1">GET?action=read</code>.
           </div>
         ) : (
           <>

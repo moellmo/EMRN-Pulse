@@ -17,6 +17,15 @@ type SheetMirrorResult = {
   error?: string;
 };
 
+type SheetsAdminData = {
+  analytics: AssistantAnalyticsEvent[];
+  quotes: Array<QuoteRequest & { createdAt: string }>;
+  support: Array<SupportRequest & { createdAt: string }>;
+  aiUsage: AssistantAiUsageEvent[];
+  source: "local" | "google_sheets" | "local_and_google_sheets";
+  readError?: string;
+};
+
 const modelPricesPerMillion: Record<string, { input: number; output: number }> = {
   "gpt-4.1-mini": { input: 0.4, output: 1.6 },
   "gpt-4.1-nano": { input: 0.1, output: 0.4 },
@@ -103,6 +112,103 @@ async function mirrorToGoogleSheets(payload: SheetLogPayload): Promise<SheetMirr
   }
 }
 
+async function readGoogleSheetsAdminRows(): Promise<Omit<SheetsAdminData, "source"> | null> {
+  const baseUrl = googleSheetsWebhookUrl();
+  if (!baseUrl) return null;
+
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set("action", "read");
+    url.searchParams.set("limit", process.env.EMRN_GOOGLE_SHEETS_READ_LIMIT || "1000");
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET
+        ? { "X-EMRN-Pulse-Secret": process.env.EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET }
+        : undefined,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return {
+        analytics: [],
+        quotes: [],
+        support: [],
+        aiUsage: [],
+        readError: `Google Sheets read failed: ${response.status} ${(await response.text()).slice(0, 300)}`,
+      };
+    }
+
+    const payload = await response.json().catch(() => null);
+    return normalizeSheetsAdminPayload(payload);
+  } catch (error) {
+    return {
+      analytics: [],
+      quotes: [],
+      support: [],
+      aiUsage: [],
+      readError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function normalizeSheetsAdminPayload(payload: unknown): Omit<SheetsAdminData, "source"> {
+  const analytics: AssistantAnalyticsEvent[] = [];
+  const quotes: Array<QuoteRequest & { createdAt: string }> = [];
+  const support: Array<SupportRequest & { createdAt: string }> = [];
+  const aiUsage: AssistantAiUsageEvent[] = [];
+
+  const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const rows =
+    asArray(record.rows) ||
+    asArray(record.data) ||
+    asArray(record.logs) ||
+    asArray(record.events) ||
+    [];
+
+  for (const row of rows) addSheetRow(row, analytics, quotes, support, aiUsage);
+  for (const row of asArray(record.analytics) || []) addTypedSheetRow("analytics", row, analytics, quotes, support, aiUsage);
+  for (const row of asArray(record.quotes) || asArray(record.quote) || []) addTypedSheetRow("quote", row, analytics, quotes, support, aiUsage);
+  for (const row of asArray(record.support) || []) addTypedSheetRow("support", row, analytics, quotes, support, aiUsage);
+  for (const row of asArray(record.aiUsage) || asArray(record.ai_usage) || []) addTypedSheetRow("ai_usage", row, analytics, quotes, support, aiUsage);
+
+  return { analytics, quotes, support, aiUsage };
+}
+
+function asArray(value: unknown) {
+  return Array.isArray(value) ? value : null;
+}
+
+function addSheetRow(
+  value: unknown,
+  analytics: AssistantAnalyticsEvent[],
+  quotes: Array<QuoteRequest & { createdAt: string }>,
+  support: Array<SupportRequest & { createdAt: string }>,
+  aiUsage: AssistantAiUsageEvent[]
+) {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const kind = String(row.kind || row.type || row.category || "").toLowerCase();
+  const nested = row.row && typeof row.row === "object" ? row.row : row.payload && typeof row.payload === "object" ? row.payload : row;
+  if (kind === "quote" || kind === "quotes") return addTypedSheetRow("quote", nested, analytics, quotes, support, aiUsage);
+  if (kind === "support") return addTypedSheetRow("support", nested, analytics, quotes, support, aiUsage);
+  if (kind === "ai_usage" || kind === "ai usage" || kind === "aiusage") return addTypedSheetRow("ai_usage", nested, analytics, quotes, support, aiUsage);
+  return addTypedSheetRow("analytics", nested, analytics, quotes, support, aiUsage);
+}
+
+function addTypedSheetRow(
+  kind: "analytics" | "quote" | "support" | "ai_usage",
+  value: unknown,
+  analytics: AssistantAnalyticsEvent[],
+  quotes: Array<QuoteRequest & { createdAt: string }>,
+  support: Array<SupportRequest & { createdAt: string }>,
+  aiUsage: AssistantAiUsageEvent[]
+) {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  if (kind === "quote") quotes.push(row as QuoteRequest & { createdAt: string });
+  else if (kind === "support") support.push(row as SupportRequest & { createdAt: string });
+  else if (kind === "ai_usage") aiUsage.push(row as AssistantAiUsageEvent);
+  else analytics.push(row as AssistantAnalyticsEvent);
+}
+
 export async function testGoogleSheetsMirror() {
   return mirrorToGoogleSheets({
     kind: "analytics",
@@ -157,12 +263,22 @@ export async function logAiUsage(event: Omit<AssistantAiUsageEvent, "createdAt" 
 }
 
 export async function readAssistantAdminData() {
-  const [analytics, quotes, support, aiUsage] = await Promise.all([
+  const [localAnalytics, localQuotes, localSupport, localAiUsage, sheets] = await Promise.all([
     readJsonl<AssistantAnalyticsEvent>("analytics.jsonl"),
     readJsonl<QuoteRequest & { createdAt: string }>("quotes.jsonl"),
     readJsonl<SupportRequest & { createdAt: string }>("support.jsonl"),
     readJsonl<AssistantAiUsageEvent>("ai-usage.jsonl"),
+    readGoogleSheetsAdminRows(),
   ]);
+  const analytics = dedupeRows([...localAnalytics, ...(sheets?.analytics || [])]) as AssistantAnalyticsEvent[];
+  const quotes = dedupeRows([...localQuotes, ...(sheets?.quotes || [])]) as Array<QuoteRequest & { createdAt: string }>;
+  const support = dedupeRows([...localSupport, ...(sheets?.support || [])]) as Array<SupportRequest & { createdAt: string }>;
+  const aiUsage = dedupeRows([...localAiUsage, ...(sheets?.aiUsage || [])]) as AssistantAiUsageEvent[];
+  const source = sheets && (sheets.analytics.length || sheets.quotes.length || sheets.support.length || sheets.aiUsage.length)
+    ? localAnalytics.length || localQuotes.length || localSupport.length || localAiUsage.length
+      ? "local_and_google_sheets"
+      : "google_sheets"
+    : "local";
 
   const searches = analytics.filter((event) => event.type === "product_search");
   const failedSearches = analytics.filter((event) => event.type === "no_result_search" || event.type === "search_failure");
@@ -200,6 +316,8 @@ export async function readAssistantAdminData() {
       averageConversationLength: average(
         completedConversations.map((event) => ("messageCount" in event ? event.messageCount || 0 : 0))
       ),
+      dataSource: source,
+      sheetsReadError: sheets?.readError || "",
     },
     failedSearches: failedSearches.slice(-100).reverse(),
     quoteLookups: analytics.filter((event) => event.type === "quote_lookup").slice(-100).reverse(),
@@ -207,6 +325,16 @@ export async function readAssistantAdminData() {
     support: support.slice(-100).reverse(),
     aiUsage: aiUsage.slice(-100).reverse(),
   };
+}
+
+function dedupeRows<T>(rows: T[]) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = JSON.stringify(row);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function topCounts(values: string[]) {

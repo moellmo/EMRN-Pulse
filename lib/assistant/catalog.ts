@@ -155,11 +155,32 @@ function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
 }
 
+function skuPrefixCandidates() {
+  return Array.from(
+    new Set(
+      (process.env.EMRN_SKU_PREFIXES || "DY,3M,MDS,LF,PP,SB,WA,ZZ,BD,PEL,AMD")
+        .split(",")
+        .map((value) => normalizeSku(value))
+        .filter(Boolean)
+    )
+  );
+}
+
 function skuMatchCandidates(sku: string) {
   const normalized = normalizeSku(sku);
   const candidates = new Set([normalized].filter(Boolean));
   if (normalized && !normalized.endsWith("+")) candidates.add(`${normalized}+`);
   if (normalized.endsWith("+")) candidates.add(normalized.slice(0, -1));
+  for (const prefix of skuPrefixCandidates()) {
+    if (normalized.startsWith(prefix) && normalized.length > prefix.length + 2) {
+      candidates.add(normalized.slice(prefix.length));
+    }
+  }
+  if (/^[0-9][A-Z0-9]{2,}$/.test(normalized)) {
+    for (const prefix of skuPrefixCandidates()) candidates.add(`${prefix}${normalized}`);
+  }
+  if (/^[A-Z]{1,4}[0-9][A-Z0-9]*U$/.test(normalized)) candidates.add(normalized.slice(0, -1));
+  if (/^[A-Z]{1,4}[0-9][A-Z0-9]*$/.test(normalized) && !normalized.endsWith("U")) candidates.add(`${normalized}U`);
   return candidates;
 }
 
@@ -273,7 +294,13 @@ function skuSearchVariants(sku: string) {
   const spaced = compact.replace(/^([A-Z]+)(\d+)$/, "$1 $2");
   const plusCompact = compact && !compact.endsWith("+") ? `${compact}+` : "";
   const plusSpaced = spaced && !spaced.endsWith("+") ? `${spaced}+` : "";
-  return Array.from(new Set([clean, compact, spaced, plusCompact, plusSpaced].filter(Boolean)));
+  const normalizedCandidates = Array.from(skuMatchCandidates(compact));
+  const spacedCandidates = normalizedCandidates.map((candidate) => candidate.replace(/^([A-Z]+)(\d+)$/, "$1 $2"));
+  const prefixedRawCandidates = /^[0-9]/.test(clean)
+    ? skuPrefixCandidates().flatMap((prefix) => [`${prefix}${clean}`, `${prefix}-${clean}`])
+    : [];
+  const hyphenCandidates = normalizedCandidates.map((candidate) => candidate.replace(/^(3M)(\d+)$/i, "$1-$2"));
+  return Array.from(new Set([clean, compact, spaced, plusCompact, plusSpaced, ...normalizedCandidates, ...spacedCandidates, ...prefixedRawCandidates, ...hyphenCandidates].filter(Boolean)));
 }
 
 function smartSearchHits(result: SmartSearchApiResult | null) {
