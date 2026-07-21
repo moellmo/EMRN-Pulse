@@ -4,7 +4,7 @@ import { buildSmartSearchQuery } from "../smart-search-translator";
 import type { SmartQueryResult } from "../smart-search-translator";
 import { normalizeSearchText } from "../search-language";
 import { withBackorderAvailability } from "./availability";
-import { mcpCreateCart, mcpSearchProducts } from "./bigcommerce-mcp";
+import { mcpCreateCart, mcpRemoveCartItem, mcpSearchProducts, mcpUpdateCartItem } from "./bigcommerce-mcp";
 import type { CartRequest, CartResult, CatalogProduct, ProductSearchInput } from "./types";
 
 const COLLECTION_NAME = "emrn_products";
@@ -1142,6 +1142,33 @@ export async function createCart(input: CartRequest): Promise<CartResult> {
     provider: "bigcommerce-api",
     lineItems,
   };
+}
+
+export async function updateMcpCartItem(input: {
+  lineItemId: string;
+  productId: number;
+  variantId?: number;
+  quantity: number;
+}) {
+  if (process.env.BIGCOMMERCE_CART_PROVIDER !== "mcp") {
+    return {
+      blockedItems: ["MCP cart editing is not enabled."],
+    } as CartResult;
+  }
+
+  const result = await mcpUpdateCartItem(input);
+  return result.available && result.data ? result.data : { blockedItems: [result.message || "Unable to update cart item."] };
+}
+
+export async function removeMcpCartItem(lineItemId: string) {
+  if (process.env.BIGCOMMERCE_CART_PROVIDER !== "mcp") {
+    return {
+      blockedItems: ["MCP cart editing is not enabled."],
+    } as CartResult;
+  }
+
+  const result = await mcpRemoveCartItem(lineItemId);
+  return result.available && result.data ? result.data : { blockedItems: [result.message || "Unable to remove cart item."] };
 }
 
 export const futureBuyerPortalTools = {

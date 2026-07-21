@@ -99,6 +99,8 @@ export type CartResult = {
   blockedItems: string[];
   provider?: "bigcommerce-api" | "bigcommerce-mcp" | "storefront-browser";
   lineItems?: Array<{
+    itemId?: string;
+    sku?: string;
     productId: number;
     variantId?: number;
     quantity: number;

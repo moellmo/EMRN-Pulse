@@ -16,6 +16,13 @@ type McpTool = {
   description?: string;
 };
 
+type CartLineItemInput = {
+  lineItemId: string;
+  productId: number;
+  variantId?: number;
+  quantity: number;
+};
+
 type McpResponse<T> = {
   result?: T;
   error?: {
@@ -124,6 +131,7 @@ function normalizeMcpCartResult(data: unknown): CartResult {
   const cart = structuredContent.cart && typeof structuredContent.cart === "object"
     ? (structuredContent.cart as Record<string, unknown>)
     : {};
+  const lineItems = cartLineItemsFromMcpCart(cart);
   const redirectUrls =
     nested.redirect_urls && typeof nested.redirect_urls === "object"
       ? (nested.redirect_urls as Record<string, unknown>)
@@ -143,7 +151,30 @@ function normalizeMcpCartResult(data: unknown): CartResult {
     ),
     blockedItems: [],
     provider: "bigcommerce-mcp",
+    lineItems,
   };
+}
+
+function cartLineItemsFromMcpCart(cart: Record<string, unknown>) {
+  const lineItems = cart.lineItems && typeof cart.lineItems === "object"
+    ? (cart.lineItems as Record<string, unknown>)
+    : {};
+  const physicalItems = Array.isArray(lineItems.physicalItems) ? lineItems.physicalItems : [];
+  return physicalItems
+    .map((item): { itemId: string; sku: string; productId: number; variantId?: number; quantity: number } | null => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      return {
+        itemId: stringFromUnknown(record.entityId || record.id),
+        sku: stringFromUnknown(record.sku),
+        productId: numberFromUnknown(record.productEntityId || record.productId),
+        variantId: numberFromUnknown(record.variantEntityId || record.variantId) || undefined,
+        quantity: numberFromUnknown(record.quantity) || 1,
+      };
+    })
+    .filter((item): item is { itemId: string; sku: string; productId: number; variantId?: number; quantity: number } =>
+      Boolean(item?.itemId && item.productId)
+    );
 }
 
 function unwrapMcpToolData(data: unknown): Record<string, unknown> {
@@ -386,6 +417,70 @@ export async function mcpCreateCart(input: CartRequest): Promise<CommerceToolSta
 
 export async function mcpAddToCart(input: CartRequest): Promise<CommerceToolStatus<CartResult>> {
   return mcpCreateCart(input);
+}
+
+async function mcpCheckoutUrl() {
+  const checkoutToolName = await resolveCheckoutToolName().catch(() => "");
+  if (!checkoutToolName) return "";
+  const checkout = await callBigCommerceMcpTool(checkoutToolName, {});
+  return checkout.available ? normalizeMcpCartResult(checkout.data).checkoutUrl || "" : "";
+}
+
+export async function mcpUpdateCartItem(input: CartLineItemInput): Promise<CommerceToolStatus<CartResult>> {
+  const result = await callBigCommerceMcpTool("update_cart_item", {
+    line_item_id: input.lineItemId,
+    item: {
+      quantity: input.quantity,
+      productEntityId: input.productId,
+      variantEntityId: input.variantId || null,
+      selectedOptions: {
+        checkboxes: null,
+        dateFields: null,
+        multiLineTextFields: null,
+        multipleChoices: null,
+        numberFields: null,
+        textFields: null,
+      },
+    },
+  });
+  if (!result.available) {
+    return {
+      available: false,
+      source: "bigcommerce-mcp",
+      message: result.message,
+    };
+  }
+  const cart = normalizeMcpCartResult(result.data);
+  return {
+    available: true,
+    source: "bigcommerce-mcp",
+    data: {
+      ...cart,
+      checkoutUrl: (await mcpCheckoutUrl()) || cart.checkoutUrl,
+    },
+  };
+}
+
+export async function mcpRemoveCartItem(itemId: string): Promise<CommerceToolStatus<CartResult>> {
+  const result = await callBigCommerceMcpTool("remove_item_from_cart", {
+    item_id: itemId,
+  });
+  if (!result.available) {
+    return {
+      available: false,
+      source: "bigcommerce-mcp",
+      message: result.message,
+    };
+  }
+  const cart = normalizeMcpCartResult(result.data);
+  return {
+    available: true,
+    source: "bigcommerce-mcp",
+    data: {
+      ...cart,
+      checkoutUrl: (await mcpCheckoutUrl()) || cart.checkoutUrl,
+    },
+  };
 }
 
 export async function mcpGetCustomerAccount(): Promise<CommerceToolStatus<null>> {

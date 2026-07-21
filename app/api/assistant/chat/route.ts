@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
+import { createCart, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCartItem } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
@@ -9,6 +9,22 @@ import { streamAssistantResponse } from "@/lib/assistant/openai";
 import type { AssistantMessage, CatalogProduct, ProductPageContext } from "@/lib/assistant/types";
 
 export const runtime = "nodejs";
+
+type TrackedCartItem = {
+  itemId?: string;
+  sku: string;
+  productId: number;
+  variantId?: number;
+  quantity: number;
+  name: string;
+};
+
+type TrackedCart = {
+  items: TrackedCartItem[];
+  checkoutUrl?: string;
+};
+
+const trackedCarts = new Map<string, TrackedCart>();
 
 function textStream(text: string) {
   const encoder = new TextEncoder();
@@ -77,34 +93,99 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
   return skus;
 }
 
-function recentCartSkusFromConversation(messages: AssistantMessage[]) {
-  const skus = new Map<string, number>();
-  const cartMessage = messages
-    .slice(0, -1)
-    .filter((message) => message.role === "assistant" && /\b(Cart|Panier):/i.test(message.content))
-    .at(-1);
-  if (!cartMessage) return skus;
+function rememberCartState(
+  sessionId: string,
+  cartProducts: Array<{ product: CatalogProduct; quantity: number }>,
+  lineItems: Array<{ itemId?: string; sku?: string; productId: number; variantId?: number; quantity: number }>,
+  checkoutUrl?: string
+) {
+  const previous = trackedCarts.get(sessionId);
+  const byKey = new Map<string, TrackedCartItem>();
 
-  for (const match of cartMessage.content.matchAll(/^\s*\d+\.\s+(\d{1,5})\s+x\s+.+?\(SKU:\s*([A-Z0-9+/-]{3,40})\)/gim)) {
-    const quantity = Number(match[1] || 1);
-    const sku = normalizeSku(match[2] || "");
-    if (sku) skus.set(sku, quantity);
+  for (const item of previous?.items || []) {
+    byKey.set(`${item.productId}:${item.variantId || 0}`, item);
   }
-  return skus;
+
+  for (const cartProduct of cartProducts) {
+    const product = cartProduct.product;
+    const key = `${product.productId}:${product.variantId || 0}`;
+    const lineItem =
+      lineItems.find((item) => Number(item.productId) === product.productId && Number(item.variantId || 0) === Number(product.variantId || 0)) ||
+      lineItems.find((item) => normalizeSku(item.sku || "") === normalizeSku(product.sku));
+    byKey.set(key, {
+      itemId: lineItem?.itemId || byKey.get(key)?.itemId,
+      sku: product.sku,
+      productId: product.productId,
+      variantId: product.variantId || undefined,
+      quantity: cartProduct.quantity,
+      name: product.name,
+    });
+  }
+
+  trackedCarts.set(sessionId, {
+    items: Array.from(byKey.values()).slice(0, 8),
+    checkoutUrl,
+  });
 }
 
-async function recentCartProducts(messages: AssistantMessage[]) {
-  const cartSkus = recentCartSkusFromConversation(messages);
-  const products = (
-    await Promise.all(
-      Array.from(cartSkus.keys()).map(async (sku) => {
-        const [product] = await searchBySKU(sku);
-        return product ? { product, quantity: cartSkus.get(sku) || 1 } : null;
-      })
-    )
-  ).filter((item): item is { product: CatalogProduct; quantity: number } => Boolean(item));
+function cartProductsFromTrackedCart(cart: TrackedCart) {
+  return cart.items.map((item) => ({
+    product: {
+      id: String(item.variantId || item.productId || item.sku),
+      productId: item.productId,
+      variantId: item.variantId || 0,
+      name: item.name,
+      parentName: item.name,
+      sku: item.sku,
+      brand: "",
+      manufacturer: "",
+      categories: [],
+      description: "",
+      price: 0,
+      image: "",
+      url: "",
+      inventoryLevel: 0,
+      availability: "",
+      availabilityDescription: "",
+      purchasable: true,
+      quoteOnly: false,
+      purchaseAction: "cart" as const,
+      purchaseMessage: "",
+    },
+    quantity: item.quantity,
+  }));
+}
 
-  return products;
+function updateTrackedCartFromResult(sessionId: string, cart: TrackedCart, result: { checkoutUrl?: string; lineItems?: Array<{ itemId?: string; sku?: string; productId: number; variantId?: number; quantity: number }> }) {
+  const returnedLineItems = result.lineItems || [];
+  if (!returnedLineItems.length) {
+    trackedCarts.set(sessionId, {
+      ...cart,
+      checkoutUrl: result.checkoutUrl || cart.checkoutUrl,
+    });
+    return;
+  }
+
+  const nextItems = cart.items
+    .map((item): TrackedCartItem | null => {
+      const lineItem =
+        returnedLineItems.find((current) => current.itemId && current.itemId === item.itemId) ||
+        returnedLineItems.find((current) => normalizeSku(current.sku || "") === normalizeSku(item.sku)) ||
+        returnedLineItems.find((current) => Number(current.productId) === item.productId && Number(current.variantId || 0) === Number(item.variantId || 0));
+      if (!lineItem) return null;
+      return {
+        ...item,
+        itemId: lineItem.itemId || item.itemId,
+        sku: item.sku || lineItem.sku || "",
+        quantity: lineItem.quantity || item.quantity,
+      };
+    })
+    .filter((item): item is TrackedCartItem => Boolean(item));
+
+  trackedCarts.set(sessionId, {
+    items: nextItems,
+    checkoutUrl: result.checkoutUrl || cart.checkoutUrl,
+  });
 }
 
 function recentAssistantProductSkus(messages: AssistantMessage[]) {
@@ -211,13 +292,23 @@ function isSelectionWithoutQuantity(text: string) {
 }
 
 function isLiveCartEditIntent(text: string) {
-  return /\b(remove|delete|take out|clear cart|empty cart|clear the cart|change (?:that|it|this|the|quantity)|make (?:that|it|this|the).*\b\d{1,5}\b|set (?:that|it|this|the).*\b\d{1,5}\b|enlever|retirer|supprimer|vider le panier|changer|mettre|mettez)\b/i.test(text);
+  return /\b(remove|delete|take out|clear cart|empty cart|clear the cart|clear it|change (?:that|it|this|the|quantity)|make (?:that|it|this|the).*\b\d{1,5}\b|set (?:that|it|this|the).*\b\d{1,5}\b|enlever|retirer|supprimer|vider le panier|changer|mettre|mettez)\b/i.test(text);
 }
 
 function priorAssistantCreatedCart(messages: AssistantMessage[]) {
   return messages
     .slice(-6, -1)
     .some((message) => message.role === "assistant" && /\bopen your cart when you(?:’|')?re ready|ouvrir votre panier|Cart:\n/i.test(message.content));
+}
+
+function priorAssistantAskedClearCartConfirmation(messages: AssistantMessage[]) {
+  return messages
+    .slice(-3, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /clear the Meri-created cart|vider le panier cree par Meri|vider le panier créé par Meri/i.test(message.content)
+    );
 }
 
 function quantityFromChangeReply(text: string) {
@@ -229,13 +320,8 @@ function cartItemsToken(items: Array<{ productId: number; variantId?: number; qu
   return `\n\n[[EMRN_CART_ITEMS:${payload}]]`;
 }
 
-function cartActionToken(action: Record<string, unknown>) {
-  const payload = Buffer.from(JSON.stringify(action), "utf8").toString("base64");
-  return `\n\n[[EMRN_CART_ACTION:${payload}]]`;
-}
-
 function isClearCartIntent(text: string) {
-  return /\b(clear cart|empty cart|clear the cart|vider le panier)\b/i.test(text);
+  return /\b(clear cart|empty cart|clear the cart|clear it|vider le panier)\b/i.test(text);
 }
 
 function isRemoveCartIntent(text: string) {
@@ -246,21 +332,33 @@ function isSetQuantityCartIntent(text: string) {
   return quantityFromChangeReply(text) > 0;
 }
 
-function cartEditReply(action: Record<string, unknown>, language: "en" | "fr" | "unknown") {
-  const type = String(action.action || "");
-  if (type === "clear") {
+function mcpCartEditText(
+  action: "remove" | "set_quantity" | "clear",
+  language: "en" | "fr" | "unknown",
+  checkoutUrl?: string
+) {
+  if (action === "clear") {
     return language === "fr"
-      ? `D’accord, je vais vider le panier. Vous pouvez l’ouvrir ici pour vérifier: https://emrn.ca/cart.php${cartActionToken(action)}`
-      : `Okay, I’ll clear the cart. You can open it here to confirm: https://emrn.ca/cart.php${cartActionToken(action)}`;
+      ? "D’accord, j’ai vidé le panier."
+      : "Okay, I cleared the cart.";
   }
-  if (type === "remove") {
+
+  const link = checkoutUrl || "https://emrn.ca/cart.php";
+  if (action === "remove") {
     return language === "fr"
-      ? `D’accord, je vais retirer cet article du panier. Vous pouvez l’ouvrir ici pour vérifier: https://emrn.ca/cart.php${cartActionToken(action)}`
-      : `Okay, I’ll remove that item from the cart. You can open it here to confirm: https://emrn.ca/cart.php${cartActionToken(action)}`;
+      ? `D’accord, j’ai retiré cet article du panier. Vous pouvez continuer à magasiner ici, ou ouvrir votre panier quand vous êtes prêt: ${link}`
+      : `Okay, I removed that item from the cart. You can keep shopping here, or open your cart when you’re ready: ${link}`;
   }
+
   return language === "fr"
-    ? `D’accord, je vais changer cette quantité dans le panier. Vous pouvez l’ouvrir ici pour vérifier: https://emrn.ca/cart.php${cartActionToken(action)}`
-    : `Okay, I’ll update that quantity in the cart. You can open it here to confirm: https://emrn.ca/cart.php${cartActionToken(action)}`;
+    ? `D’accord, j’ai changé cette quantité dans le panier. Vous pouvez continuer à magasiner ici, ou ouvrir votre panier quand vous êtes prêt: ${link}`
+    : `Okay, I updated that quantity in the cart. You can keep shopping here, or open your cart when you’re ready: ${link}`;
+}
+
+function mcpCartEmptyAfterRemoveText(language: "en" | "fr" | "unknown") {
+  return language === "fr"
+    ? "D’accord, j’ai retiré cet article du panier. Le panier est maintenant vide."
+    : "Okay, I removed that item from the cart. The cart is now empty.";
 }
 
 function normalizeSku(value: string) {
@@ -627,21 +725,22 @@ function cartReadyText(
   itemCount: number,
   lineItems: Array<{ productId: number; variantId?: number; quantity: number }>,
   language: "en" | "fr" | "unknown",
-  cartProducts: Array<{ product: CatalogProduct; quantity: number }> = []
+  cartProducts: Array<{ product: CatalogProduct; quantity: number }> = [],
+  cartUrl = "https://emrn.ca/cart.php"
 ) {
-  const token = cartItemsToken(lineItems);
+  const token = process.env.BIGCOMMERCE_CART_PROVIDER === "mcp" ? "" : cartItemsToken(lineItems);
   const summary = cartProducts.length
     ? `\n\n${language === "fr" ? "Panier:" : "Cart:"}\n${cartSummaryLines(cartProducts, language).join("\n")}`
     : "";
   if (language === "fr") {
     return itemCount > 1
-      ? `J’ai ajouté ces articles au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`
-      : `J’ai ajouté l’article au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`;
+      ? `J’ai ajouté ces articles au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: ${cartUrl}${token}`
+      : `J’ai ajouté l’article au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: ${cartUrl}${token}`;
   }
 
   return itemCount > 1
-    ? `I added those items to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`
-    : `I added the item to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`;
+    ? `I added those items to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: ${cartUrl}${token}`
+    : `I added the item to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: ${cartUrl}${token}`;
 }
 
 function quoteSplitText(blockedProducts: CatalogProduct[], language: "en" | "fr" | "unknown") {
@@ -1228,14 +1327,9 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isLiveCartEditIntent(latest) && priorAssistantCreatedCart(messages) && !priorAssistantAskedCartQuantity(messages)) {
-    const cartProducts = await recentCartProducts(messages);
-    if (isClearCartIntent(latest)) {
-      return new Response(textStream(cartEditReply({ action: "clear" }, language)), {
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      });
-    }
-
-    if (cartProducts.length) {
+    const trackedCart = trackedCarts.get(sessionId);
+    if (trackedCart?.items.length) {
+      const cartProducts = cartProductsFromTrackedCart(trackedCart);
       const ordinalIndex = extractOrdinalSelection(latest, cartProducts.length);
       const selectedProducts = selectProductsForCart(latest, cartProducts.map((item) => item.product));
       const selectedProduct =
@@ -1246,41 +1340,74 @@ async function handleAssistantPost(req: NextRequest) {
             : /\b(that|it|this|the item|the product|ce produit|cet article)\b/i.test(latest)
               ? cartProducts.at(-1)?.product
               : null;
+      const selectedTrackedItem = selectedProduct
+        ? trackedCart.items.find(
+            (item) =>
+              normalizeSku(item.sku) === normalizeSku(selectedProduct.sku) ||
+              (item.productId === selectedProduct.productId && Number(item.variantId || 0) === Number(selectedProduct.variantId || 0))
+          )
+        : null;
 
-      if (selectedProduct && isRemoveCartIntent(latest)) {
+      if (isClearCartIntent(latest) && !priorAssistantAskedClearCartConfirmation(messages)) {
         return new Response(
           textStream(
-            cartEditReply(
-              {
-                action: "remove",
-                sku: selectedProduct.sku,
-                productId: selectedProduct.productId,
-                variantId: selectedProduct.variantId || undefined,
-              },
-              language
-            )
+            language === "fr"
+              ? "Juste pour confirmer: voulez-vous vider le panier créé par Meri dans cette conversation? Répondez « oui, vider » pour confirmer."
+              : "Just to confirm: do you want me to clear the Meri-created cart from this conversation? Reply “yes, clear it” to confirm."
           ),
           { headers: { "Content-Type": "text/plain; charset=utf-8" } }
         );
       }
 
+      if (isClearCartIntent(latest) || (priorAssistantAskedClearCartConfirmation(messages) && isAffirmative(latest))) {
+        const removableItems = trackedCart.items.filter((item) => item.itemId);
+        if (removableItems.length) {
+          for (const item of removableItems) await removeMcpCartItem(item.itemId!);
+          trackedCarts.delete(sessionId);
+          return new Response(textStream(mcpCartEditText("clear", language)), {
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          });
+        }
+      }
+
+      if (selectedTrackedItem?.itemId && isRemoveCartIntent(latest)) {
+        const result = await removeMcpCartItem(selectedTrackedItem.itemId);
+        if (!result.blockedItems.length) {
+          const nextCart = {
+            ...trackedCart,
+            items: trackedCart.items.filter((item) => item.itemId !== selectedTrackedItem.itemId),
+            checkoutUrl: result.checkoutUrl || trackedCart.checkoutUrl,
+          };
+          if (nextCart.items.length) {
+            trackedCarts.set(sessionId, nextCart);
+            return new Response(textStream(mcpCartEditText("remove", language, result.checkoutUrl || trackedCart.checkoutUrl)), {
+              headers: { "Content-Type": "text/plain; charset=utf-8" },
+            });
+          }
+          trackedCarts.delete(sessionId);
+          return new Response(textStream(mcpCartEmptyAfterRemoveText(language)), {
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          });
+        }
+      }
+
       const quantity = quantityFromChangeReply(latest);
-      if (selectedProduct && quantity > 0) {
-        return new Response(
-          textStream(
-            cartEditReply(
-              {
-                action: "set_quantity",
-                sku: selectedProduct.sku,
-                productId: selectedProduct.productId,
-                variantId: selectedProduct.variantId || undefined,
-                quantity,
-              },
-              language
-            )
-          ),
-          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-        );
+      if (selectedTrackedItem?.itemId && quantity > 0) {
+        const result = await updateMcpCartItem({
+          lineItemId: selectedTrackedItem.itemId,
+          productId: selectedTrackedItem.productId,
+          variantId: selectedTrackedItem.variantId,
+          quantity,
+        });
+        if (!result.blockedItems.length) {
+          updateTrackedCartFromResult(sessionId, trackedCart, result);
+          const currentCart = trackedCarts.get(sessionId) || trackedCart;
+          const currentItem = currentCart.items.find((item) => item.itemId === selectedTrackedItem.itemId);
+          if (currentItem) currentItem.quantity = quantity;
+          return new Response(textStream(mcpCartEditText("set_quantity", language, result.checkoutUrl || trackedCart.checkoutUrl)), {
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          });
+        }
       }
 
       if (isRemoveCartIntent(latest) || isSetQuantityCartIntent(latest)) {
@@ -1298,8 +1425,8 @@ async function handleAssistantPost(req: NextRequest) {
     return new Response(
       textStream(
         language === "fr"
-          ? "Je ne peux pas modifier ou vider de façon fiable un panier déjà créé depuis le chat pour le moment. Ouvrez votre panier ici pour enlever un article, changer la quantité ou vider le panier: https://emrn.ca/cart.php"
-          : "I can’t reliably edit or clear a cart that has already been created from chat yet. Please open your cart here to remove an item, change quantity, or clear it: https://emrn.ca/cart.php"
+          ? "Je peux modifier les paniers créés dans cette conversation. Je n’ai pas trouvé l’identifiant de ligne MCP pour ce panier, alors ouvrez le lien du panier pour le modifier: https://emrn.ca/cart.php"
+          : "I can edit carts created in this conversation. I could not find the MCP line item ID for this cart, so please open the cart link to edit it: https://emrn.ca/cart.php"
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -1540,8 +1667,9 @@ async function handleAssistantPost(req: NextRequest) {
           variantId: product.variantId || undefined,
           quantity,
         }));
+      rememberCartState(sessionId, cartProducts, lineItems, cart.checkoutUrl);
       return new Response(
-        textStream(`${cartReadyText(cartProducts.length, lineItems, language, cartProducts)}${quoteSplitText(blockedProducts, language)}`),
+        textStream(`${cartReadyText(cartProducts.length, lineItems, language, cartProducts, cart.checkoutUrl)}${quoteSplitText(blockedProducts, language)}`),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }

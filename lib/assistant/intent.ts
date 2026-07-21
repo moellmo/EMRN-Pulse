@@ -47,10 +47,12 @@ export function isQuoteIntent(text: string) {
 export function isCartIntent(text: string) {
   return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
+    /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:want|need|would like|like)\s+to\s+(?:purchase|buy|order|get|take)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s*(?:'|’)?(?:ll|d)?\s*(?:take|get|buy|order|purchase|want|need)\s+(?:it|this|that|them|these|those|one|ones?)\b/i.test(text) ||
     /\b(?:make|set|change)\s+(?:it|this|that|them|these|those|the\s+first|first|the\s+second|second|the\s+third|third|the\s+item|the\s+product)\s+(?:to\s+)?\d{1,5}\s*(?:boxes?|packs?|cases?)?\b/i.test(text) ||
     /\b(?:make|set|change)\s+.{2,60}?\s+(?:to\s+)?\d{1,5}\s*(?:boxes?|packs?|cases?)\b/i.test(text) ||
     /\b\d{1,5}\s+(?:of\s+)?(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|item|product))?\b/i.test(text) ||
+    /\b\d{1,5}\s+(?:of\s+)?(?:#|number|no\.?|option|item)\s*[1-5]\b/i.test(text) ||
     /\b\d{1,5}\s+(?:du|de\s+la|de\s+l['’]?|de|des)\s+(?:premier|premiere|première|deuxieme|deuxième|troisieme|troisième|quatrieme|quatrième|cinquieme|cinquième|dernier|derniere|dernière)\b/i.test(text) ||
     /\b(?:i|we)\s+(?:want|need|will take|would like|get|take)\s+\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\b/i.test(text) ||
     /^\s*\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\s*$/i.test(text) ||
@@ -100,6 +102,7 @@ export function isSupportYes(text: string) {
 export function extractSkuCandidates(text: string) {
   const candidates: string[] = [];
   const skuText = text
+    .replace(/\b(?:this|item|product|produit)(?=[A-Z]{1,10}\s*-?\s*\d{2,})/gi, " ")
     .replace(/\b(?:i|we)\s+(?:want|would like|need)\s+to\s+(?:purchase|buy|order)\b/gi, " ")
     .replace(/\b(?:purchase|buy|order|add|cart|checkout|sku|item|product|produit|acheter|commander|panier)\b/gi, " ");
 
@@ -161,6 +164,7 @@ export function hasExplicitQuantity(text: string) {
     "(?:it|them|these|those|this|that|the\\s+first|first|the\\s+second|second|the\\s+third|third|the\\s+item|the\\s+product|each|ones?)";
   if (/\b(?:qty|quantity|x)\s*\d{1,5}\b/i.test(normalized)) return true;
   if (new RegExp(`\\b\\d{1,5}\\s+(?:of\\s+)?${selectedItem}\\b`, "i").test(normalized)) return true;
+  if (/\b\d{1,5}\s+(?:of\s+)?(?:#|number|no\.?|option|item)\s*[1-5]\b/i.test(normalized)) return true;
   if (/\b(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\b[^0-9]{0,24}\b(?:qty|quantity|x)\s*\d{1,5}\b/i.test(normalized)) return true;
   return false;
 }
@@ -308,6 +312,9 @@ function ordinalQuantityForText(text: string, index: number) {
   ][index];
   if (!terms) return 0;
   const termPattern = terms.map(escapeRegExp).join("|");
+  const numericBefore = new RegExp(`\\b(\\d{1,5})\\s+(?:of\\s+)?(?:#|number|no\\.?|option|item)\\s*${index + 1}\\b`, "i");
+  const numericQuantity = Number(text.match(numericBefore)?.[1] || 0);
+  if (numericQuantity > 0) return numericQuantity;
   const before = new RegExp(`\\b(\\d{1,5})\\s+(?:(?:of|du|de\\s+la|de\\s+l['’]?|de|des)\\s+)?(?:the\\s+)?(?:${termPattern})(?:\\s+(?:one|item|product))?\\b`, "i");
   const after = new RegExp(`\\b(?:${termPattern})(?:\\s+(?:one|item|product))?\\b[^\\d]{0,24}\\b(?:qty|quantity|x)?\\s*(\\d{1,5})\\b`, "i");
   return Number(text.match(before)?.[1] || text.match(after)?.[1] || 0);
