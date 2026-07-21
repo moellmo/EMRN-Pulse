@@ -158,7 +158,8 @@ function normalizeSku(value: string) {
 function textFromHtml(value: string) {
   return String(value || "")
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(?:p|div|li|h[1-6]|tr)>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6]|tr|td|th)>/gi, "\n")
+    .replace(/<(?:td|th)\b[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
@@ -173,11 +174,83 @@ function textFromHtml(value: string) {
     .trim();
 }
 
+function shogunTableSpecsText(value: string) {
+  const rows = Array.from(String(value || "").matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi));
+  const specs: string[] = [];
+
+  for (const row of rows) {
+    const cells = Array.from((row[1] || "").matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)).map((match) =>
+      textFromHtml(match[1] || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join("\n")
+    );
+    const label = cells[0] || "";
+    const valueText = cells.slice(1).filter(Boolean).join("\n");
+    if (!label || !valueText) continue;
+    specs.push(`${label}\n${valueText}`);
+  }
+
+  return Array.from(new Set(specs)).join("\n");
+}
+
+function productPageDetailsText(html: string) {
+  const cleanHtml = String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const tableSpecs = shogunTableSpecsText(cleanHtml);
+  const text = [textFromHtml(cleanHtml), tableSpecs].filter(Boolean).join("\n");
+  const headings = [
+    "Product Overview",
+    "Specifications",
+    "Features",
+    "Dimensions",
+    "Product Details",
+    "Color",
+    "Colour",
+    "Capacity",
+    "Pocket Dimensions",
+    "Pack Dimensions",
+    "Size",
+    "Sizes",
+    "Compatibility",
+    "Compatible",
+  ];
+  const chunks: string[] = [];
+
+  for (const heading of headings) {
+    const index = text.toLowerCase().indexOf(heading.toLowerCase());
+    if (index >= 0) chunks.push(text.slice(Math.max(0, index - 200), index + 2200));
+  }
+
+  return Array.from(new Set(chunks))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .slice(0, 12000)
+    .trim();
+}
+
+async function fetchProductPageDetails(product: CatalogProduct) {
+  if (!product.url || /\/search\.php\b/i.test(product.url)) return "";
+  try {
+    const parsed = new URL(product.url);
+    const storeHost = new URL(process.env.EMRN_STORE_URL || "https://emrn.ca").hostname.replace(/^www\./, "");
+    if (parsed.hostname.replace(/^www\./, "") !== storeHost) return "";
+    const response = await fetch(parsed.toString(), { cache: "no-store" });
+    if (!response.ok) return "";
+    return productPageDetailsText(await response.text());
+  } catch (error) {
+    console.error("[EMRN Pulse] EMRN product page enrichment failed", error);
+    return "";
+  }
+}
+
 function productSpecsText(product: BigCommerceProduct) {
   const customFields = (product.custom_fields || [])
     .map((field) => [field.name, field.value].filter(Boolean).join(": "))
     .filter(Boolean);
-  return [textFromHtml(product.description || ""), ...customFields].filter(Boolean).join("\n");
+  return [textFromHtml(product.description || ""), shogunTableSpecsText(product.description || ""), ...customFields].filter(Boolean).join("\n");
 }
 
 function skuValuesForDocument(doc: SearchDocument) {
@@ -723,19 +796,26 @@ async function searchBySKUFallback(sku: string) {
 }
 
 async function enrichProductFromBigCommerce(product: CatalogProduct) {
-  if (!product.productId) return product;
+  const productPageDetails = async (currentProduct: CatalogProduct) => {
+    const pageDetails = await fetchProductPageDetails(currentProduct);
+    return pageDetails && pageDetails.length > currentProduct.description.length
+      ? { ...currentProduct, description: [currentProduct.description, pageDetails].filter(Boolean).join("\n") }
+      : currentProduct;
+  };
+
+  if (!product.productId) return productPageDetails(product);
 
   try {
     const payload = await bigCommerceGet<{ data?: BigCommerceProduct }>(`/catalog/products/${product.productId}`, {
       include: "variants,images,custom_fields",
     });
-    if (!payload?.data) return product;
+    if (!payload?.data) return productPageDetails(product);
 
     const variant = product.variantId
       ? payload.data.variants?.find((item) => Number(item.id) === Number(product.variantId))
       : payload.data.variants?.find((item) => normalizeSku(String(item.sku || "")) === normalizeSku(product.sku));
     const enriched = mapBigCommerceProduct(payload.data, variant);
-    return {
+    return productPageDetails({
       ...product,
       description: enriched.description || product.description,
       image: enriched.image || product.image,
@@ -744,10 +824,10 @@ async function enrichProductFromBigCommerce(product: CatalogProduct) {
       inventoryLevel: enriched.inventoryLevel || product.inventoryLevel,
       availability: enriched.availability || product.availability,
       availabilityDescription: enriched.availabilityDescription || product.availabilityDescription,
-    };
+    });
   } catch (error) {
     console.error("[EMRN Pulse] BigCommerce product enrichment failed", error);
-    return product;
+    return productPageDetails(product);
   }
 }
 
