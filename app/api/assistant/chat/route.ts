@@ -120,7 +120,7 @@ function priorAssistantRequestedInvoiceLookup(messages: AssistantMessage[]) {
     .some(
       (message) =>
         message.role === "assistant" &&
-        /invoice lookup|receipt lookup|look up the invoice|facture|numéro de commande et le courriel|order number and email/i.test(message.content)
+        /invoice lookup|receipt lookup|look up the invoice|find my invoice|invoice or receipt|facture|reçu|recu|rechercher la facture/i.test(message.content)
     );
 }
 
@@ -141,6 +141,18 @@ function priorAssistantRequestedReorderLookup(messages: AssistantMessage[]) {
       (message) =>
         message.role === "assistant" &&
         /reorder lookup|order to reorder|email used for the order|commande à recommander|commande a recommander/i.test(message.content)
+    );
+}
+
+function priorAssistantOfferedOrderStatusSupport(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /ask support for an update|send this order status request to support|demande au support pour une mise à jour|envoyer cette demande de statut au support/i.test(
+          message.content
+        )
     );
 }
 
@@ -1736,6 +1748,7 @@ async function handleAssistantPost(req: NextRequest) {
   const shouldContinueQuoteLookup = priorAssistantRequestedQuoteLookup(messages) &&
     !isQuickActionPrompt(latest) &&
     (Boolean(standaloneQuoteNumberFromText(latest)) || Boolean(quoteNumberFromText(latest)) || Boolean(orderHistoryEmail(messages)));
+  const shouldSendOrderStatusSupport = priorAssistantOfferedOrderStatusSupport(messages) && isAffirmative(latest);
 
   if (isCurrentCartQuestion(latest)) {
     return new Response(textStream(currentCartText(pageContext, language)), {
@@ -1863,9 +1876,24 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isOrderStatusIntent(latest) || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
+  if (isOrderStatusIntent(latest) || shouldSendOrderStatusSupport || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
     const draft = buildOrderStatusDraft(messages, language);
     if (draft.request) {
+      if (shouldSendOrderStatusSupport) {
+        await Promise.all([
+          sendOrderStatusEmail(draft.request),
+          logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
+        ]);
+        return new Response(
+          textStream(
+            language === "fr"
+              ? "D’accord. J’ai envoyé cette demande de statut au support afin qu’ils vérifient la commande et vous répondent par courriel."
+              : "Okay. I sent this order status request to support so they can check the order and email you back."
+          ),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+
       const orderStatus = await getOrderStatus({
         orderNumber: draft.request.orderNumber,
         email: draft.request.email,
@@ -1877,19 +1905,15 @@ async function handleAssistantPost(req: NextRequest) {
         });
       }
 
-      await Promise.all([
-        sendOrderStatusEmail(draft.request),
-        logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
-      ]);
       return new Response(
         textStream(
           language === "fr"
             ? orderStatus.verified
-              ? `J’ai trouvé votre commande ${draft.request.orderNumber}. Statut: ${friendlyOrderStatusText(orderStatus.status, language)}\n\nJe ne vois pas de numéro de suivi disponible pour le moment. J’ai envoyé une demande au support afin qu’ils vérifient la commande et vous répondent par courriel sous peu.`
-              : "Je n’ai pas pu confirmer le suivi automatiquement avec les renseignements fournis. J’ai envoyé votre demande au support afin qu’ils la vérifient et vous répondent par courriel sous peu."
+              ? `J’ai trouvé votre commande ${draft.request.orderNumber}. Statut: ${friendlyOrderStatusText(orderStatus.status, language)}\n\nJe ne vois pas de numéro de suivi disponible pour le moment. Voulez-vous que je demande au support de vérifier et de vous envoyer une mise à jour?`
+              : "Je n’ai pas pu confirmer le suivi automatiquement avec les renseignements fournis. Voulez-vous que j’envoie cette demande de statut au support?"
             : orderStatus.verified
-              ? `I found your order ${draft.request.orderNumber}. Status: ${friendlyOrderStatusText(orderStatus.status, language)}\n\nI do not see tracking available yet. I sent a request to support so they can check the order and email you shortly.`
-              : "I could not confirm the tracking automatically with the information provided. I sent your request to support so they can review it and email you shortly."
+              ? `I found your order ${draft.request.orderNumber}. Status: ${friendlyOrderStatusText(orderStatus.status, language)}\n\nI do not see tracking available yet. Want me to ask support for an update by email?`
+              : "I could not confirm the tracking automatically with the information provided. Want me to send this order status request to support?"
         ),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
