@@ -222,6 +222,50 @@ function includesAny(text: string, terms: string[]) {
   return terms.some((term) => text.includes(normalizeSearchText(term)));
 }
 
+const commonSearchTypoMap: Record<string, string> = {
+  lardel: "laerdal",
+  lardal: "laerdal",
+  laredal: "laerdal",
+  maks: "mask",
+  maske: "mask",
+  mak: "mask",
+  msak: "mask",
+  glas: "glass",
+  glvoe: "glove",
+  glvoes: "gloves",
+  gloev: "glove",
+  gloevs: "gloves",
+  nedle: "needle",
+  nedles: "needles",
+  neelde: "needle",
+  neeldes: "needles",
+  syring: "syringe",
+  siringe: "syringe",
+  sryinge: "syringe",
+  wheelchiar: "wheelchair",
+  wheelchar: "wheelchair",
+  whelechair: "wheelchair",
+  manikan: "manikin",
+  manikinne: "manikin",
+  mannekin: "manikin",
+  qcrp: "qcpr",
+  qcprr: "qcpr",
+  oximter: "oximeter",
+  oxymeter: "oximeter",
+  stethascope: "stethoscope",
+  stethescope: "stethoscope",
+  bandagee: "bandage",
+  bandaid: "bandage",
+};
+
+function normalizeCommonSearchTypos(value: string) {
+  return normalizeSearchText(value)
+    .split(/\s+/)
+    .map((token) => commonSearchTypoMap[token] || token)
+    .join(" ")
+    .trim();
+}
+
 function documentNameText(hit: SearchHit) {
   const doc = hit.document || {};
   return normalizeSearchText([doc.name, doc.parent_name].filter(Boolean).join(" "));
@@ -235,6 +279,7 @@ function documentCategoryText(hit: SearchHit) {
 
 function supplementalRecallQueries(originalQuery: string, translatedQuery: string, fallbackTerms: string[]) {
   const query = normalizeSearchText(`${originalQuery} ${translatedQuery} ${fallbackTerms.join(" ")}`);
+  const typoNormalizedQuery = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery} ${fallbackTerms.join(" ")}`);
   const recalls: string[] = [];
   const add = (...terms: string[]) => {
     for (const term of terms) {
@@ -242,6 +287,7 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
       if (clean && !recalls.includes(clean)) recalls.push(clean);
     }
   };
+  if (typoNormalizedQuery && typoNormalizedQuery !== query) add(typoNormalizedQuery);
 
   if (
     includesAny(query, [
@@ -270,6 +316,11 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
 
   if (
     includesAny(query, [
+      "laerdal qcpr",
+      "lardel qcpr",
+      "lardal qcpr",
+      "little junior qcpr",
+      "little anne qcpr",
       "cpr manikin",
       "cpr manikins",
       "cpr mannequin",
@@ -287,6 +338,13 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
     ])
   ) {
     add("cpr manikin", "cpr manikins", "prestan manikin", "adult cpr manikin", "training manikin");
+  }
+
+  if (
+    includesAny(query, ["laerdal", "lardel", "lardal", "qcpr", "little junior", "little anne"]) &&
+    !includesAny(query, ["part", "parts", "accessory", "accessories", "replacement"])
+  ) {
+    add("laerdal qcpr", "little junior qcpr", "little anne qcpr", "little family qcpr", "resusci junior qcpr");
   }
 
   return recalls.slice(0, 8);
@@ -384,11 +442,18 @@ function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translated
     "adult manikins",
     "prestan manikin",
     "prestan manikins",
+    "laerdal qcpr",
+    "lardel qcpr",
+    "lardal qcpr",
+    "little junior qcpr",
+    "little anne qcpr",
+    "little family qcpr",
     "mannequin rcr",
     "mannequins rcr",
     "manikin rcr",
     "manikins rcr",
   ]);
+  if (includesAny(query, ["part", "parts", "accessory", "accessories", "replacement"])) return hits;
   if (!isCprManikinQuery) return hits;
 
   const coreTerms = [
@@ -401,6 +466,10 @@ function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translated
     "infant cpr manikin",
     "child cpr manikin",
     "prestan professional",
+    "little junior qcpr",
+    "little anne qcpr",
+    "little family qcpr",
+    "resusci junior qcpr",
   ];
   const accessoryTerms = [
     "bag",
@@ -424,6 +493,30 @@ function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translated
     if (/\b(cpr training manikin|adult cpr training manikin|qcpr cpr training manikin|ultralite manikin)\b/.test(name)) value += 520;
     if (/\b(carry bag|replacement|piston|skin|face shield|lung bag|airway|adapter)\b/.test(name)) value -= 900;
     else if (includesAny(name, accessoryTerms)) value -= 180;
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+function rankCommonProductTypeHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  const productTypes = [
+    { terms: ["mask", "masks"], positive: ["mask", "masks"], negative: ["kit", "pouch"] },
+    { terms: ["glove", "gloves"], positive: ["glove", "gloves"], negative: ["kit", "pouch"] },
+    { terms: ["needle", "needles"], positive: ["needle", "needles"], negative: ["kit", "pouch"] },
+    { terms: ["wheelchair", "wheelchairs"], positive: ["wheelchair", "wheelchairs"], negative: ["accessory", "accessories", "anti tippers", "arm rails", "caster", "fork", "hand brake", "iv pole", "holder"] },
+  ];
+  const type = productTypes.find((item) => includesAny(query, item.terms));
+  if (!type || includesAny(query, ["part", "parts", "accessory", "accessories", "replacement", "holder", "mount"])) return hits;
+
+  const score = (hit: SearchHit) => {
+    const name = documentNameText(hit);
+    const categories = documentCategoryText(hit);
+    let value = 0;
+    if (includesAny(name, type.positive)) value += 300;
+    if (includesAny(categories, type.positive)) value += 120;
+    if (includesAny(name, type.negative)) value -= 280;
     return value;
   };
 
@@ -704,8 +797,11 @@ export async function searchProducts(input: ProductSearchInput) {
 
   const shouldPreferTranslatedQuery =
     (smartQuery.language === "fr" || input.language === "fr") && smartQuery.search_query && smartQuery.search_query !== rawQuery;
+  const typoNormalizedQuery = normalizeCommonSearchTypos([rawQuery, smartQuery.search_query].filter(Boolean).join(" "));
   const primaryQuery =
-    input.language === "fr" && smartQuery.expansions.length
+    typoNormalizedQuery && typoNormalizedQuery !== normalizeSearchText([rawQuery, smartQuery.search_query].filter(Boolean).join(" "))
+      ? typoNormalizedQuery
+      : input.language === "fr" && smartQuery.expansions.length
       ? smartQuery.expansions[0]
       : shouldPreferTranslatedQuery
         ? smartQuery.search_query
@@ -731,6 +827,7 @@ export async function searchProducts(input: ProductSearchInput) {
   );
   mergedHits = rankMedicalBagHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankCprManikinHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankCommonProductTypeHits(mergedHits, rawQuery, smartQuery.search_query);
 
   let products = await withBackorderAvailability(mergedHits.map(mapProduct));
 
@@ -742,7 +839,7 @@ export async function searchProducts(input: ProductSearchInput) {
         rawQuery,
         smartQuery.search_query
       );
-      products = await withBackorderAvailability(rankedHits.map(mapProduct));
+      products = await withBackorderAvailability(rankCommonProductTypeHits(rankedHits, rawQuery, smartQuery.search_query).map(mapProduct));
     } catch (error) {
       console.error("[EMRN Pulse] raw Typesense fallback search failed", error);
     }

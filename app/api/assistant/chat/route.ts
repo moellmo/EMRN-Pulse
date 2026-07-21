@@ -379,6 +379,42 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   return `${intro}\n\n${lines.map((line) => `- ${line}`).join("\n")}\n\n[View product](${product.url})${addPrompt}`;
 }
 
+function isPartsOrAccessoryQuestion(text: string) {
+  return /\b(part|parts|replacement|replacements|accessory|accessories|go with|goes with|compatible with|fit|fits)\b/i.test(text);
+}
+
+function productFamilyForPartsSearch(product: CatalogProduct) {
+  return (product.parentName || product.name)
+    .replace(/\b(?:4[-\s]?pack|single|dark skin|light skin)\b/gi, " ")
+    .replace(/\s+-\s+.*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function relatedPartQueries(product: CatalogProduct) {
+  const family = productFamilyForPartsSearch(product);
+  const normalized = `${product.name} ${product.parentName}`.toLowerCase();
+  if (normalized.includes("little junior") || normalized.includes("little jr")) {
+    return ["little junior parts", "little jr qcpr accessories", "little junior qcpr replacement"];
+  }
+  if (normalized.includes("little anne")) {
+    return ["little anne parts", "little anne qcpr accessories", "little anne qcpr replacement"];
+  }
+  return [`${family} parts`, `${family} accessories`, `${family} replacement`];
+}
+
+function isRelatedPartForProduct(part: CatalogProduct, baseProduct: CatalogProduct) {
+  const base = `${baseProduct.name} ${baseProduct.parentName}`.toLowerCase();
+  const partText = `${part.name} ${part.parentName} ${part.sku}`.toLowerCase();
+  if (base.includes("little junior") || base.includes("little jr")) {
+    return /\b(little\s+jr|little\s+junior|lb\s+qcpr)\b/i.test(partText);
+  }
+  if (base.includes("little anne")) {
+    return /\b(little\s+anne)\b/i.test(partText);
+  }
+  return true;
+}
+
 function siteSearchUrl(query: string) {
   const url = new URL("/search.php", process.env.EMRN_STORE_URL || "https://emrn.ca");
   url.searchParams.set("search_query", query);
@@ -947,6 +983,35 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isProductDetailIntent(latest)) {
+    if (isPartsOrAccessoryQuestion(latest) && products.length) {
+      const [selectedProduct] = selectProductsForCart(latest, products);
+      const baseProduct = selectedProduct || products[0];
+      const partsQueries = relatedPartQueries(baseProduct);
+      const partsResults = await Promise.all(partsQueries.map((query) => searchProducts({ query, language, limit: 8 })));
+      const seenPartSkus = new Set<string>();
+      const relatedParts = partsResults
+        .flatMap((result) => result.products)
+        .filter((product) => product.sku !== baseProduct.sku)
+        .filter((product) => isRelatedPartForProduct(product, baseProduct))
+        .filter((product) => {
+          const key = product.sku || `${product.productId}:${product.variantId}`;
+          if (seenPartSkus.has(key)) return false;
+          seenPartSkus.add(key);
+          return true;
+        });
+      if (relatedParts.length) {
+        const intro = language === "fr"
+          ? `Voici les pièces/accessoires EMRN que j’ai trouvés pour **${baseProduct.name}** (SKU: ${baseProduct.sku}):`
+          : `Here are EMRN parts/accessories I found for **${baseProduct.name}** (SKU: ${baseProduct.sku}):`;
+        return new Response(textStream(`${intro}\n\n${productResultsText(relatedParts.slice(0, 6), language, partsQueries[0]).replace(/^Here are the products I found for .+?:\n\n/i, "").replace(/\n\nIf you tell me[\s\S]*$/i, "")}`), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
+
     if (products.length === 1) {
       const catalogAnswer = productDetailFromCatalog(products[0], latest, language);
       if (catalogAnswer) {
