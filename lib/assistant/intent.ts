@@ -121,7 +121,7 @@ export function extractSkuCandidates(text: string) {
     candidates.push(value);
   }
 
-  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase()).filter((sku) => {
+  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase().replace(/^(?:THIS|ITEM|PRODUCT|PRODUIT)(?=\d)/i, "")).filter((sku) => {
     if (/^\d{1,3}G$/i.test(sku)) return false;
     if (/^OF\d{1,5}$/i.test(sku)) return false;
     if (/^X\d{1,5}$/i.test(sku)) return false;

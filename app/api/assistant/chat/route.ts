@@ -82,7 +82,12 @@ function orderTrackingText(
 
 function checkoutSkusFromConversation(messages: AssistantMessage[]) {
   const skus = new Map<string, number>();
-  const text = messages.map((message) => message.content).join("\n");
+  const cartResetIndex = messages.findLastIndex(
+    (message) =>
+      message.role === "assistant" &&
+      /\b(cart is now empty|cleared the cart|panier est maintenant vide|vidé le panier|vide le panier)\b/i.test(message.content)
+  );
+  const text = messages.slice(cartResetIndex + 1).map((message) => message.content).join("\n");
   for (const match of text.matchAll(/[?&]products=([^&\s]+)/g)) {
     const value = decodeURIComponent(match[1] || "");
     for (const item of value.split(",")) {
