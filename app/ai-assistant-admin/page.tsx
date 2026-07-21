@@ -61,46 +61,50 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
           <div className="mt-8 rounded-md border border-red-200 bg-white p-5 text-red-700">
             Admin data is unavailable. Set EMRN_ASSISTANT_ADMIN_TOKEN for production access.
           </div>
-        ) : data.metrics.totalEvents === 0 ? (
-          <div className="mt-8 rounded-md border border-amber-200 bg-white p-5 text-amber-800">
-            No local admin logs are available here yet. Vercel does not keep durable local log files, so production
-            history should be mirrored through the Google Sheets webhook. Set <code>EMRN_GOOGLE_SHEETS_WEBHOOK_URL</code> and
-            <code className="ml-1">EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET</code>, redeploy, then send a few Pulse test messages.
-            This page will show local runtime logs when available and Google Sheets production logs when the Apps Script
-            supports <code className="mx-1">GET?action=read</code>.
-            {data.metrics.sheetsConfigured && !data.metrics.sheetsReadError ? (
-              <span className="mt-2 block">Sheets read-back is configured, but it returned 0 rows. Confirm the Apps Script is deployed and the sheets have rows below the header.</span>
-            ) : null}
-          </div>
         ) : (
           <>
             <SkuConfigAdmin token={adminToken} prefixes={skuConfig.prefixes} suffixes={skuConfig.suffixes} />
-            <section className="mt-8 grid gap-4 md:grid-cols-4">
-              {Object.entries(data.metrics)
-                .filter(([, value]) => typeof value === "number")
-                .map(([key, value]) => (
-                  <div key={key} className="rounded-md border border-slate-200 bg-white p-4">
-                    <div className="text-sm text-slate-500">{key}</div>
-                    <div className="mt-2 text-2xl font-bold">{String(value)}</div>
-                  </div>
-                ))}
-            </section>
+            {data.metrics.totalEvents === 0 ? (
+              <div className="mt-8 rounded-md border border-amber-200 bg-white p-5 text-amber-800">
+                No local admin logs are available here yet. Vercel does not keep durable local log files, so production
+                history should be mirrored through the Google Sheets webhook. Set <code>EMRN_GOOGLE_SHEETS_WEBHOOK_URL</code> and
+                <code className="ml-1">EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET</code>, redeploy, then send a few Pulse test messages.
+                This page will show local runtime logs when available and Google Sheets production logs when the Apps Script
+                supports <code className="mx-1">GET?action=read</code>.
+                {data.metrics.sheetsConfigured && !data.metrics.sheetsReadError ? (
+                  <span className="mt-2 block">Sheets read-back is configured, but it returned 0 rows. Confirm the Apps Script is deployed and the sheets have rows below the header.</span>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <section className="mt-8 grid gap-4 md:grid-cols-4">
+                  {Object.entries(data.metrics)
+                    .filter(([, value]) => typeof value === "number")
+                    .map(([key, value]) => (
+                      <div key={key} className="rounded-md border border-slate-200 bg-white p-4">
+                        <div className="text-sm text-slate-500">{key}</div>
+                        <div className="mt-2 text-2xl font-bold">{String(value)}</div>
+                      </div>
+                    ))}
+                </section>
 
-            <section className="mt-8 grid gap-6 lg:grid-cols-2">
-              <MetricPanel
-                title="Search Failures"
-                rows={data.metrics.searchFailures || []}
-              />
-              <MetricPanel
-                title="Support Categories"
-                rows={data.metrics.supportCategories || []}
-              />
-              <Panel title="Recent Failed Searches" rows={data.failedSearches || []} />
-              <Panel title="Quote Lookups" rows={data.quoteLookups || []} />
-              <Panel title="Quote Requests" rows={data.quotes} />
-              <Panel title="Support Handoffs" rows={data.support} />
-              <Panel title="AI Usage" rows={data.aiUsage} />
-            </section>
+                <section className="mt-8 grid gap-6 lg:grid-cols-2">
+                  <MetricPanel
+                    title="Search Failures"
+                    rows={data.metrics.searchFailures || []}
+                  />
+                  <MetricPanel
+                    title="Support Categories"
+                    rows={data.metrics.supportCategories || []}
+                  />
+                  <Panel title="Recent Failed Searches" rows={data.failedSearches || []} />
+                  <Panel title="Quote Lookups" rows={data.quoteLookups || []} />
+                  <Panel title="Quote Requests" rows={data.quotes} />
+                  <Panel title="Support Handoffs" rows={data.support} />
+                  <Panel title="AI Usage" rows={data.aiUsage} />
+                </section>
+              </>
+            )}
           </>
         )}
       </div>
