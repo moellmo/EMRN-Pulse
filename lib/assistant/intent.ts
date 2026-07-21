@@ -88,7 +88,7 @@ export function isProductSearchIntent(text: string) {
     return false;
   }
 
-  return /\b(do you have|do have|do u have|do you carry|carry|find|search|show me|looking for|look for|i need|we need|i want|we want|need|want|je cherche|cherche|avez-vous|avez vous|as-tu|as tu)\b/i.test(text);
+  return /\b(do you have|do have|do u have|so you have|you have|do you carry|carry|find|search|show me|looking for|look for|i need|we need|i want|we want|need|want|je cherche|cherche|avez-vous|avez vous|as-tu|as tu)\b/i.test(text);
 }
 
 export function isQuickActionPrompt(text: string) {
