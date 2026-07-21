@@ -370,7 +370,8 @@ export async function GET(req: Request) {
   window.addEventListener("message", function (event) {
     if (event.origin !== origin) return;
     if (!event.data || event.data.type !== "emrn-pulse:resize") return;
-    applySize(Boolean(event.data.open), Boolean(event.data.nudge));
+    desiredOpen = Boolean(event.data.open);
+    applySize(desiredOpen, Boolean(event.data.nudge));
   });
 
   window.addEventListener("message", function (event) {
