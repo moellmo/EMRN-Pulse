@@ -48,6 +48,9 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
         {data ? (
           <p className="mt-2 text-sm text-slate-500">
             Data source: <span className="font-semibold">{String(data.metrics.dataSource || "local").replace(/_/g, " ")}</span>
+            <span className="ml-2">
+              Sheets: {data.metrics.sheetsConfigured ? `configured, ${data.metrics.sheetsRows || 0} rows read` : "not configured"}
+            </span>
             {data.metrics.sheetsReadError ? (
               <span className="ml-2 text-amber-700">Sheets read-back: {data.metrics.sheetsReadError}</span>
             ) : null}
@@ -65,6 +68,9 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
             <code className="ml-1">EMRN_GOOGLE_SHEETS_WEBHOOK_SECRET</code>, redeploy, then send a few Pulse test messages.
             This page will show local runtime logs when available and Google Sheets production logs when the Apps Script
             supports <code className="mx-1">GET?action=read</code>.
+            {data.metrics.sheetsConfigured && !data.metrics.sheetsReadError ? (
+              <span className="mt-2 block">Sheets read-back is configured, but it returned 0 rows. Confirm the Apps Script is deployed and the sheets have rows below the header.</span>
+            ) : null}
           </div>
         ) : (
           <>

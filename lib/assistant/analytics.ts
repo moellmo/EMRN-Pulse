@@ -128,17 +128,36 @@ async function readGoogleSheetsAdminRows(): Promise<Omit<SheetsAdminData, "sourc
         : undefined,
       cache: "no-store",
     });
+    const responseText = await response.text().catch(() => "");
     if (!response.ok) {
       return {
         analytics: [],
         quotes: [],
         support: [],
         aiUsage: [],
-        readError: `Google Sheets read failed: ${response.status} ${(await response.text()).slice(0, 300)}`,
+        readError: `Google Sheets read failed: ${response.status} ${responseText.slice(0, 300)}`,
       };
     }
 
-    const payload = await response.json().catch(() => null);
+    const payload = safeJsonParse(responseText);
+    if (!payload) {
+      return {
+        analytics: [],
+        quotes: [],
+        support: [],
+        aiUsage: [],
+        readError: `Google Sheets read returned invalid JSON. Check that doGet is top-level and redeployed. Response: ${responseText.slice(0, 300)}`,
+      };
+    }
+    if (typeof payload === "object" && payload && "ok" in payload && (payload as { ok?: unknown }).ok === false) {
+      return {
+        analytics: [],
+        quotes: [],
+        support: [],
+        aiUsage: [],
+        readError: `Google Sheets read returned error: ${String((payload as { error?: unknown }).error || "unknown")}`,
+      };
+    }
     return normalizeSheetsAdminPayload(payload);
   } catch (error) {
     return {
@@ -148,6 +167,14 @@ async function readGoogleSheetsAdminRows(): Promise<Omit<SheetsAdminData, "sourc
       aiUsage: [],
       readError: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+function safeJsonParse(value: string) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
   }
 }
 
@@ -318,6 +345,8 @@ export async function readAssistantAdminData() {
         completedConversations.map((event) => ("messageCount" in event ? event.messageCount || 0 : 0))
       ),
       dataSource: source,
+      sheetsConfigured: Boolean(sheets),
+      sheetsRows: (sheets?.analytics.length || 0) + (sheets?.quotes.length || 0) + (sheets?.support.length || 0) + (sheets?.aiUsage.length || 0),
       sheetsReadError: sheets?.readError || "",
     },
     failedSearches: failedSearches.slice(-100).reverse(),
