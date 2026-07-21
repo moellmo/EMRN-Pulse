@@ -430,8 +430,8 @@ function friendlyOrderStatusText(status: string | undefined, language: "en" | "f
   const normalized = raw.toLowerCase();
   const en: Record<string, string> = {
     "awaiting payment": "Awaiting payment — payment has not been completed or confirmed yet.",
-    "awaiting fulfillment": "Received and being processed — the order may be under review, picking, packing, or supplier processing.",
-    "awaiting shipment": "Being prepared for shipment — it may be in warehouse processing, waiting on supplier processing, waiting on stock availability, or awaiting carrier pickup.",
+    "awaiting fulfillment": "Received and being processed — the order may be under review, picking, packing, stock allocation, or other order processing.",
+    "awaiting shipment": "Being prepared for shipment — it may be in warehouse processing, waiting on stock availability or stock allocation, or awaiting carrier pickup.",
     "partially shipped": "Partially shipped — some items shipped separately while other items are still pending.",
     shipped: "Shipped — tracking should be available when the carrier has provided it.",
     completed: "Completed — the order has been processed.",
@@ -440,8 +440,8 @@ function friendlyOrderStatusText(status: string | undefined, language: "en" | "f
   };
   const fr: Record<string, string> = {
     "awaiting payment": "En attente de paiement — le paiement n’est pas encore complété ou confirmé.",
-    "awaiting fulfillment": "Reçue et en traitement — la commande peut être en révision, préparation, emballage ou traitement fournisseur.",
-    "awaiting shipment": "En préparation d’expédition — elle peut être en traitement entrepôt, en attente de traitement fournisseur, en attente de disponibilité du stock ou en attente de ramassage transporteur.",
+    "awaiting fulfillment": "Reçue et en traitement — la commande peut être en révision, préparation, emballage, allocation de stock ou autre traitement de commande.",
+    "awaiting shipment": "En préparation d’expédition — elle peut être en traitement entrepôt, en attente de disponibilité ou allocation de stock, ou en attente de ramassage transporteur.",
     "partially shipped": "Partiellement expédiée — certains articles ont été expédiés séparément et d’autres sont encore en attente.",
     shipped: "Expédiée — le suivi devrait être disponible lorsque le transporteur l’a fourni.",
     completed: "Complétée — la commande a été traitée.",
@@ -1503,15 +1503,15 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 
   if (/\b(order statuses|order status mean|status mean|awaiting payment|awaiting fulfillment|awaiting shipment|partially shipped|completed)\b/i.test(text)) {
     return answer(
-      `Order statuses show where the order is in the process. Awaiting Payment means payment is not complete or confirmed. Awaiting Fulfillment means the order is being reviewed, picked, packed, or prepared. Awaiting Shipment means it is being prepared for shipment or carrier/supplier processing. Partially Shipped means some items shipped separately. Shipped means tracking should be available by email or in your account. Completed means the order has been processed. More details: ${helpLink}`,
-      `Les statuts indiquent où se trouve la commande. Awaiting Payment veut dire que le paiement n’est pas confirmé. Awaiting Fulfillment veut dire que la commande est en révision ou préparation. Awaiting Shipment veut dire qu’elle est en préparation d’expédition, chez le fournisseur ou en attente de ramassage transporteur. Partially Shipped veut dire qu’une partie a été expédiée séparément. Shipped veut dire que le suivi devrait être disponible par courriel ou dans le compte. Completed veut dire que la commande est traitée. Détails: ${helpLink}`
+      `Order statuses show where the order is in the process. Awaiting Payment means payment is not complete or confirmed. Awaiting Fulfillment means the order is being reviewed, picked, packed, allocated, or prepared. Awaiting Shipment means it is being prepared for shipment and may be waiting on stock availability, warehouse processing, or carrier pickup. Partially Shipped means some items shipped separately. Shipped means tracking should be available by email or in your account. Completed means the order has been processed. More details: ${helpLink}`,
+      `Les statuts indiquent où se trouve la commande. Awaiting Payment veut dire que le paiement n’est pas confirmé. Awaiting Fulfillment veut dire que la commande est en révision, préparation, emballage ou allocation de stock. Awaiting Shipment veut dire qu’elle est en préparation d’expédition et peut attendre la disponibilité du stock, le traitement entrepôt ou le ramassage transporteur. Partially Shipped veut dire qu’une partie a été expédiée séparément. Shipped veut dire que le suivi devrait être disponible par courriel ou dans le compte. Completed veut dire que la commande est traitée. Détails: ${helpLink}`
     );
   }
 
   if (/\b(awaiting shipment|waiting shipment|stuck|too long|longer than expected)\b/i.test(text)) {
     return answer(
-      `“Awaiting Shipment” means the order is in the shipping process but has not yet been marked shipped with tracking. It can be waiting for warehouse processing, supplier shipment, carrier pickup, or stock. If it has been longer than expected, contact EMRN with your order number and the team can check the latest update: ${contactLink}`,
-      `« Awaiting Shipment » veut dire que la commande est en processus d’expédition, mais qu’elle n’a pas encore été marquée expédiée avec suivi. Elle peut attendre le traitement entrepôt, le fournisseur, le transporteur ou le stock. Si le délai semble trop long, contactez EMRN avec votre numéro de commande: ${contactLink}`
+      `“Awaiting Shipment” means the order is in the shipping process but has not yet been marked shipped with tracking. It can be waiting on stock availability, warehouse processing, or carrier pickup. If it has been longer than expected, contact EMRN with your order number and the team can check the latest update: ${contactLink}`,
+      `« Awaiting Shipment » veut dire que la commande est en processus d’expédition, mais qu’elle n’a pas encore été marquée expédiée avec suivi. Elle peut attendre la disponibilité du stock, le traitement entrepôt ou le ramassage transporteur. Si le délai semble trop long, contactez EMRN avec votre numéro de commande: ${contactLink}`
     );
   }
 
@@ -1538,8 +1538,8 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 
   if (/\b(stock|availability|available to order|in stock|confirm stock|not currently in stock|backorder|lead time)\b/i.test(text)) {
     return answer(
-      `Availability appears on product pages near the options and cart area. “Available to order” means the item can be purchased, but may not be in the local warehouse for immediate shipment and may need supplier processing. For time-sensitive quantities, contact EMRN with the product name, SKU, and quantity before ordering: ${contactLink}`,
-      `La disponibilité apparaît sur les pages produit près des options et du panier. « Available to order » veut dire que l’article peut être commandé, mais qu’il n’est pas forcément en stock local pour expédition immédiate et peut nécessiter un traitement fournisseur. Pour une commande urgente ou une quantité précise, contactez EMRN avec le nom, SKU et quantité: ${contactLink}`
+      `Availability appears on product pages near the options and cart area. “Available to order” means the item can be purchased, but may not be in the local warehouse for immediate shipment and may need extra stock or order processing time. For time-sensitive quantities, contact EMRN with the product name, SKU, and quantity before ordering: ${contactLink}`,
+      `La disponibilité apparaît sur les pages produit près des options et du panier. « Available to order » veut dire que l’article peut être commandé, mais qu’il n’est pas forcément en stock local pour expédition immédiate et peut nécessiter un délai supplémentaire de stock ou de traitement. Pour une commande urgente ou une quantité précise, contactez EMRN avec le nom, SKU et quantité: ${contactLink}`
     );
   }
 
