@@ -30,27 +30,6 @@ export async function GET(req: Request) {
   iframe.setAttribute("frameborder", "0");
   iframe.allow = "clipboard-write";
 
-  var launcherProxy = document.createElement("div");
-  launcherProxy.setAttribute("role", "button");
-  launcherProxy.setAttribute("tabindex", "0");
-  launcherProxy.setAttribute("aria-label", "Open EMRN Pulse");
-  launcherProxy.style.position = "fixed";
-  launcherProxy.style.right = "0";
-  launcherProxy.style.bottom = "0";
-  launcherProxy.style.width = "120px";
-  launcherProxy.style.height = "120px";
-  launcherProxy.style.border = "0";
-  launcherProxy.style.padding = "0";
-  launcherProxy.style.margin = "0";
-  launcherProxy.style.background = "transparent";
-  launcherProxy.style.boxShadow = "none";
-  launcherProxy.style.outline = "0";
-  launcherProxy.style.appearance = "none";
-  launcherProxy.style.webkitAppearance = "none";
-  launcherProxy.style.cursor = "pointer";
-  launcherProxy.style.zIndex = "2147483001";
-  launcherProxy.style.colorScheme = "normal";
-
   function text(selector) {
     var node = document.querySelector(selector);
     return node && node.textContent ? node.textContent.trim() : "";
@@ -127,10 +106,12 @@ export async function GET(req: Request) {
     return normalizeCartSnapshot(cart);
   }
 
-  async function sendPageContext() {
+  async function sendPageContext(includeCart) {
     if (!iframe.contentWindow) return;
     var context = collectPageContext();
-    context.currentCart = await collectCurrentCartSnapshot();
+    if (includeCart) {
+      context.currentCart = await collectCurrentCartSnapshot();
+    }
     iframe.contentWindow.postMessage(
       { type: "emrn-pulse:page-context", pageContext: context },
       origin
@@ -138,13 +119,15 @@ export async function GET(req: Request) {
   }
 
   var lastContextKey = "";
-  async function sendPageContextIfChanged() {
+  async function sendPageContextIfChanged(includeCart) {
     var context = collectPageContext();
     var key = [context.url, context.title, context.sku, context.productId, context.variantId].join("|");
     if (key === lastContextKey) return;
     lastContextKey = key;
     if (!iframe.contentWindow) return;
-    context.currentCart = await collectCurrentCartSnapshot();
+    if (includeCart) {
+      context.currentCart = await collectCurrentCartSnapshot();
+    }
     iframe.contentWindow.postMessage(
       { type: "emrn-pulse:page-context", pageContext: context },
       origin
@@ -298,9 +281,6 @@ export async function GET(req: Request) {
     iframe.style.height = open ? "780px" : nudge ? "150px" : "120px";
     iframe.style.maxWidth = "100vw";
     iframe.style.maxHeight = "100dvh";
-    launcherProxy.style.display = open ? "none" : "block";
-    launcherProxy.style.width = nudge ? "350px" : "120px";
-    launcherProxy.style.height = nudge ? "150px" : "120px";
   }
 
   function postToPulse(message) {
@@ -312,6 +292,7 @@ export async function GET(req: Request) {
     desiredOpen = true;
     postToPulse({ type: "emrn-pulse:open" });
     applySize(true, false);
+    sendPageContext(true);
   }
 
   function openWithSearchHelp(query) {
@@ -328,6 +309,7 @@ export async function GET(req: Request) {
     };
     postToPulse(pendingSearchHelp);
     applySize(true, false);
+    sendPageContext(true);
   }
 
   function closePulse() {
@@ -340,7 +322,9 @@ export async function GET(req: Request) {
     open: openPulse,
     openWithSearchHelp: openWithSearchHelp,
     close: closePulse,
-    sendPageContext: sendPageContext
+    sendPageContext: function () {
+      sendPageContext(true);
+    }
   });
 
   window.addEventListener("emrn-pulse:open", openPulse);
@@ -348,13 +332,6 @@ export async function GET(req: Request) {
     openWithSearchHelp(event && event.detail ? event.detail.query : "");
   });
   window.addEventListener("emrn-pulse:close", closePulse);
-  launcherProxy.addEventListener("click", openPulse);
-  launcherProxy.addEventListener("keydown", function (event) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      openPulse();
-    }
-  });
 
   window.addEventListener("message", function (event) {
     if (event.origin !== origin) return;
@@ -397,7 +374,7 @@ export async function GET(req: Request) {
   window.addEventListener("message", function (event) {
     if (event.origin !== origin) return;
     if (!event.data || event.data.type !== "emrn-pulse:request-page-context") return;
-    sendPageContext();
+    sendPageContext(desiredOpen);
   });
 
   window.addEventListener("message", function (event) {
@@ -421,7 +398,7 @@ export async function GET(req: Request) {
   });
 
   iframe.addEventListener("load", function () {
-    sendPageContext();
+    sendPageContext(false);
     if (pendingSearchHelp) {
       window.setTimeout(function () {
         postToPulse(pendingSearchHelp);
@@ -431,21 +408,25 @@ export async function GET(req: Request) {
     }
   });
   window.addEventListener("popstate", function () {
-    window.setTimeout(sendPageContextIfChanged, 250);
+    window.setTimeout(function () {
+      sendPageContextIfChanged(desiredOpen);
+    }, 250);
   });
   document.addEventListener("click", function () {
-    window.setTimeout(sendPageContextIfChanged, 450);
+    window.setTimeout(function () {
+      sendPageContextIfChanged(desiredOpen);
+    }, 450);
   });
-  window.setInterval(sendPageContextIfChanged, 1500);
+  window.setInterval(function () {
+    sendPageContextIfChanged(desiredOpen);
+  }, 4000);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       document.body.appendChild(iframe);
-      document.body.appendChild(launcherProxy);
     });
   } else {
     document.body.appendChild(iframe);
-    document.body.appendChild(launcherProxy);
   }
 })();
 `;
