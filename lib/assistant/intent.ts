@@ -48,7 +48,10 @@ export function isCartIntent(text: string) {
   return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s*(?:'|’)?(?:ll|d)?\s*(?:take|get|buy|order|purchase|want|need)\s+(?:it|this|that|them|these|those|one|ones?)\b/i.test(text) ||
+    /\b(?:make|set|change)\s+(?:it|this|that|them|these|those|the\s+first|first|the\s+second|second|the\s+third|third|the\s+item|the\s+product)\s+(?:to\s+)?\d{1,5}\s*(?:boxes?|packs?|cases?)?\b/i.test(text) ||
+    /\b(?:make|set|change)\s+.{2,60}?\s+(?:to\s+)?\d{1,5}\s*(?:boxes?|packs?|cases?)\b/i.test(text) ||
     /\b\d{1,5}\s+(?:of\s+)?(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|item|product))?\b/i.test(text) ||
+    /\b\d{1,5}\s+(?:du|de\s+la|de\s+l['’]?|de|des)\s+(?:premier|premiere|première|deuxieme|deuxième|troisieme|troisième|quatrieme|quatrième|cinquieme|cinquième|dernier|derniere|dernière)\b/i.test(text) ||
     /\b(?:i|we)\s+(?:want|need|will take|would like|get|take)\s+\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\b/i.test(text) ||
     /^\s*\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\s*$/i.test(text) ||
     /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text);
@@ -119,6 +122,7 @@ export function extractSkuCandidates(text: string) {
     if (/^\d{1,3}G$/i.test(sku)) return false;
     if (/^OF\d{1,5}$/i.test(sku)) return false;
     if (/^X\d{1,5}$/i.test(sku)) return false;
+    if (!/\d/.test(sku)) return false;
     if (/^\d{1,3}(?:ML|MM|CM|IN)?$/i.test(sku)) return false;
     return true;
   })));
@@ -304,7 +308,7 @@ function ordinalQuantityForText(text: string, index: number) {
   ][index];
   if (!terms) return 0;
   const termPattern = terms.map(escapeRegExp).join("|");
-  const before = new RegExp(`\\b(\\d{1,5})\\s+(?:of\\s+)?(?:the\\s+)?(?:${termPattern})(?:\\s+(?:one|item|product))?\\b`, "i");
+  const before = new RegExp(`\\b(\\d{1,5})\\s+(?:(?:of|du|de\\s+la|de\\s+l['’]?|de|des)\\s+)?(?:the\\s+)?(?:${termPattern})(?:\\s+(?:one|item|product))?\\b`, "i");
   const after = new RegExp(`\\b(?:${termPattern})(?:\\s+(?:one|item|product))?\\b[^\\d]{0,24}\\b(?:qty|quantity|x)?\\s*(\\d{1,5})\\b`, "i");
   return Number(text.match(before)?.[1] || text.match(after)?.[1] || 0);
 }

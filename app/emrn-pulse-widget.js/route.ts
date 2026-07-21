@@ -118,15 +118,20 @@ export async function GET(req: Request) {
   }
 
   async function getStorefrontCartId() {
+    var cart = await getStorefrontCart();
+    return cart && cart.id ? cart.id : "";
+  }
+
+  async function getStorefrontCart() {
     try {
       var payload = await storefrontJson("/api/storefront/carts");
       var carts = payload && payload.data ? payload.data : payload;
-      if (Array.isArray(carts) && carts[0] && carts[0].id) return carts[0].id;
-      if (carts && carts.id) return carts.id;
+      if (Array.isArray(carts) && carts[0] && carts[0].id) return carts[0];
+      if (carts && carts.id) return carts;
     } catch (error) {
-      return "";
+      return null;
     }
-    return "";
+    return null;
   }
 
   function cartPayload(items) {
@@ -158,6 +163,82 @@ export async function GET(req: Request) {
       method: "POST",
       body: JSON.stringify(payload)
     });
+  }
+
+  function allPhysicalCartItems(cart) {
+    var lineItems = cart && (cart.lineItems || cart.line_items) ? (cart.lineItems || cart.line_items) : {};
+    return lineItems.physicalItems || lineItems.physical_items || cart.physicalItems || cart.physical_items || [];
+  }
+
+  function cartLineItemId(item) {
+    return item && (item.id || item.entityId || item.lineItemId || item.itemId || item.line_item_id);
+  }
+
+  function normalizeSku(value) {
+    return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
+  }
+
+  function matchesCartActionItem(item, action) {
+    var productId = Number(item.productId || item.product_id || item.productEntityId || item.entityId);
+    var variantId = Number(item.variantId || item.variant_id || item.variantEntityId || 0);
+    var sku = normalizeSku(item.sku || item.variantSku || item.productSku);
+    var actionSku = normalizeSku(action.sku);
+    var actionVariantId = Number(action.variantId || 0);
+    if (actionSku || actionVariantId) {
+      if (actionSku && sku && sku === actionSku) return true;
+      return Boolean(actionVariantId && variantId && variantId === actionVariantId);
+    }
+    return Number(action.productId || 0) && productId && productId === Number(action.productId);
+  }
+
+  async function deleteStorefrontCartItem(cartId, item) {
+    var itemId = cartLineItemId(item);
+    if (!itemId) throw new Error("Could not identify cart line item");
+    return storefrontJson("/api/storefront/carts/" + encodeURIComponent(cartId) + "/items/" + encodeURIComponent(itemId), {
+      method: "DELETE"
+    });
+  }
+
+  async function updateStorefrontCartItem(cartId, item, quantity) {
+    var itemId = cartLineItemId(item);
+    if (!itemId) throw new Error("Could not identify cart line item");
+    var productId = Number(item.productId || item.product_id || item.productEntityId);
+    var variantId = Number(item.variantId || item.variant_id || item.variantEntityId || 0);
+    var lineItem = {
+      productId: productId,
+      quantity: Number(quantity || 1)
+    };
+    if (variantId) lineItem.variantId = variantId;
+    return storefrontJson("/api/storefront/carts/" + encodeURIComponent(cartId) + "/items/" + encodeURIComponent(itemId), {
+      method: "PUT",
+      body: JSON.stringify({ lineItem: lineItem })
+    });
+  }
+
+  async function applyStorefrontCartAction(action) {
+    var cart = await getStorefrontCart();
+    if (!cart || !cart.id) throw new Error("No active cart found");
+    var items = allPhysicalCartItems(cart);
+
+    if (action.action === "clear") {
+      for (var i = 0; i < items.length; i += 1) {
+        await deleteStorefrontCartItem(cart.id, items[i]);
+      }
+      return { ok: true };
+    }
+
+    var matched = null;
+    for (var j = 0; j < items.length; j += 1) {
+      if (matchesCartActionItem(items[j], action)) {
+        matched = items[j];
+        break;
+      }
+    }
+    if (!matched) throw new Error("Could not find that item in the cart");
+
+    if (action.action === "remove") return deleteStorefrontCartItem(cart.id, matched);
+    if (action.action === "set_quantity") return updateStorefrontCartItem(cart.id, matched, action.quantity);
+    throw new Error("Unknown cart action");
   }
 
   function applySize(open, nudge) {
@@ -217,6 +298,26 @@ export async function GET(req: Request) {
     if (event.origin !== origin) return;
     if (!event.data || event.data.type !== "emrn-pulse:resize") return;
     applySize(Boolean(event.data.open), Boolean(event.data.nudge));
+  });
+
+  window.addEventListener("message", function (event) {
+    if (event.origin !== origin) return;
+    if (!event.data || event.data.type !== "emrn-pulse:cart-action") return;
+    applyStorefrontCartAction(event.data.action || {})
+      .then(function () {
+        if (iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: "emrn-pulse:cart-action-result", ok: true }, origin);
+        }
+      })
+      .catch(function (error) {
+        if (iframe.contentWindow) {
+          iframe.contentWindow.postMessage({
+            type: "emrn-pulse:cart-action-result",
+            ok: false,
+            message: error && error.message ? error.message : "Could not update cart"
+          }, origin);
+        }
+      });
   });
 
   window.addEventListener("message", function (event) {

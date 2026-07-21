@@ -149,10 +149,12 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   }, [currentLanguage, messages, sessionId]);
 
   useEffect(() => {
-    if (mode === "floating" && isOpen) {
+    if (mode !== "floating" || !isOpen || typeof window === "undefined") return;
+    const timer = window.setTimeout(() => {
       setShowNudge(false);
-      window.setTimeout(() => textareaRef.current?.focus(), 80);
-    }
+      textareaRef.current?.focus();
+    }, 80);
+    return () => window.clearTimeout(timer);
   }, [isOpen, mode]);
 
   useEffect(() => {
@@ -290,6 +292,14 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
           window.parent?.postMessage({ type: "emrn-pulse:add-to-cart", items: cartPayload.items }, "*");
         }
       }
+      const cartAction = extractCartActionToken(answer);
+      if (cartAction && mode === "floating" && typeof window !== "undefined") {
+        const tokenKey = JSON.stringify(cartAction);
+        if (!postedCartTokensRef.current.has(tokenKey)) {
+          postedCartTokensRef.current.add(tokenKey);
+          window.parent?.postMessage({ type: "emrn-pulse:cart-action", action: cartAction }, "*");
+        }
+      }
     } catch {
       setHasError(true);
       setMessages([
@@ -308,8 +318,13 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   useEffect(() => {
     if (!pendingExternalPrompt || busy) return;
     const prompt = pendingExternalPrompt;
-    setPendingExternalPrompt("");
-    void sendMessage(prompt, { freshContext: true });
+    const timer = window.setTimeout(() => {
+      setPendingExternalPrompt("");
+      void sendMessage(prompt, { freshContext: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // sendMessage intentionally reads the latest chat state when the queued prompt fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, pendingExternalPrompt]);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -606,7 +621,7 @@ function renderInlineMessage(text: string, isUser: boolean) {
 }
 
 function stripCartItemsToken(value: string) {
-  return value.replace(/\s*\[\[EMRN_CART_ITEMS:[A-Za-z0-9+/=]+]]\s*/g, "").trimEnd();
+  return value.replace(/\s*\[\[EMRN_CART_(?:ITEMS|ACTION):[A-Za-z0-9+/=]+]]\s*/g, "").trimEnd();
 }
 
 function extractCartItemsToken(value: string) {
@@ -627,6 +642,32 @@ function extractCartItemsToken(value: string) {
       }))
       .filter((item) => item.productId && item.quantity > 0);
     return cleanItems.length ? { items: cleanItems } : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractCartActionToken(value: string) {
+  const match = value.match(/\[\[EMRN_CART_ACTION:([A-Za-z0-9+/=]+)]]/);
+  if (!match?.[1] || typeof window === "undefined") return null;
+
+  try {
+    const action = JSON.parse(window.atob(match[1])) as {
+      action?: string;
+      sku?: string;
+      productId?: number;
+      variantId?: number;
+      quantity?: number;
+    };
+    const actionType = String(action.action || "");
+    if (!/^(remove|set_quantity|clear)$/.test(actionType)) return null;
+    return {
+      action: actionType,
+      sku: action.sku ? String(action.sku) : undefined,
+      productId: action.productId ? Number(action.productId) : undefined,
+      variantId: action.variantId ? Number(action.variantId) : undefined,
+      quantity: action.quantity ? Math.max(1, Number(action.quantity)) : undefined,
+    };
   } catch {
     return null;
   }

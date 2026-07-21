@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
@@ -75,6 +75,36 @@ function checkoutSkusFromConversation(messages: AssistantMessage[]) {
     }
   }
   return skus;
+}
+
+function recentCartSkusFromConversation(messages: AssistantMessage[]) {
+  const skus = new Map<string, number>();
+  const cartMessage = messages
+    .slice(0, -1)
+    .filter((message) => message.role === "assistant" && /\b(Cart|Panier):/i.test(message.content))
+    .at(-1);
+  if (!cartMessage) return skus;
+
+  for (const match of cartMessage.content.matchAll(/^\s*\d+\.\s+(\d{1,5})\s+x\s+.+?\(SKU:\s*([A-Z0-9+/-]{3,40})\)/gim)) {
+    const quantity = Number(match[1] || 1);
+    const sku = normalizeSku(match[2] || "");
+    if (sku) skus.set(sku, quantity);
+  }
+  return skus;
+}
+
+async function recentCartProducts(messages: AssistantMessage[]) {
+  const cartSkus = recentCartSkusFromConversation(messages);
+  const products = (
+    await Promise.all(
+      Array.from(cartSkus.keys()).map(async (sku) => {
+        const [product] = await searchBySKU(sku);
+        return product ? { product, quantity: cartSkus.get(sku) || 1 } : null;
+      })
+    )
+  ).filter((item): item is { product: CatalogProduct; quantity: number } => Boolean(item));
+
+  return products;
 }
 
 function recentAssistantProductSkus(messages: AssistantMessage[]) {
@@ -180,9 +210,57 @@ function isSelectionWithoutQuantity(text: string) {
       /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text));
 }
 
+function isLiveCartEditIntent(text: string) {
+  return /\b(remove|delete|take out|clear cart|empty cart|clear the cart|change (?:that|it|this|the|quantity)|make (?:that|it|this|the).*\b\d{1,5}\b|set (?:that|it|this|the).*\b\d{1,5}\b|enlever|retirer|supprimer|vider le panier|changer|mettre|mettez)\b/i.test(text);
+}
+
+function priorAssistantCreatedCart(messages: AssistantMessage[]) {
+  return messages
+    .slice(-6, -1)
+    .some((message) => message.role === "assistant" && /\bopen your cart when you(?:’|')?re ready|ouvrir votre panier|Cart:\n/i.test(message.content));
+}
+
+function quantityFromChangeReply(text: string) {
+  return Number(String(text || "").match(/\b(?:change|make|set|changer|mettre|mettez)\b[\s\S]{0,60}?\b(\d{1,5})\b/i)?.[1] || 0);
+}
+
 function cartItemsToken(items: Array<{ productId: number; variantId?: number; quantity: number }>) {
   const payload = Buffer.from(JSON.stringify(items), "utf8").toString("base64");
   return `\n\n[[EMRN_CART_ITEMS:${payload}]]`;
+}
+
+function cartActionToken(action: Record<string, unknown>) {
+  const payload = Buffer.from(JSON.stringify(action), "utf8").toString("base64");
+  return `\n\n[[EMRN_CART_ACTION:${payload}]]`;
+}
+
+function isClearCartIntent(text: string) {
+  return /\b(clear cart|empty cart|clear the cart|vider le panier)\b/i.test(text);
+}
+
+function isRemoveCartIntent(text: string) {
+  return /\b(remove|delete|take out|enlever|retirer|supprimer)\b/i.test(text);
+}
+
+function isSetQuantityCartIntent(text: string) {
+  return quantityFromChangeReply(text) > 0;
+}
+
+function cartEditReply(action: Record<string, unknown>, language: "en" | "fr" | "unknown") {
+  const type = String(action.action || "");
+  if (type === "clear") {
+    return language === "fr"
+      ? `D’accord, je vais vider le panier. Vous pouvez l’ouvrir ici pour vérifier: https://emrn.ca/cart.php${cartActionToken(action)}`
+      : `Okay, I’ll clear the cart. You can open it here to confirm: https://emrn.ca/cart.php${cartActionToken(action)}`;
+  }
+  if (type === "remove") {
+    return language === "fr"
+      ? `D’accord, je vais retirer cet article du panier. Vous pouvez l’ouvrir ici pour vérifier: https://emrn.ca/cart.php${cartActionToken(action)}`
+      : `Okay, I’ll remove that item from the cart. You can open it here to confirm: https://emrn.ca/cart.php${cartActionToken(action)}`;
+  }
+  return language === "fr"
+    ? `D’accord, je vais changer cette quantité dans le panier. Vous pouvez l’ouvrir ici pour vérifier: https://emrn.ca/cart.php${cartActionToken(action)}`
+    : `Okay, I’ll update that quantity in the cart. You can open it here to confirm: https://emrn.ca/cart.php${cartActionToken(action)}`;
 }
 
 function normalizeSku(value: string) {
@@ -242,7 +320,7 @@ function searchQueryForLatest(messages: AssistantMessage[], latest: string, prod
 }
 
 function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unknown") {
-  const availability = product.availabilityDescription || product.availability || "Availability should be confirmed before relying on timing.";
+  const availability = displayAvailability(product, language);
   const price = product.quoteOnly ? "requires a quote" : product.price ? `$${product.price.toFixed(2)}` : "price unavailable";
   const purchase =
     product.quoteOnly || !product.purchasable
@@ -258,14 +336,117 @@ function availabilityText(product: CatalogProduct, language: "en" | "fr" | "unkn
     : `${product.name}\nSKU: ${product.sku}\nPrice: ${price}\nAvailability: ${availability}\n${purchase}\n\nView product: ${product.url}`;
 }
 
+function productAvailabilityText(product: CatalogProduct) {
+  return [product.availabilityDescription, product.availability].filter(Boolean).join(" ").toLowerCase();
+}
+
+function displayAvailability(product: CatalogProduct, language: "en" | "fr" | "unknown") {
+  const raw =
+    product.availabilityDescription ||
+    product.availability ||
+    (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
+  if (language !== "fr") return raw;
+
+  return raw
+    .replace(/\bIn stock\b/gi, "En stock")
+    .replace(/\bLow stock\b/gi, "Stock faible")
+    .replace(/\bAvailable to order\b/gi, "Disponible sur commande")
+    .replace(/\bExtended lead time\b/gi, "Délai prolongé")
+    .replace(/\bTypically ships within 1-3 business days\b/gi, "Expédié généralement sous 1 à 3 jours ouvrables")
+    .replace(/\btypically 5-9 business days\b/gi, "généralement 5 à 9 jours ouvrables")
+    .replace(/\bavailable\b/gi, "disponible");
+}
+
+function hasExtendedLeadTime(product: CatalogProduct) {
+  return /\b(backorder|back order|extended lead|available to order|preorder|pre-order)\b/i.test(productAvailabilityText(product));
+}
+
+function isInStockProduct(product: CatalogProduct) {
+  const availability = productAvailabilityText(product);
+  if (/\b(out of stock|currently unavailable|not currently available|extended lead|backorder|back order)\b/i.test(availability)) {
+    return false;
+  }
+  return /\b(in stock|low stock)\b/i.test(availability) || product.inventoryLevel > 0;
+}
+
+function normalizedProductTokens(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 3)
+    .filter((token) => !/^(the|and|with|for|this|that|shop|all|box|pack|case|bulk|sterile|non|inch|in|ml|mm|cm|sku)$/.test(token));
+}
+
+function substituteSearchQuery(product: CatalogProduct) {
+  return (product.parentName || product.name)
+    .replace(/\s+-\s+.*/g, " ")
+    .replace(/\bSKU\s*:?\s*[A-Z0-9+._/-]{3,40}\b/gi, " ")
+    .replace(/\b[A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9-]*\+?\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || product.name;
+}
+
+function isCloseSubstitute(candidate: CatalogProduct, product: CatalogProduct) {
+  if (candidate.sku && product.sku && normalizeSku(candidate.sku) === normalizeSku(product.sku)) return false;
+  if (!candidate.purchasable || candidate.quoteOnly || !isInStockProduct(candidate)) return false;
+
+  const baseParent = substituteSearchQuery(product).toLowerCase();
+  const candidateParent = substituteSearchQuery(candidate).toLowerCase();
+  if (baseParent && candidateParent && baseParent === candidateParent) return true;
+
+  const baseTokens = new Set(normalizedProductTokens(`${product.parentName} ${product.name}`));
+  const candidateTokens = new Set(normalizedProductTokens(`${candidate.parentName} ${candidate.name}`));
+  const shared = Array.from(baseTokens).filter((token) => candidateTokens.has(token));
+  const brandMatch = Boolean(
+    (product.brand && candidate.brand && product.brand.toLowerCase() === candidate.brand.toLowerCase()) ||
+      (product.manufacturer && candidate.manufacturer && product.manufacturer.toLowerCase() === candidate.manufacturer.toLowerCase())
+  );
+
+  return shared.length >= (brandMatch ? 2 : 3);
+}
+
+async function closeInStockSubstitutes(product: CatalogProduct, language: "en" | "fr" | "unknown") {
+  if (!hasExtendedLeadTime(product)) return [];
+  const result = await searchProducts({ query: substituteSearchQuery(product), language, limit: 10 });
+  const seen = new Set<string>();
+  return result.products
+    .filter((candidate) => isCloseSubstitute(candidate, product))
+    .filter((candidate) => {
+      const key = normalizeSku(candidate.sku) || `${candidate.productId}:${candidate.variantId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function substitutesText(substitutes: CatalogProduct[], language: "en" | "fr" | "unknown") {
+  if (!substitutes.length) return "";
+  const lines = substitutes.map((product, index) => {
+    const price = product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
+    const availability = displayAvailability(product, language);
+    const link = language === "fr" ? "Voir le produit" : "View product";
+    return `${index + 1}. **${product.name}** — SKU: ${product.sku} — ${price}. ${availability}. [${link}](${product.url})`;
+  });
+  const intro =
+    language === "fr"
+      ? "L’article original peut toujours être commandé. Si le délai est important, j’ai aussi trouvé ces options EMRN proches en stock:"
+      : "The original item can still be ordered. If timing matters, I also found these close in-stock EMRN options:";
+  return `\n\n${intro}\n\n${lines.join("\n")}`;
+}
+
+async function availabilityTextWithSubstitutes(product: CatalogProduct, language: "en" | "fr" | "unknown") {
+  const text = availabilityText(product, language);
+  const substitutes = await closeInStockSubstitutes(product, language);
+  return `${text}${substitutesText(substitutes, language)}`;
+}
+
 function productResultsText(products: CatalogProduct[], language: "en" | "fr" | "unknown", query: string) {
   const shown = products.slice(0, 5);
   const lines = shown.map((product, index) => {
     const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
-    const availability =
-      product.availabilityDescription ||
-      product.availability ||
-      (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
+    const availability = displayAvailability(product, language);
     const action = product.quoteOnly || !product.purchasable
       ? language === "fr"
         ? "Demander un devis"
@@ -315,6 +496,78 @@ function packageInfo(product: CatalogProduct) {
   return "";
 }
 
+function displayPackageInfo(product: CatalogProduct, language: "en" | "fr" | "unknown") {
+  const pack = packageInfo(product);
+  if (language !== "fr") return pack;
+  const match = pack.match(/\b(box|pack|case)\s+of\s+(\d{1,5})\b/i);
+  if (!match) return pack;
+  const count = match[2];
+  const label = match[1].toLowerCase() === "box" ? "boîte" : match[1].toLowerCase() === "case" ? "caisse" : "paquet";
+  return `${label} de ${count}`;
+}
+
+function packageCount(product: CatalogProduct) {
+  const pack = packageInfo(product);
+  return Number(pack.match(/\b(?:box|pack|case)\s+of\s+(\d{1,5})\b/i)?.[1] || 0);
+}
+
+function packageContainer(product: CatalogProduct, quantity: number) {
+  const pack = packageInfo(product);
+  const container = pack.match(/\b(box|pack|case)\s+of\s+\d{1,5}\b/i)?.[1]?.toLowerCase() || "";
+  if (!container) return "";
+  return quantity === 1 ? container : `${container}es`.replace("packes", "packs").replace("casees", "cases");
+}
+
+function productUnitName(product: CatalogProduct, total: number, language: "en" | "fr" | "unknown") {
+  const text = `${product.name} ${product.description}`.toLowerCase();
+  const frenchUnits: Record<string, [string, string]> = {
+    syringe: ["seringue", "seringues"],
+    needle: ["aiguille", "aiguilles"],
+    glove: ["gant", "gants"],
+    dressing: ["pansement", "pansements"],
+    mask: ["masque", "masques"],
+    pad: ["compresse", "compresses"],
+    pair: ["paire", "paires"],
+    strip: ["bandelette", "bandelettes"],
+  };
+  const unit = [
+    ["syringe", "syringes"],
+    ["needle", "needles"],
+    ["glove", "gloves"],
+    ["dressing", "dressings"],
+    ["mask", "masks"],
+    ["pad", "pads"],
+    ["pair", "pairs"],
+    ["strip", "strips"],
+  ].find(([singular, plural]) => text.includes(singular) || text.includes(plural));
+  if (!unit) return language === "fr" ? total === 1 ? "unité" : "unités" : total === 1 ? "unit" : "units";
+  if (language === "fr") {
+    const french = frenchUnits[unit[0]];
+    return total === 1 ? french[0] : french[1];
+  }
+  return total === 1 ? unit[0] : unit[1];
+}
+
+function totalUnitsText(product: CatalogProduct, quantity: number, language: "en" | "fr" | "unknown") {
+  const count = packageCount(product);
+  if (!count || quantity <= 0) return "";
+  const total = count * quantity;
+  const container = packageContainer(product, quantity);
+  const unit = productUnitName(product, total, language);
+  if (!container) return "";
+  if (language === "fr") {
+    const frenchContainer = container
+      .replace(/^boxes$/, "boîtes")
+      .replace(/^box$/, "boîte")
+      .replace(/^packs$/, "paquets")
+      .replace(/^pack$/, "paquet")
+      .replace(/^cases$/, "caisses")
+      .replace(/^case$/, "caisse");
+    return `${quantity} ${frenchContainer} / ${total} ${unit} au total`;
+  }
+  return `${quantity} ${container} / ${total} total ${unit}`;
+}
+
 function looksLikePackageCode(value: string) {
   return /^(?:BT|BX|BOX|PK|PACK|CS|CASE)\s*\/\s*\d{1,5}$/i.test(String(value || "").trim());
 }
@@ -331,13 +584,15 @@ function soldByInfo(product: CatalogProduct) {
 
 function cartSummaryLines(cartProducts: Array<{ product: CatalogProduct; quantity: number }>, language: "en" | "fr" | "unknown") {
   return cartProducts.slice(0, 8).map(({ product, quantity }, index) => {
-    const pack = packageInfo(product);
+    const pack = displayPackageInfo(product, language);
+    const units = totalUnitsText(product, quantity, language);
     const packText = pack
       ? language === "fr"
         ? `; vendu comme ${pack}`
         : `; sold as ${pack}`
       : "";
-    return `${index + 1}. ${quantity} x ${product.name} (SKU: ${product.sku})${packText}`;
+    const unitsText = units ? `; ${units}` : "";
+    return `${index + 1}. ${quantity} x ${product.name} (SKU: ${product.sku})${packText}${unitsText}`;
   });
 }
 
@@ -351,10 +606,7 @@ function exactProductFoundText(product: CatalogProduct, language: "en" | "fr" | 
       : language === "fr"
         ? "prix non disponible"
         : "price unavailable";
-  const availability =
-    product.availabilityDescription ||
-    product.availability ||
-    (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
+  const availability = displayAvailability(product, language);
   const purchaseAction =
     product.quoteOnly || !product.purchasable
       ? language === "fr"
@@ -392,6 +644,14 @@ function cartReadyText(
     : `I added the item to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`;
 }
 
+function quoteSplitText(blockedProducts: CatalogProduct[], language: "en" | "fr" | "unknown") {
+  if (!blockedProducts.length) return "";
+  const lines = blockedProducts.slice(0, 5).map((product, index) => `${index + 1}. ${product.name} (SKU: ${product.sku})`);
+  return language === "fr"
+    ? `\n\nCes articles ne peuvent pas être ajoutés au panier en ligne et nécessitent un devis:\n${lines.join("\n")}\n\nEnvoyez-moi votre nom et courriel si vous voulez que je prépare la demande de devis.`
+    : `\n\nThese items could not be added to the online cart and need a quote:\n${lines.join("\n")}\n\nSend me your name and email if you want me to prepare the quote request.`;
+}
+
 function valueAfterLabel(text: string, label: string) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return (
@@ -416,12 +676,12 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   }
 
   if (wantsAvailability) {
-    const availability = product.availabilityDescription || product.availability;
+    const availability = displayAvailability(product, language);
     if (availability) lines.push(language === "fr" ? `Disponibilité: ${availability}` : `Availability: ${availability}`);
   }
 
   if (wantsPackage) {
-    const pack = packageInfo(product);
+    const pack = displayPackageInfo(product, language);
     if (pack) lines.push(language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`);
   }
 
@@ -543,24 +803,51 @@ function filterProductsFromText(products: CatalogProduct[], text: string) {
   return filtered;
 }
 
+function comparisonDetails(product: CatalogProduct, language: "en" | "fr" | "unknown") {
+  const text = `${product.name}\n${product.description}`;
+  const details: string[] = [];
+  const color = valueAfterLabel(product.description || "", "Color") || valueAfterLabel(product.description || "", "Colour");
+  const capacity = valueAfterLabel(product.description || "", "Capacity");
+  const dimensions = valueAfterLabel(product.description || "", "Pack Dimensions") || valueAfterLabel(product.description || "", "Dimensions");
+  const gauge = text.match(/\b(\d{1,2})\s*(?:G|GA|gauge)\b/i)?.[0]?.replace(/\s+/g, "") || "";
+  const size =
+    capacity ||
+    dimensions ||
+    text.match(/\b\d+(?:\.\d+)?\s*(?:mL|ml|cm|mm|in|inch|˝|")\s*(?:x\s*\d+(?:\.\d+)?\s*(?:cm|mm|in|inch|˝|"))?(?:\s*x\s*\d+(?:\.\d+)?\s*(?:cm|mm|in|inch|˝|"))?/i)?.[0]?.trim() ||
+    "";
+  const sterile = /\bnon[-\s]?sterile\b/i.test(text)
+    ? language === "fr" ? "non stérile" : "non-sterile"
+    : /\bsterile\b/i.test(text)
+      ? language === "fr" ? "stérile" : "sterile"
+      : "";
+
+  if (size) details.push(language === "fr" ? `taille ${size}` : `size ${size}`);
+  if (gauge) details.push(language === "fr" ? `calibre ${gauge}` : `gauge ${gauge}`);
+  if (color) details.push(language === "fr" ? `couleur ${color}` : `color ${color}`);
+  if (sterile) details.push(sterile);
+
+  return details.length ? ` ${details.join("; ")}.` : "";
+}
+
 function compareProductsText(products: CatalogProduct[], language: "en" | "fr" | "unknown", question: string) {
   const selected = selectProductsForCart(question, products).slice(0, 4);
   const firstCount =
-    /\bfirst\s+two\b/i.test(question) ? 2 :
-      /\bfirst\s+three\b/i.test(question) ? 3 :
-        /\bfirst\s+four\b/i.test(question) ? 4 :
+    /\b(first\s+two|deux\s+premiers|deux\s+premières|les\s+deux\s+premiers|les\s+deux\s+premières)\b/i.test(question) ? 2 :
+      /\b(first\s+three|trois\s+premiers|trois\s+premières|les\s+trois\s+premiers|les\s+trois\s+premières)\b/i.test(question) ? 3 :
+        /\b(first\s+four|quatre\s+premiers|quatre\s+premières|les\s+quatre\s+premiers|les\s+quatre\s+premières)\b/i.test(question) ? 4 :
           0;
   const compared = firstCount ? products.slice(0, firstCount) : selected.length >= 2 ? selected : products.slice(0, 4);
   if (compared.length < 2) return "";
 
   const lines = compared.map((product, index) => {
     const price = product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
-    const availability = product.availabilityDescription || product.availability || (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
-    const pack = packageInfo(product);
+    const availability = displayAvailability(product, language);
+    const pack = displayPackageInfo(product, language);
     const soldBy = soldByInfo(product);
     const packText = pack ? (language === "fr" ? `; vendu comme ${pack}` : `; sold as ${pack}`) : "";
     const soldByText = soldBy ? (language === "fr" ? `; vendu par ${soldBy}` : `; sold by ${soldBy}`) : "";
-    return `${index + 1}. **${product.name}** — SKU: ${product.sku} — ${price}. ${availability}${packText}${soldByText}. [View product](${product.url})`;
+    const link = language === "fr" ? "Voir le produit" : "View product";
+    return `${index + 1}. **${product.name}** — SKU: ${product.sku} — ${price}. ${availability}${packText}${soldByText}.${comparisonDetails(product, language)} [${link}](${product.url})`;
   });
   const cheapest = compared.filter((product) => product.price > 0).sort((a, b) => a.price - b.price)[0];
   const note = cheapest
@@ -569,7 +856,10 @@ function compareProductsText(products: CatalogProduct[], language: "en" | "fr" |
       : `\n\nThe lowest-priced option in this set is **${cheapest.name}** at $${cheapest.price.toFixed(2)}.`
     : "";
   const intro = language === "fr" ? "Voici une comparaison rapide avec les données EMRN:" : "Here’s a quick comparison from EMRN product data:";
-  return `${intro}\n\n${lines.join("\n")}${note}\n\nTell me which number you want and the quantity, and I can add it to cart.`;
+  const next = language === "fr"
+    ? "Dites-moi quel numéro vous voulez et la quantité, et je peux l’ajouter au panier."
+    : "Tell me which number you want and the quantity, and I can add it to cart.";
+  return `${intro}\n\n${lines.join("\n")}${note}\n\n${next}`;
 }
 
 function isPartsOrAccessoryQuestion(text: string) {
@@ -937,6 +1227,84 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
+  if (isLiveCartEditIntent(latest) && priorAssistantCreatedCart(messages) && !priorAssistantAskedCartQuantity(messages)) {
+    const cartProducts = await recentCartProducts(messages);
+    if (isClearCartIntent(latest)) {
+      return new Response(textStream(cartEditReply({ action: "clear" }, language)), {
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    if (cartProducts.length) {
+      const ordinalIndex = extractOrdinalSelection(latest, cartProducts.length);
+      const selectedProducts = selectProductsForCart(latest, cartProducts.map((item) => item.product));
+      const selectedProduct =
+        ordinalIndex !== null
+          ? cartProducts[ordinalIndex]?.product
+          : selectedProducts.length === 1
+            ? selectedProducts[0]
+            : /\b(that|it|this|the item|the product|ce produit|cet article)\b/i.test(latest)
+              ? cartProducts.at(-1)?.product
+              : null;
+
+      if (selectedProduct && isRemoveCartIntent(latest)) {
+        return new Response(
+          textStream(
+            cartEditReply(
+              {
+                action: "remove",
+                sku: selectedProduct.sku,
+                productId: selectedProduct.productId,
+                variantId: selectedProduct.variantId || undefined,
+              },
+              language
+            )
+          ),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+
+      const quantity = quantityFromChangeReply(latest);
+      if (selectedProduct && quantity > 0) {
+        return new Response(
+          textStream(
+            cartEditReply(
+              {
+                action: "set_quantity",
+                sku: selectedProduct.sku,
+                productId: selectedProduct.productId,
+                variantId: selectedProduct.variantId || undefined,
+                quantity,
+              },
+              language
+            )
+          ),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+
+      if (isRemoveCartIntent(latest) || isSetQuantityCartIntent(latest)) {
+        return new Response(
+          textStream(
+            language === "fr"
+              ? "Je vois plusieurs articles dans le panier. Dites-moi quel numéro ou SKU vous voulez modifier."
+              : "I see multiple items in the cart. Please tell me which number or SKU you want to edit."
+          ),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+    }
+
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je ne peux pas modifier ou vider de façon fiable un panier déjà créé depuis le chat pour le moment. Ouvrez votre panier ici pour enlever un article, changer la quantité ou vider le panier: https://emrn.ca/cart.php"
+          : "I can’t reliably edit or clear a cart that has already been created from chat yet. Please open your cart here to remove an item, change quantity, or clear it: https://emrn.ca/cart.php"
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   if (isContactIntent(latest)) {
     return new Response(textStream(contactHelpText(language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -957,7 +1325,7 @@ async function handleAssistantPost(req: NextRequest) {
     const availabilityProducts = availabilityPool.length ? selectProductsForCart(latest, availabilityPool) : [];
 
     if (availabilityProducts.length) {
-      return new Response(textStream(availabilityText(availabilityProducts[0], language)), {
+      return new Response(textStream(await availabilityTextWithSubstitutes(availabilityProducts[0], language)), {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
@@ -980,12 +1348,14 @@ async function handleAssistantPost(req: NextRequest) {
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !isProductDetailIntent(latest) && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
+  const replyingToCartQuantityChange = priorAssistantAskedCartQuantity(messages) && quantityFromChangeReply(latest) > 0;
   const shouldCompareRememberedProducts = isCompareIntent(latest);
   const shouldFilterRememberedProducts = isResultFilterIntent(latest) && !skuCandidates.length;
   const shouldHandleCart =
     isCartIntent(latest) ||
     replyingToCartChoice ||
     replyingToCartQuantity ||
+    replyingToCartQuantityChange ||
     (priorAssistantOfferedCartAdd(messages) && isAffirmative(latest));
   const shouldUseRememberedProducts =
     shouldHandleCart ||
@@ -1084,7 +1454,11 @@ async function handleAssistantPost(req: NextRequest) {
     const selectedProducts = selectProductsForCart(latest, products);
     const purchasableProducts = selectedProducts.filter((product) => product.purchasable && !product.quoteOnly);
     const blockedProducts = selectedProducts.filter((product) => product.quoteOnly || !product.purchasable);
-    const requestedQuantity = replyingToCartQuantity ? Number(latest.trim()) : extractQuantity(latest);
+    const requestedQuantity = replyingToCartQuantity
+      ? Number(latest.trim())
+      : replyingToCartQuantityChange
+        ? quantityFromChangeReply(latest)
+        : extractQuantity(latest);
 
     if (selectedProducts.length > 1 && !allowsMultipleCartItems(latest)) {
       return new Response(
@@ -1167,7 +1541,7 @@ async function handleAssistantPost(req: NextRequest) {
           quantity,
         }));
       return new Response(
-        textStream(cartReadyText(cartProducts.length, lineItems, language, cartProducts)),
+        textStream(`${cartReadyText(cartProducts.length, lineItems, language, cartProducts)}${quoteSplitText(blockedProducts, language)}`),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }
@@ -1299,7 +1673,9 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (products.length === 1) {
-    return new Response(textStream(exactProductFoundText(products[0], language, skuCandidates[0] || searchQuery)), {
+    const exactProduct = products[0];
+    const substitutes = await closeInStockSubstitutes(exactProduct, language);
+    return new Response(textStream(`${exactProductFoundText(exactProduct, language, skuCandidates[0] || searchQuery)}${substitutesText(substitutes, language)}`), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
