@@ -129,6 +129,16 @@ async function recentAssistantProducts(messages: AssistantMessage[]) {
   });
 }
 
+async function refreshProductsBySku(products: CatalogProduct[]) {
+  return Promise.all(
+    products.map(async (product) => {
+      if (!product.sku) return product;
+      const [freshProduct] = await searchBySKU(product.sku);
+      return freshProduct || product;
+    })
+  );
+}
+
 function priorAssistantAskedCartChoice(messages: AssistantMessage[]) {
   return messages
     .slice(-4, -1)
@@ -310,7 +320,11 @@ function cartReadyText(itemCount: number, lineItems: Array<{ productId: number; 
 
 function valueAfterLabel(text: string, label: string) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return text.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\n\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
+  return (
+    text.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\n\\s*([^\\n]+)`, "i"))?.[1]?.trim() ||
+    text.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*:?\\s+([^\\n]+)`, "i"))?.[1]?.trim() ||
+    ""
+  );
 }
 
 function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
@@ -337,7 +351,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
 
   if (wantsSize) {
     const capacity = valueAfterLabel(text, "Capacity");
-    const packDimensions = valueAfterLabel(text, "Pack Dimensions");
+    const packDimensions = valueAfterLabel(text, "Pack Dimensions") || valueAfterLabel(text, "Dimensions");
     const mainCompartment = text.match(/\bMain Compartment:\s*([^\n]+)/i)?.[1]?.trim() || "";
     const sidePockets = text.match(/\bSide Pockets:\s*([^\n]+)/i)?.[1]?.trim() || "";
     const auxPocket = text.match(/\bAux Pocket:\s*([^\n]+)/i)?.[1]?.trim() || "";
@@ -983,9 +997,12 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isProductDetailIntent(latest)) {
-    if (isPartsOrAccessoryQuestion(latest) && products.length) {
-      const [selectedProduct] = selectProductsForCart(latest, products);
-      const baseProduct = selectedProduct || products[0];
+    const rememberedDetailProducts = await recentAssistantProducts(messages);
+    const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
+
+    if (isPartsOrAccessoryQuestion(latest) && detailProducts.length) {
+      const [selectedProduct] = selectProductsForCart(latest, detailProducts);
+      const baseProduct = selectedProduct || detailProducts[0];
       const partsQueries = relatedPartQueries(baseProduct);
       const partsResults = await Promise.all(partsQueries.map((query) => searchProducts({ query, language, limit: 8 })));
       const seenPartSkus = new Set<string>();
@@ -1012,8 +1029,8 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
 
-    if (products.length === 1) {
-      const catalogAnswer = productDetailFromCatalog(products[0], latest, language);
+    if (detailProducts.length === 1) {
+      const catalogAnswer = productDetailFromCatalog(detailProducts[0], latest, language);
       if (catalogAnswer) {
         return new Response(textStream(catalogAnswer), {
           headers: {
@@ -1026,7 +1043,7 @@ async function handleAssistantPost(req: NextRequest) {
 
     const stream = await streamAssistantResponse({
       messages,
-      products,
+      products: detailProducts,
       language,
       sessionId,
       query: searchQuery,
