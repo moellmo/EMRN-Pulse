@@ -178,13 +178,13 @@ export async function streamAssistantResponse({
         body: JSON.stringify({ ...requestBody, tools: undefined, tool_choice: undefined }),
       });
       if (response.ok && response.body) {
-        return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query }));
+        return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query, feature: "assistant_response" }));
       }
     }
     return fallbackStream(language, trustedWebSearch ? products : []);
   }
 
-  return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query }));
+  return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query, feature: trustedWebSearch ? "trusted_web_search" : "assistant_response" }));
 }
 
 function parseOpenAiSse({
@@ -192,11 +192,13 @@ function parseOpenAiSse({
   sessionId,
   language,
   query,
+  feature,
 }: {
   model: string;
   sessionId?: string;
   language: AssistantLanguage;
   query?: string;
+  feature: "assistant_response" | "trusted_web_search";
 }) {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -222,7 +224,7 @@ function parseOpenAiSse({
           }
           if (event.type === "response.completed" && event.response?.usage) {
             void logAiUsage({
-              feature: "assistant_response",
+              feature,
               model,
               inputTokens: Number(event.response.usage.input_tokens || 0),
               outputTokens: Number(event.response.usage.output_tokens || 0),

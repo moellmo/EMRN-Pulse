@@ -82,6 +82,66 @@ const tests: TestCase[] = [
     ],
     expect: ["compatible:"],
   },
+  {
+    name: "Laerdal QCPR Compatibility",
+    description: "Optional manufacturer-style compatibility check for a Laerdal Little Junior QCPR part.",
+    language: "en",
+    unsafe: true,
+    messages: [
+      {
+        role: "assistant",
+        content:
+          "I found this item for “Little Junior QCPR”:\n1. Little Junior QCPR Manikin — SKU: 128-01050 — [View product](https://emrn.ca/shop-all/little-junior-qcpr-cpr-training-manikin/)",
+      },
+      { role: "user", content: "Does the Little Junior QCPR airway fit this manikin?" },
+    ],
+    expect: ["compatible:"],
+  },
+  {
+    name: "Philips AED Compatibility",
+    description: "Optional compatibility check for Philips AED pads or battery questions.",
+    language: "en",
+    unsafe: true,
+    messages: [
+      {
+        role: "assistant",
+        content:
+          "I found this item for “Philips AED”:\n1. Philips HeartStart OnSite AED — SKU: M5066A — [View product](https://emrn.ca/)",
+      },
+      { role: "user", content: "Are these Philips AED pads compatible with the HeartStart OnSite?" },
+    ],
+    expect: ["compatible:"],
+  },
+  {
+    name: "ZOLL Electrode Compatibility",
+    description: "Optional compatibility check for ZOLL electrodes.",
+    language: "en",
+    unsafe: true,
+    messages: [
+      {
+        role: "assistant",
+        content:
+          "I found this item for “ZOLL AED”:\n1. ZOLL AED Plus — SKU: 8000-004000 — [View product](https://emrn.ca/)",
+      },
+      { role: "user", content: "Do these CPR-D-padz electrodes fit the ZOLL AED Plus?" },
+    ],
+    expect: ["compatible:"],
+  },
+  {
+    name: "Nasco Manikin Compatibility",
+    description: "Optional compatibility check for Nasco manikin replacement parts.",
+    language: "en",
+    unsafe: true,
+    messages: [
+      {
+        role: "assistant",
+        content:
+          "I found this item for “Nasco manikin”:\n1. Nasco Healthcare Infant CPR Manikin — SKU: LF03623U — [View product](https://emrn.ca/)",
+      },
+      { role: "user", content: "Does the LF06203U infant lung fit this Nasco infant manikin?" },
+    ],
+    expect: ["compatible:"],
+  },
 ];
 
 function testSessionId(name: string) {
@@ -188,6 +248,9 @@ export function MeriTestCenter() {
                   <div>
                     <h2 className="font-semibold">{test.name}</h2>
                     <p className="mt-1 text-sm text-slate-600">{test.description}</p>
+                    {test.unsafe ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">Optional web/manufacturer check</p>
+                    ) : null}
                   </div>
                   <button
                     type="button"

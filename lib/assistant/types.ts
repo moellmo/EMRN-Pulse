@@ -86,6 +86,14 @@ export type SupportRequest = {
   name: string;
   email: string;
   question: string;
+  summary?: {
+    customerQuestion: string;
+    productContext?: string;
+    emrnDataFound?: string;
+    externalDataFound?: string;
+    confidence?: "confirmed" | "not_compatible" | "cant_confirm" | "unknown";
+    transcriptSnippet?: string[];
+  };
   conversation: AssistantMessage[];
   language: AssistantLanguage;
 };
@@ -143,6 +151,7 @@ export type AssistantAnalyticsEvent =
         | "no_result_search"
         | "product_recommended"
         | "quote_request"
+        | "quote_lookup"
         | "support_escalation"
         | "unanswered_question";
       sessionId: string;
@@ -154,7 +163,7 @@ export type AssistantAnalyticsEvent =
 
 export type AssistantAiUsageEvent = {
   createdAt: string;
-  feature: "search_translator" | "assistant_response";
+  feature: "search_translator" | "assistant_response" | "trusted_web_search";
   model: string;
   inputTokens: number;
   outputTokens: number;

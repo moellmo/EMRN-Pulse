@@ -65,6 +65,7 @@ export async function sendQuoteRequestEmail(request: QuoteRequest) {
 }
 
 export async function sendSupportEmail(request: SupportRequest) {
+  const summary = request.summary;
   await sendEmail({
     to: supportEmail,
     subject: "New Support Request - AI Assistant",
@@ -79,9 +80,44 @@ export async function sendSupportEmail(request: SupportRequest) {
       "Question",
       request.question,
       "",
+      "Internal summary",
+      `Customer question: ${summary?.customerQuestion || request.question}`,
+      `Product/SKU/page: ${summary?.productContext || "Not captured"}`,
+      `EMRN data found: ${summary?.emrnDataFound || "Not captured"}`,
+      `Web/manufacturer result: ${summary?.externalDataFound || "Not used or not captured"}`,
+      `Confidence: ${summary?.confidence || "unknown"}`,
+      ...(summary?.transcriptSnippet?.length
+        ? ["", "Transcript snippet", ...summary.transcriptSnippet]
+        : []),
+      "",
       "Conversation",
       ...request.conversation.map((message) => `${message.role.toUpperCase()}: ${message.content}`),
     ].join("\n"),
+  });
+}
+
+export async function sendQuoteLinkEmail(input: { to: string; quoteNumber: string; checkoutUrl: string; language: "en" | "fr" | "unknown" }) {
+  await sendEmail({
+    to: input.to,
+    subject: `EMRN Quote ${input.quoteNumber} Payment Link`,
+    text:
+      input.language === "fr"
+        ? [
+            `Bonjour,`,
+            "",
+            `Voici le lien de paiement sécurisé pour le devis ${input.quoteNumber}:`,
+            input.checkoutUrl,
+            "",
+            "Si vous avez des questions, répondez à ce courriel ou contactez EMRN.",
+          ].join("\n")
+        : [
+            "Hello,",
+            "",
+            `Here is the secure payment link for quote ${input.quoteNumber}:`,
+            input.checkoutUrl,
+            "",
+            "If you have any questions, reply to this email or contact EMRN.",
+          ].join("\n"),
   });
 }
 

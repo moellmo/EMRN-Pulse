@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCartItem } from "@/lib/assistant/catalog";
 import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
-import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
+import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
-import type { AssistantMessage, CatalogProduct, ProductPageContext } from "@/lib/assistant/types";
+import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
 
 export const runtime = "nodejs";
 
@@ -154,6 +154,76 @@ function priorAssistantOfferedOrderStatusSupport(messages: AssistantMessage[]) {
           message.content
         )
     );
+}
+
+function priorAssistantAskedQuoteLinkEmail(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /email.*quote.*link|email.*payment.*link|courriel.*lien.*devis|courriel.*lien.*paiement|lien.*paiement.*courriel|envoyer.*lien.*courriel/i.test(message.content)
+    );
+}
+
+function quoteLinkEmailIntent(text: string) {
+  return /\b(email|send|mail)\b.*\b(quote|payment|checkout)?\s*link\b|\b(send|email)\b.*\bquote\b|\benvoie.*courriel.*devis\b|\bcourriel.*lien.*devis\b|\benvoie.*lien.*courriel\b|\benvoyer.*lien.*courriel\b/i.test(text);
+}
+
+function recentQuotePaymentLink(messages: AssistantMessage[]) {
+  const assistantMessage = messages
+    .slice()
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "assistant" &&
+        /(?:Purchase link|Lien de paiement):\s*https?:\/\/|secure checkout link for quote\s+\S+:\s*https?:\/\/|lien de paiement sécurisé pour le devis\s+\S+:\s*https?:\/\//i.test(
+          message.content
+        )
+    );
+  const content = assistantMessage?.content || "";
+  const checkoutUrl =
+    content.match(/(?:Purchase link|Lien de paiement):\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[),.;]+$/g, "") ||
+    content.match(/(?:secure checkout link for quote\s+\S+|lien de paiement sécurisé pour le devis\s+\S+):\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[),.;]+$/g, "") ||
+    "";
+  const quoteNumber = content.match(/\b(?:quote|devis)\s+(QN[A-Z0-9-]+)/i)?.[1] || content.match(/\b(QN[A-Z0-9-]+)\b/i)?.[1] || "";
+  return { quoteNumber, checkoutUrl };
+}
+
+function supportSummaryFromMessages(messages: AssistantMessage[]): SupportRequest["summary"] {
+  const lastUserQuestion =
+    messages
+      .slice()
+      .reverse()
+      .find((message) => message.role === "user" && !isSupportYes(message.content))?.content || "";
+  const assistantText = messages.filter((message) => message.role === "assistant").map((message) => message.content).join("\n\n");
+  const productLines = Array.from(assistantText.matchAll(/(?:\*\*)?([^。\n]*?)\s+—\s+SKU:\s*([A-Z0-9+._-]{3,40})[^\n]*(https?:\/\/\S+)?/gi))
+    .slice(0, 5)
+    .map((match) => `${match[1]?.replace(/\*/g, "").trim()} — SKU: ${match[2]}${match[3] ? ` — ${match[3]}` : ""}`);
+  const urls = Array.from(new Set((assistantText.match(/https?:\/\/\S+/g) || []).map((url) => url.replace(/[),.;]+$/g, "")))).slice(0, 5);
+  const confidence: NonNullable<SupportRequest["summary"]>["confidence"] = /\bConfirmed compatible:/i.test(assistantText)
+    ? "confirmed"
+    : /\bNot compatible:/i.test(assistantText)
+      ? "not_compatible"
+      : /\bCan.t confirm:|I can.t confirm|Je ne peux pas confirmer/i.test(assistantText)
+        ? "cant_confirm"
+        : "unknown";
+  const emrnDataFound =
+    assistantText.match(/(?:Based on the EMRN product details|Selon les détails du produit EMRN|I found this item|J’ai trouvé cet article)[\s\S]{0,500}/i)?.[0] ||
+    productLines.join("\n") ||
+    "Not captured";
+  const externalDataFound =
+    assistantText.match(/(?:manufacturer|fabricant|source URL|supporting product info|not on EMRN|product\/manufacturer info)[\s\S]{0,500}/i)?.[0] ||
+    "Not used or not captured";
+
+  return {
+    customerQuestion: lastUserQuestion,
+    productContext: [...productLines, ...urls].filter(Boolean).join("\n") || "Not captured",
+    emrnDataFound,
+    externalDataFound,
+    confidence,
+    transcriptSnippet: messages.slice(-8).map((message) => `${message.role.toUpperCase()}: ${message.content.slice(0, 700)}`),
+  };
 }
 
 function orderHistoryEmail(messages: AssistantMessage[]) {
@@ -417,7 +487,7 @@ function quoteLookupText(
     : "";
   const link = quote.quoteUrl ? `\n${language === "fr" ? "Lien du devis" : "Quote link"}: ${quote.quoteUrl}` : "";
   const purchase = purchaseUrl
-    ? `\n${language === "fr" ? "Lien de paiement" : "Purchase link"}: ${purchaseUrl}`
+    ? `\n${language === "fr" ? "Lien de paiement" : "Purchase link"}: ${purchaseUrl}\n${language === "fr" ? "Voulez-vous que je vous envoie ce lien de paiement par courriel?" : "Want me to email this quote/payment link to you?"}`
     : quote.allowCheckout
       ? `\n${language === "fr" ? "Voulez-vous que je crée un lien de paiement pour ce devis?" : "Would you like a purchase link for this quote?"}`
       : "";
@@ -470,8 +540,8 @@ function quoteCheckoutText(
 ) {
   if (checkout.created && checkout.checkoutUrl) {
     return language === "fr"
-      ? `J’ai créé un lien de paiement sécurisé pour le devis ${quoteNumber}: ${checkout.checkoutUrl}`
-      : `I created a secure checkout link for quote ${quoteNumber}: ${checkout.checkoutUrl}`;
+      ? `J’ai créé un lien de paiement sécurisé pour le devis ${quoteNumber}: ${checkout.checkoutUrl}\nVoulez-vous que je vous envoie ce lien de paiement par courriel?`
+      : `I created a secure checkout link for quote ${quoteNumber}: ${checkout.checkoutUrl}\nWant me to email this quote/payment link to you?`;
   }
 
   return language === "fr"
@@ -1707,9 +1777,13 @@ async function handleAssistantPost(req: NextRequest) {
   if (priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
     if (draft.request) {
+      const supportRequest = {
+        ...draft.request,
+        summary: supportSummaryFromMessages(messages),
+      };
       await Promise.all([
-        logSupportRequest(draft.request),
-        sendSupportEmail(draft.request),
+        logSupportRequest(supportRequest),
+        sendSupportEmail(supportRequest),
         logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
       ]);
       return new Response(
@@ -1727,6 +1801,43 @@ async function handleAssistantPost(req: NextRequest) {
         language === "fr"
           ? `Bien sûr. Pour envoyer cela à notre équipe, il me manque: ${draft.missing.join(", ")}.`
           : `Of course. To send this to our team, I still need: ${draft.missing.join(", ")}.`
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  const quotePaymentLink = recentQuotePaymentLink(messages);
+  const priorQuoteLinkEmailOffer = priorAssistantAskedQuoteLinkEmail(messages);
+  const wantsQuotePaymentEmail =
+    Boolean(quotePaymentLink.checkoutUrl) &&
+    (quoteLinkEmailIntent(latest) ||
+      (priorQuoteLinkEmailOffer && isAffirmative(latest)) ||
+      (priorQuoteLinkEmailOffer && Boolean(orderHistoryEmail(messages))));
+
+  if (wantsQuotePaymentEmail) {
+    const email = orderHistoryEmail(messages);
+    if (!email) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Bien sûr. À quel courriel dois-je envoyer le lien de paiement du devis?"
+            : "Sure. What email should I send the quote/payment link to?"
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    await sendQuoteLinkEmail({
+      to: email,
+      quoteNumber: quotePaymentLink.quoteNumber || (language === "fr" ? "votre devis" : "your quote"),
+      checkoutUrl: quotePaymentLink.checkoutUrl,
+      language,
+    });
+    return new Response(
+      textStream(
+        language === "fr"
+          ? `C’est envoyé à ${email}. Vous pouvez aussi ouvrir le lien ici: ${quotePaymentLink.checkoutUrl}`
+          : `I sent it to ${email}. You can also open the link here: ${quotePaymentLink.checkoutUrl}`
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -1835,6 +1946,13 @@ async function handleAssistantPost(req: NextRequest) {
     const checkout = quote.found && quote.allowCheckout
       ? await createB2BQuoteCheckout(quote.quoteId || quote.quoteNumber || quoteNumber)
       : { created: false, checkoutUrl: "" };
+    await logAnalyticsEvent({
+      type: "quote_lookup",
+      sessionId,
+      language,
+      query: quoteNumber || email || latest,
+      createdAt,
+    });
     return new Response(textStream(quoteLookupText(quote, language, checkout.checkoutUrl || "")), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });

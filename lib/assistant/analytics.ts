@@ -165,10 +165,11 @@ export async function readAssistantAdminData() {
   ]);
 
   const searches = analytics.filter((event) => event.type === "product_search");
-  const noResults = analytics.filter((event) => event.type === "no_result_search");
+  const failedSearches = analytics.filter((event) => event.type === "no_result_search" || event.type === "search_failure");
   const completedConversations = analytics.filter((event) => event.type === "conversation_completed");
   const monthPrefix = new Date().toISOString().slice(0, 7);
   const aiUsageThisMonth = aiUsage.filter((event) => event.createdAt.startsWith(monthPrefix));
+  const webSearchUsageThisMonth = aiUsageThisMonth.filter((event) => event.feature === "trusted_web_search");
   const languages = analytics.reduce<Record<string, number>>((acc, event) => {
     acc[event.language] = (acc[event.language] || 0) + 1;
     return acc;
@@ -179,23 +180,29 @@ export async function readAssistantAdminData() {
       totalEvents: analytics.length,
       dailyConversationCount: analytics.filter((event) => event.type === "conversation_started").length,
       quoteRequests: quotes.length,
+      quoteLookups: analytics.filter((event) => event.type === "quote_lookup").length,
       supportEscalations: support.length,
+      supportHandoffs: support.length,
       productSearches: searches.length,
-      noResultSearches: noResults.length,
+      failedSearches: failedSearches.length,
+      noResultSearches: failedSearches.length,
       unansweredQuestions: analytics.filter((event) => event.type === "unanswered_question").length,
       productsRecommended: analytics.filter((event) => event.type === "product_recommended").length,
       aiCallsThisMonth: aiUsageThisMonth.length,
+      webSearchCallsThisMonth: webSearchUsageThisMonth.length,
       aiInputTokensThisMonth: sum(aiUsageThisMonth.map((event) => event.inputTokens)),
       aiOutputTokensThisMonth: sum(aiUsageThisMonth.map((event) => event.outputTokens)),
       aiEstimatedCostThisMonth: roundCurrency(sum(aiUsageThisMonth.map((event) => event.estimatedCostUsd))),
       aiEstimatedCostAllTime: roundCurrency(sum(aiUsage.map((event) => event.estimatedCostUsd))),
       languages,
       mostSearchedProducts: topCounts(searches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
-      searchFailures: topCounts(noResults.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
+      searchFailures: topCounts(failedSearches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
       averageConversationLength: average(
         completedConversations.map((event) => ("messageCount" in event ? event.messageCount || 0 : 0))
       ),
     },
+    failedSearches: failedSearches.slice(-100).reverse(),
+    quoteLookups: analytics.filter((event) => event.type === "quote_lookup").slice(-100).reverse(),
     quotes: quotes.slice(-100).reverse(),
     support: support.slice(-100).reverse(),
     aiUsage: aiUsage.slice(-100).reverse(),
