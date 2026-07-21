@@ -45,7 +45,7 @@ export function isQuoteIntent(text: string) {
 }
 
 export function isCartIntent(text: string) {
-  return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
+  return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to (?:my )?(?:cart|catt|cartt|crt)|(?:cart|catt|cartt|crt)|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:want|need|would like|like)\s+to\s+(?:purchase|buy|order|get|take)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s*(?:'|’)?(?:ll|d)?\s*(?:take|get|buy|order|purchase|want|need)\s+(?:it|this|that|them|these|those|one|ones?)\b/i.test(text) ||
@@ -104,7 +104,7 @@ export function extractSkuCandidates(text: string) {
   const skuText = text
     .replace(/\b(?:this|item|product|produit)(?=[A-Z]{1,10}\s*-?\s*\d{2,})/gi, " ")
     .replace(/\b(?:i|we)\s+(?:want|would like|need)\s+to\s+(?:purchase|buy|order)\b/gi, " ")
-    .replace(/\b(?:purchase|buy|order|add|cart|checkout|sku|item|product|produit|acheter|commander|panier)\b/gi, " ");
+    .replace(/\b(?:purchase|buy|order|add|cart|catt|cartt|crt|checkout|sku|item|product|produit|acheter|commander|panier)\b/gi, " ");
 
   for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
     candidates.push(match[1]);
@@ -131,6 +131,19 @@ export function extractSkuCandidates(text: string) {
   })));
 }
 
+function textWithoutSkuLikeTokens(text: string) {
+  let cleaned = String(text || "");
+  for (const sku of extractSkuCandidates(cleaned)) {
+    cleaned = cleaned.replace(new RegExp(escapeRegExp(sku), "gi"), " ");
+    if (sku.includes("-")) cleaned = cleaned.replace(new RegExp(escapeRegExp(sku.replace(/-/g, "")), "gi"), " ");
+  }
+
+  return cleaned
+    .replace(/\b[A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9]*(?:-[A-Z0-9]+)*\+?\b/gi, " ")
+    .replace(/\b[A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?\b/gi, " ")
+    .replace(/\b\d{4,}\+?\b/g, " ");
+}
+
 export function allowsMultipleCartItems(text: string) {
   return /\b(all|both|these|them|tous|les deux)\b/i.test(text) ||
     ordinalIndexesInText(text, 8).length > 1 ||
@@ -154,7 +167,8 @@ export function extractQuantity(text: string) {
     return 1;
   }
 
-  const match = text.match(/\b(\d{1,5})\b/);
+  const quantityText = textWithoutSkuLikeTokens(text);
+  const match = quantityText.match(/\b(\d{1,5})\b/);
   return match ? Number(match[1]) : 1;
 }
 
@@ -338,7 +352,7 @@ export function quantityForProductSelection(text: string, product: CatalogProduc
 export function inferSearchQuery(messages: AssistantMessage[], products: CatalogProduct[]) {
   const latest = messages.at(-1)?.content || "";
   if (/^\s*i need\s+\d+\s+more/i.test(latest) && products[0]) return products[0].name;
-  if (isCartIntent(latest) && /\b(it|this|that|them|those|one|the product|checkout|cart)\b/i.test(latest)) {
+  if (isCartIntent(latest) && /\b(it|this|that|them|those|one|the product|checkout|cart|catt|cartt|crt)\b/i.test(latest)) {
     const previousProductRequest = messages
       .slice(0, -1)
       .filter((message) => message.role === "user")

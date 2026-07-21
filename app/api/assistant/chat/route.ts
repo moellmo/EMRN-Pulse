@@ -284,7 +284,7 @@ function isContextProductSelectionReply(text: string) {
   return /\b(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|ones?)\b/i.test(text) ||
     /\b(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b\d{1,5}\s+(?:of\s+)?(?:#|number|no\.?|option|item)\s*[1-5]\b/i.test(text) ||
-    /^\s*(?:add\s+to\s+cart|add\s+it\s+to\s+cart|add\s+this\s+to\s+cart|buy\s+it|purchase\s+it)\s*$/i.test(text);
+    /^\s*(?:add\s+(?:to\s+(?:my\s+)?)?(?:cart|catt|cartt|crt)|add\s+it\s+to\s+(?:my\s+)?(?:cart|catt|cartt|crt)|add\s+this\s+to\s+(?:my\s+)?(?:cart|catt|cartt|crt)|buy\s+it|purchase\s+it)\s*$/i.test(text);
 }
 
 function isSelectionWithoutQuantity(text: string) {
@@ -736,9 +736,10 @@ function cartReadyText(
   lineItems: Array<{ productId: number; variantId?: number; quantity: number }>,
   language: "en" | "fr" | "unknown",
   cartProducts: Array<{ product: CatalogProduct; quantity: number }> = [],
-  cartUrl = "https://emrn.ca/cart.php"
+  cartUrl = "https://emrn.ca/cart.php",
+  browserLineItems = lineItems
 ) {
-  const token = cartItemsToken(lineItems);
+  const token = cartItemsToken(browserLineItems);
   const storeCartUrl = "https://emrn.ca/cart.php";
   const checkoutText =
     cartUrl && !/\/cart(?:\.php)?(?:[?#]|$)/i.test(cartUrl)
@@ -1343,7 +1344,8 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isLiveCartEditIntent(latest) && priorAssistantCreatedCart(messages) && !priorAssistantAskedCartQuantity(messages)) {
+  const isPlainQuantityReply = /^\s*\d{1,5}\s*$/.test(latest);
+  if (isLiveCartEditIntent(latest) && priorAssistantCreatedCart(messages) && !(priorAssistantAskedCartQuantity(messages) && isPlainQuantityReply)) {
     const trackedCart = trackedCarts.get(sessionId);
     if (trackedCart?.items.length) {
       const cartProducts = cartProductsFromTrackedCart(trackedCart);
@@ -1671,15 +1673,18 @@ async function handleAssistantPost(req: NextRequest) {
       );
     }
 
-    const previousCartSkus = checkoutSkusFromConversation(messages);
-    const previousCartProducts = (
-      await Promise.all(
-        Array.from(previousCartSkus.keys()).map(async (sku) => {
-          const [product] = await searchBySKU(sku);
-          return product ? { product, quantity: previousCartSkus.get(sku) || 1 } : null;
-        })
-      )
-    ).filter((item): item is { product: (typeof purchasableProducts)[number]; quantity: number } => Boolean(item));
+    const trackedCart = trackedCarts.get(sessionId);
+    const previousCartSkus = trackedCart?.items.length ? new Map<string, number>() : checkoutSkusFromConversation(messages);
+    const previousCartProducts = trackedCart?.items.length
+      ? cartProductsFromTrackedCart(trackedCart)
+      : (
+          await Promise.all(
+            Array.from(previousCartSkus.keys()).map(async (sku) => {
+              const [product] = await searchBySKU(sku);
+              return product ? { product, quantity: previousCartSkus.get(sku) || 1 } : null;
+            })
+          )
+        ).filter((item): item is { product: (typeof purchasableProducts)[number]; quantity: number } => Boolean(item));
     const selectedSkuSet = new Set(purchasableProducts.map((product) => product.sku.toUpperCase()));
     const cartProducts = [
       ...previousCartProducts.filter((item) => item && !selectedSkuSet.has(item.product.sku.toUpperCase())),
@@ -1688,6 +1693,15 @@ async function handleAssistantPost(req: NextRequest) {
         quantity: quantityForProductSelection(latest, product, products.indexOf(product), requestedQuantity),
       })),
     ];
+    const newCartProducts = purchasableProducts.map((product) => ({
+      product,
+      quantity: quantityForProductSelection(latest, product, products.indexOf(product), requestedQuantity),
+    }));
+    const newBrowserLineItems = newCartProducts.slice(0, 8).map(({ product, quantity }) => ({
+      productId: product.productId,
+      variantId: product.variantId || undefined,
+      quantity,
+    }));
 
     const cart = await createCart({
       sessionId,
@@ -1708,7 +1722,7 @@ async function handleAssistantPost(req: NextRequest) {
         }));
       rememberCartState(sessionId, cartProducts, lineItems, cart.checkoutUrl);
       return new Response(
-        textStream(`${cartReadyText(cartProducts.length, lineItems, language, cartProducts, cart.checkoutUrl)}${quoteSplitText(blockedProducts, language)}`),
+        textStream(`${cartReadyText(newCartProducts.length, lineItems, language, cartProducts, cart.checkoutUrl, newBrowserLineItems)}${quoteSplitText(blockedProducts, language)}`),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }

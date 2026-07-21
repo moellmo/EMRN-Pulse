@@ -123,7 +123,6 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const [hasError, setHasError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const postedCartTokensRef = useRef<Set<string>>(new Set());
   const handledExternalRequestsRef = useRef<Set<string>>(new Set());
   const [pendingExternalPrompt, setPendingExternalPrompt] = useState("");
   const currentLanguage = language === "fr" ? "fr" : "en";
@@ -202,6 +201,21 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
       if (event.data.type === "emrn-pulse:close") {
         setShowNudge(false);
         setIsOpen(false);
+        return;
+      }
+      if (event.data.type === "emrn-pulse:add-to-cart-result" || event.data.type === "emrn-pulse:cart-action-result") {
+        if (event.data.ok) return;
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            content:
+              currentLanguage === "fr"
+                ? "Je n’ai pas pu mettre à jour le panier du site. Ouvrez la page produit ou le panier pour vérifier, ou je peux envoyer cette demande à notre équipe."
+                : "I could not update the site cart. Please open the product page or cart to check it, or I can send this request to our team.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
         return;
       }
       if (event.data.type !== "emrn-pulse:page-context") return;
@@ -286,19 +300,11 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
 
       const cartPayload = extractCartItemsToken(answer);
       if (cartPayload && mode === "floating" && typeof window !== "undefined") {
-        const tokenKey = JSON.stringify(cartPayload.items);
-        if (!postedCartTokensRef.current.has(tokenKey)) {
-          postedCartTokensRef.current.add(tokenKey);
-          window.parent?.postMessage({ type: "emrn-pulse:add-to-cart", items: cartPayload.items }, "*");
-        }
+        window.parent?.postMessage({ type: "emrn-pulse:add-to-cart", items: cartPayload.items }, "*");
       }
       const cartAction = extractCartActionToken(answer);
       if (cartAction && mode === "floating" && typeof window !== "undefined") {
-        const tokenKey = JSON.stringify(cartAction);
-        if (!postedCartTokensRef.current.has(tokenKey)) {
-          postedCartTokensRef.current.add(tokenKey);
-          window.parent?.postMessage({ type: "emrn-pulse:cart-action", action: cartAction }, "*");
-        }
+        window.parent?.postMessage({ type: "emrn-pulse:cart-action", action: cartAction }, "*");
       }
     } catch {
       setHasError(true);
