@@ -308,6 +308,77 @@ function cartReadyText(itemCount: number, lineItems: Array<{ productId: number; 
     : `I added the item to your cart. You can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`;
 }
 
+function valueAfterLabel(text: string, label: string) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\n\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
+}
+
+function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
+  const text = product.description || "";
+  const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity)\b/i.test(question);
+  const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
+  const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
+  const wantsAvailability = /\b(availability|available|in stock|stock|ships|lead time)\b/i.test(question);
+  const lines: string[] = [];
+
+  if (wantsPrice && product.price) {
+    lines.push(language === "fr" ? `Prix: $${product.price.toFixed(2)}` : `Price: $${product.price.toFixed(2)}`);
+  }
+
+  if (wantsAvailability) {
+    const availability = product.availabilityDescription || product.availability;
+    if (availability) lines.push(language === "fr" ? `Disponibilité: ${availability}` : `Availability: ${availability}`);
+  }
+
+  if (wantsColor) {
+    const color = valueAfterLabel(text, "Color") || valueAfterLabel(text, "Colour");
+    if (color) lines.push(language === "fr" ? `Couleur: ${color}` : `Color: ${color}`);
+  }
+
+  if (wantsSize) {
+    const capacity = valueAfterLabel(text, "Capacity");
+    const packDimensions = valueAfterLabel(text, "Pack Dimensions");
+    const mainCompartment = text.match(/\bMain Compartment:\s*([^\n]+)/i)?.[1]?.trim() || "";
+    const sidePockets = text.match(/\bSide Pockets:\s*([^\n]+)/i)?.[1]?.trim() || "";
+    const auxPocket = text.match(/\bAux Pocket:\s*([^\n]+)/i)?.[1]?.trim() || "";
+
+    if (capacity) lines.push(language === "fr" ? `Capacité: ${capacity}` : `Capacity: ${capacity}`);
+    if (packDimensions) lines.push(language === "fr" ? `Dimensions du sac: ${packDimensions}` : `Pack dimensions: ${packDimensions}`);
+    if (mainCompartment || sidePockets || auxPocket) {
+      if (language === "fr") {
+        lines.push(
+          `Dimensions des poches: ${[
+            mainCompartment ? `compartiment principal ${mainCompartment}` : "",
+            sidePockets ? `poches latérales ${sidePockets}` : "",
+            auxPocket ? `poche auxiliaire ${auxPocket}` : "",
+          ].filter(Boolean).join("; ")}`
+        );
+      } else {
+        lines.push(
+          `Pocket dimensions: ${[
+            mainCompartment ? `main compartment ${mainCompartment}` : "",
+            sidePockets ? `side pockets ${sidePockets}` : "",
+            auxPocket ? `aux pocket ${auxPocket}` : "",
+          ].filter(Boolean).join("; ")}`
+        );
+      }
+    }
+  }
+
+  if (!lines.length) return "";
+
+  const intro = language === "fr"
+    ? `Selon les détails du produit EMRN pour **${product.name}** (SKU: ${product.sku}):`
+    : `Based on the EMRN product details for **${product.name}** (SKU: ${product.sku}):`;
+  const addPrompt = product.purchasable && !product.quoteOnly
+    ? language === "fr"
+      ? "\n\nVoulez-vous que je l’ajoute au panier?"
+      : "\n\nWould you like me to add it to your cart?"
+    : "";
+
+  return `${intro}\n\n${lines.map((line) => `- ${line}`).join("\n")}\n\n[View product](${product.url})${addPrompt}`;
+}
+
 function siteSearchUrl(query: string) {
   const url = new URL("/search.php", process.env.EMRN_STORE_URL || "https://emrn.ca");
   url.searchParams.set("search_query", query);
@@ -876,6 +947,18 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isProductDetailIntent(latest)) {
+    if (products.length === 1) {
+      const catalogAnswer = productDetailFromCatalog(products[0], latest, language);
+      if (catalogAnswer) {
+        return new Response(textStream(catalogAnswer), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
+
     const stream = await streamAssistantResponse({
       messages,
       products,

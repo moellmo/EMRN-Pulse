@@ -95,7 +95,7 @@ export function productContext(products: CatalogProduct[]) {
         `Purchasable online: ${product.purchasable ? "yes" : "no"}`,
         `Quote only: ${product.quoteOnly ? "yes" : "no"}`,
         `URL: ${product.url}`,
-        product.description ? `Description: ${product.description.slice(0, 500)}` : "",
+        product.description ? `Description: ${product.description.slice(0, 3000)}` : "",
       ]
         .filter(Boolean)
         .join("\n");

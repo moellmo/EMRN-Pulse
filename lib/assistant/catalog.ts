@@ -57,6 +57,7 @@ type BigCommerceProduct = Partial<{
   id: number;
   name: string;
   sku: string;
+  description: string;
   brand_id: number;
   price: number;
   calculated_price: number;
@@ -152,6 +153,31 @@ function productFilter(input: ProductSearchInput) {
 
 function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
+}
+
+function textFromHtml(value: string) {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6]|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&rsquo;/gi, "'")
+    .replace(/&ldquo;|&rdquo;/gi, "\"")
+    .replace(/&mdash;/gi, " - ")
+    .replace(/&ndash;/gi, "-")
+    .replace(/\s*\n\s*/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function productSpecsText(product: BigCommerceProduct) {
+  const customFields = (product.custom_fields || [])
+    .map((field) => [field.name, field.value].filter(Boolean).join(": "))
+    .filter(Boolean);
+  return [textFromHtml(product.description || ""), ...customFields].filter(Boolean).join("\n");
 }
 
 function skuValuesForDocument(doc: SearchDocument) {
@@ -521,7 +547,7 @@ function mapBigCommerceProduct(product: BigCommerceProduct, variant?: BigCommerc
     brand: "",
     manufacturer: "",
     categories: [],
-    description: "",
+    description: productSpecsText(product),
     price: Number(variant?.calculated_price || variant?.price || product.calculated_price || product.price || 0),
     image: String(product.images?.[0]?.url_standard || product.images?.[0]?.url_thumbnail || ""),
     url: absoluteStoreUrl(product.custom_url?.url),
@@ -601,6 +627,39 @@ async function searchBySKUFallback(sku: string) {
   const normalized = normalizeSku(sku);
   const keywordMatches = await searchBigCommerceProducts(sku, 12);
   return keywordMatches.filter((product) => normalizeSku(product.sku) === normalized);
+}
+
+async function enrichProductFromBigCommerce(product: CatalogProduct) {
+  if (!product.productId) return product;
+
+  try {
+    const payload = await bigCommerceGet<{ data?: BigCommerceProduct }>(`/catalog/products/${product.productId}`, {
+      include: "variants,images,custom_fields",
+    });
+    if (!payload?.data) return product;
+
+    const variant = product.variantId
+      ? payload.data.variants?.find((item) => Number(item.id) === Number(product.variantId))
+      : payload.data.variants?.find((item) => normalizeSku(String(item.sku || "")) === normalizeSku(product.sku));
+    const enriched = mapBigCommerceProduct(payload.data, variant);
+    return {
+      ...product,
+      description: enriched.description || product.description,
+      image: enriched.image || product.image,
+      url: enriched.url || product.url,
+      price: enriched.price || product.price,
+      inventoryLevel: enriched.inventoryLevel || product.inventoryLevel,
+      availability: enriched.availability || product.availability,
+      availabilityDescription: enriched.availabilityDescription || product.availabilityDescription,
+    };
+  } catch (error) {
+    console.error("[EMRN Pulse] BigCommerce product enrichment failed", error);
+    return product;
+  }
+}
+
+async function enrichProductsFromBigCommerce(products: CatalogProduct[]) {
+  return Promise.all(products.map(enrichProductFromBigCommerce));
 }
 
 async function searchTypesenseProducts(query: string, input: ProductSearchInput) {
@@ -753,7 +812,7 @@ export async function searchBySKU(sku: string) {
   }
 
   const typesenseProducts = await withBackorderAvailability(Array.from((primaryProducts.size ? primaryProducts : relatedProducts).values()));
-  if (typesenseProducts.length) return typesenseProducts;
+  if (typesenseProducts.length) return enrichProductsFromBigCommerce(typesenseProducts);
 
   const smartSearchProducts = await searchSmartSearchApiBySKU(sku);
   if (smartSearchProducts.length) return smartSearchProducts;

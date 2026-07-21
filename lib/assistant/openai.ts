@@ -19,6 +19,7 @@ const trustedProductSourceDomains = [
   "ambu.com",
   "nascohealthcare.com",
   "simulaids.com",
+  "statpacks.com",
   "sol-m.com",
   "mckesson.com",
   "henryschein.com",
@@ -36,6 +37,22 @@ function trustedDomainsForProducts(products: CatalogProduct[]) {
   const domains = new Set(trustedProductSourceDomains);
   for (const product of products) {
     const text = [product.brand, product.manufacturer, product.name].join(" ").toLowerCase();
+    for (const value of [product.brand, product.manufacturer]) {
+      const normalized = value
+        .toLowerCase()
+        .replace(/\b(?:inc|llc|ltd|limited|corp|corporation|company|co|medical|products|supplies|healthcare)\b/g, " ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+      if (!normalized) continue;
+      const compact = normalized.replace(/\s+/g, "");
+      const firstToken = normalized.split(/\s+/)[0];
+      for (const candidate of [compact, firstToken]) {
+        if (candidate.length >= 3) {
+          domains.add(`${candidate}.com`);
+          domains.add(`${candidate}.ca`);
+        }
+      }
+    }
     if (text.includes("laerdal")) domains.add("laerdal.com");
     if (text.includes("prestan")) domains.add("prestanproducts.com");
     if (/\bbd\b|becton/.test(text)) domains.add("bd.com");
@@ -53,9 +70,10 @@ function trustedDomainsForProducts(products: CatalogProduct[]) {
     if (text.includes("vyaire")) domains.add("vyaire.com");
     if (text.includes("ambu")) domains.add("ambu.com");
     if (text.includes("nasco")) domains.add("nascohealthcare.com");
+    if (text.includes("statpack") || text.includes("g3+") || text.includes("load n go") || text.includes("load-n-go")) domains.add("statpacks.com");
     if (text.includes("sol-m")) domains.add("sol-m.com");
   }
-  return Array.from(domains).slice(0, 30);
+  return Array.from(domains).slice(0, 40);
 }
 
 function detailAnswerInstructions(language: AssistantLanguage) {
