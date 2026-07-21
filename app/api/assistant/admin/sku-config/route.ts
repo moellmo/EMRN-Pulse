@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 function authorized(req: NextRequest) {
   const token = process.env.EMRN_ASSISTANT_ADMIN_TOKEN;
   if (!token && process.env.NODE_ENV !== "production") return true;
-  return req.headers.get("authorization") === `Bearer ${token}`;
+  return req.headers.get("authorization") === `Bearer ${token}` || req.nextUrl.searchParams.get("token") === token;
 }
 
 export async function GET(req: NextRequest) {

@@ -8,6 +8,9 @@ type SkuConfigAdminProps = {
   suffixes: string[];
 };
 
+const fallbackPrefixes = ["DY", "3M", "MDS", "LF", "PP", "SB", "WA", "ZZ", "BD", "PEL", "AMD"];
+const fallbackSuffixes = ["+", "U"];
+
 function parseList(value: string) {
   return value
     .split(",")
@@ -16,8 +19,10 @@ function parseList(value: string) {
 }
 
 export function SkuConfigAdmin({ token, prefixes, suffixes }: SkuConfigAdminProps) {
-  const [prefixText, setPrefixText] = useState(prefixes.join(", "));
-  const [suffixText, setSuffixText] = useState(suffixes.join(", "));
+  const initialPrefixes = prefixes.length ? prefixes : fallbackPrefixes;
+  const initialSuffixes = suffixes.length ? suffixes : fallbackSuffixes;
+  const [prefixText, setPrefixText] = useState(initialPrefixes.join(", "));
+  const [suffixText, setSuffixText] = useState(initialSuffixes.join(", "));
   const [status, setStatus] = useState("");
 
   async function save() {
