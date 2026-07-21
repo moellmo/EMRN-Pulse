@@ -68,6 +68,38 @@ function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unkn
     : `I can send an order status request to our team. I still need: ${fields}.`;
 }
 
+function invoiceMissingText(hasOrderOrInvoice: boolean, hasEmail: boolean, language: "en" | "fr" | "unknown") {
+  if (hasOrderOrInvoice && !hasEmail) {
+    return language === "fr"
+      ? "J’ai le numéro. Il me manque seulement le courriel utilisé pour la commande."
+      : "I have the number. I just need the email used for the order.";
+  }
+  if (!hasOrderOrInvoice && hasEmail) {
+    return language === "fr"
+      ? "J’ai le courriel. Il me manque seulement le numéro de commande ou de facture."
+      : "I have the email. I just need the order or invoice number.";
+  }
+  return language === "fr"
+    ? "Bien sûr. Pour la recherche de facture, envoyez-moi le numéro de commande et le courriel utilisé pour la commande."
+    : "Sure. For invoice lookup, please send the order number and the email used for the order.";
+}
+
+function quoteLookupMissingText(hasQuoteNumber: boolean, hasEmail: boolean, language: "en" | "fr" | "unknown") {
+  if (hasQuoteNumber && !hasEmail) {
+    return language === "fr"
+      ? "J’ai le numéro du devis. Je peux le rechercher maintenant; si vous voulez vérifier l’identité, envoyez aussi le courriel utilisé pour le devis."
+      : "I have the quote number. I can look it up now; if you want identity verification, also send the email used for the quote.";
+  }
+  if (!hasQuoteNumber && hasEmail) {
+    return language === "fr"
+      ? "J’ai le courriel. Il me manque seulement le numéro du devis."
+      : "I have the email. I just need the quote number.";
+  }
+  return language === "fr"
+    ? "Bien sûr. Pour rechercher un devis, envoyez-moi le numéro du devis ou le courriel utilisé pour le devis."
+    : "Sure. For quote lookup, please send the quote number or the email used for the quote.";
+}
+
 function isOrderHistoryIntent(text: string) {
   return /\b(order history|purchase history|recent orders|previous orders|past orders|last order|what did i order|what have i ordered|reorder|re-order|order again|same as last|usual order|mes commandes|historique|derni[eè]re commande|commander de nouveau)\b/i.test(text);
 }
@@ -124,13 +156,21 @@ function orderNumberFromText(text: string) {
   );
 }
 
+function standaloneOrderNumberFromText(text: string) {
+  return String(text || "").match(/\b\d{3,12}\b/)?.[0] || "";
+}
+
 function quoteNumberFromText(text: string) {
   return (
     text.match(/\b(?:quote|devis|rfq)\s+(?:status|lookup|look\s+up|number|#|no\.?|statut|numero|num[eé]ro)\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{3,30})\b/i)?.[1] ||
     text.match(/\b(?:quote|devis|rfq)\s*(?:number|#|no\.?)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{3,30})\b/i)?.[1] ||
-    text.match(/\b(?:Q|RFQ)-?\d{3,}\b/i)?.[0] ||
+    text.match(/\b(?:QN|Q|RFQ)-?\d{3,}\b/i)?.[0] ||
     ""
   );
+}
+
+function standaloneQuoteNumberFromText(text: string) {
+  return String(text || "").match(/\b(?:QN|Q|RFQ)-?\d{3,}\b/i)?.[0] || "";
 }
 
 function recentAssistantQuoteNumber(messages: AssistantMessage[]) {
@@ -1527,7 +1567,13 @@ async function handleAssistantPost(req: NextRequest) {
     );
 
   const looksLikeOrderDetailsReply =
-    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) || /\border\s*#?\s*\d{3,}\b|\b\d{5,}\b/i.test(latest);
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) || /\border\s*#?\s*\d{3,}\b|\b\d{3,}\b/i.test(latest);
+  const shouldContinueInvoiceLookup = priorAssistantRequestedInvoiceLookup(messages) &&
+    !isQuickActionPrompt(latest) &&
+    (looksLikeOrderDetailsReply || Boolean(invoiceNumberFromText(latest)));
+  const shouldContinueQuoteLookup = priorAssistantRequestedQuoteLookup(messages) &&
+    !isQuickActionPrompt(latest) &&
+    (Boolean(standaloneQuoteNumberFromText(latest)) || Boolean(quoteNumberFromText(latest)) || Boolean(orderHistoryEmail(messages)));
 
   if (isCurrentCartQuestion(latest)) {
     return new Response(textStream(currentCartText(pageContext, language)), {
@@ -1535,17 +1581,14 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isInvoiceLookupIntent(latest) || (priorAssistantRequestedInvoiceLookup(messages) && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
+  if (isInvoiceLookupIntent(latest) || shouldContinueInvoiceLookup) {
     const email = orderHistoryEmail(messages);
-    const orderNumber = orderNumberFromText(messages.map((message) => message.content).join("\n"));
+    const conversationText = messages.map((message) => message.content).join("\n");
+    const orderNumber = orderNumberFromText(conversationText) || standaloneOrderNumberFromText(latest);
     const invoiceNumber = invoiceNumberFromText(messages.map((message) => message.content).join("\n"));
     if (!email || (!orderNumber && !invoiceNumber)) {
       return new Response(
-        textStream(
-          language === "fr"
-            ? "Bien sûr. Pour la recherche de facture, envoyez-moi le numéro de commande et le courriel utilisé pour la commande."
-            : "Sure. For invoice lookup, please send the order number and the email used for the order."
-        ),
+        textStream(invoiceMissingText(Boolean(orderNumber || invoiceNumber), Boolean(email), language)),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }
@@ -1572,7 +1615,7 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (isQuotePurchaseIntent(latest)) {
     const conversationText = messages.map((message) => message.content).join("\n");
-    const quoteNumber = quoteNumberFromText(conversationText) || recentAssistantQuoteNumber(messages);
+    const quoteNumber = quoteNumberFromText(conversationText) || standaloneQuoteNumberFromText(latest) || recentAssistantQuoteNumber(messages);
     if (!quoteNumber) {
       return new Response(
         textStream(
@@ -1602,17 +1645,13 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isQuoteLookupIntent(latest) || (priorAssistantRequestedQuoteLookup(messages) && !isQuickActionPrompt(latest))) {
+  if (isQuoteLookupIntent(latest) || shouldContinueQuoteLookup) {
     const conversationText = messages.map((message) => message.content).join("\n");
-    const quoteNumber = quoteNumberFromText(conversationText);
+    const quoteNumber = quoteNumberFromText(conversationText) || standaloneQuoteNumberFromText(latest);
     const email = orderHistoryEmail(messages);
     if (!quoteNumber && !email) {
       return new Response(
-        textStream(
-          language === "fr"
-            ? "Bien sûr. Pour rechercher un devis, envoyez-moi le numéro du devis ou le courriel utilisé pour le devis."
-            : "Sure. For quote lookup, please send the quote number or the email used for the quote."
-        ),
+        textStream(quoteLookupMissingText(Boolean(quoteNumber), Boolean(email), language)),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }
