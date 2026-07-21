@@ -4,7 +4,7 @@ import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/ass
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
-import { getOrderStatus } from "@/lib/assistant/orders";
+import { getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
 import type { AssistantMessage, CatalogProduct, ProductPageContext } from "@/lib/assistant/types";
 
@@ -65,6 +65,49 @@ function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unkn
   return language === "fr"
     ? `Je peux envoyer une demande de suivi de commande à notre équipe. Il me manque: ${fields}.`
     : `I can send an order status request to our team. I still need: ${fields}.`;
+}
+
+function isOrderHistoryIntent(text: string) {
+  return /\b(order history|purchase history|recent orders|previous orders|past orders|last order|what did i order|what have i ordered|reorder|re-order|order again|same as last|usual order|mes commandes|historique|derni[eè]re commande|commander de nouveau)\b/i.test(text);
+}
+
+function priorAssistantRequestedOrderHistory(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /email (?:was )?used for the orders|courriel (?:a été |a ete |)?utilisé pour les commandes|courriel (?:a été |a ete |)?utilise pour les commandes/i.test(message.content)
+    );
+}
+
+function orderHistoryEmail(messages: AssistantMessage[]) {
+  return messages.map((message) => message.content).join("\n").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+}
+
+function recentOrdersText(
+  result: Awaited<ReturnType<typeof getRecentOrdersByEmail>>,
+  language: "en" | "fr" | "unknown"
+) {
+  if (!result.verified || !result.orders.length) {
+    return language === "fr"
+      ? "Je n’ai pas trouvé de commandes récentes pour ce courriel. Je peux envoyer la demande au support si vous voulez."
+      : "I did not find recent orders for that email. I can send this to support if you want.";
+  }
+
+  const lines = result.orders.slice(0, 5).map((order, index) => {
+    const products = order.products.slice(0, 4).map((product) => {
+      const sku = product.sku ? `SKU: ${product.sku}` : "SKU unavailable";
+      return `${product.quantity || 1} x ${product.name || product.sku} (${sku})`;
+    });
+    const more = order.products.length > 4 ? language === "fr" ? "; autres articles inclus" : "; more items included" : "";
+    const total = order.total ? ` — ${order.currencyCode} ${order.total.toFixed(2)}` : "";
+    return `${index + 1}. Order ${order.orderNumber} — ${order.status}${total}${order.createdAt ? ` — ${order.createdAt}` : ""}\n   ${products.join("; ")}${more}`;
+  });
+
+  return language === "fr"
+    ? `J’ai trouvé ces commandes récentes:\n${lines.join("\n")}\n\nDites-moi quel SKU ou numéro de commande vous voulez recommander, et je peux chercher les articles disponibles.`
+    : `I found these recent orders:\n${lines.join("\n")}\n\nTell me which SKU or order number you want to reorder, and I can look up the available items.`;
 }
 
 function orderTrackingText(
@@ -1308,6 +1351,25 @@ async function handleAssistantPost(req: NextRequest) {
     }
 
     return new Response(textStream(orderStatusMissingText(draft.missing, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (isOrderHistoryIntent(latest) || (priorAssistantRequestedOrderHistory(messages) && orderHistoryEmail(messages) && !isQuickActionPrompt(latest))) {
+    const email = orderHistoryEmail(messages);
+    if (!email) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Bien sûr. Quel courriel a été utilisé pour les commandes?"
+            : "Sure. What email was used for the orders?"
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    const recentOrders = await getRecentOrdersByEmail(email, 5);
+    return new Response(textStream(recentOrdersText(recentOrders, language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }

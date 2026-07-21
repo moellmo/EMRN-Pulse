@@ -1,5 +1,6 @@
-const STORE_HASH = process.env.BIGCOMMERCE_STORE_HASH;
-const ACCESS_TOKEN = process.env.BIGCOMMERCE_ACCESS_TOKEN;
+const STORE_HASH = process.env.BIGCOMMERCE_ADMIN_STORE_HASH || process.env.BIGCOMMERCE_STORE_HASH;
+const ACCESS_TOKEN = process.env.BIGCOMMERCE_ADMIN_ACCESS_TOKEN || process.env.BIGCOMMERCE_ACCESS_TOKEN;
+const CLIENT_ID = process.env.BIGCOMMERCE_ADMIN_CLIENT_ID;
 const API_V2_BASE = STORE_HASH ? `https://api.bigcommerce.com/stores/${STORE_HASH}/v2` : "";
 
 export type OrderLookupInput = {
@@ -17,12 +18,48 @@ export type OrderLookupResult = {
   message?: string;
 };
 
+export type RecentOrderProduct = {
+  productId: number;
+  variantId?: number;
+  sku: string;
+  name: string;
+  quantity: number;
+};
+
+export type RecentOrder = {
+  orderNumber: string;
+  status: string;
+  createdAt: string;
+  total: number;
+  currencyCode: string;
+  products: RecentOrderProduct[];
+};
+
+export type RecentOrdersResult = {
+  available: boolean;
+  verified: boolean;
+  email: string;
+  orders: RecentOrder[];
+  message?: string;
+};
+
 type BigCommerceOrder = {
   id?: number;
   status?: string;
+  date_created?: string;
+  total_inc_tax?: string;
+  currency_code?: string;
   billing_address?: {
     email?: string;
   };
+};
+
+type BigCommerceOrderProduct = {
+  product_id?: number;
+  variant_id?: number;
+  sku?: string;
+  name?: string;
+  quantity?: number;
 };
 
 type BigCommerceShipment = {
@@ -35,6 +72,7 @@ async function bcFetchV2<T>(path: string): Promise<T> {
   const response = await fetch(`${API_V2_BASE}${path}`, {
     headers: {
       "X-Auth-Token": ACCESS_TOKEN || "",
+      ...(CLIENT_ID ? { "X-Auth-Client": CLIENT_ID } : {}),
       Accept: "application/json",
       "Content-Type": "application/json",
     },
@@ -108,3 +146,62 @@ export async function getOrderStatus(input: OrderLookupInput): Promise<OrderLook
   }
 }
 
+export async function getRecentOrdersByEmail(email: string, limit = 5): Promise<RecentOrdersResult> {
+  const normalizedEmail = normalizeEmail(email);
+  if (!API_V2_BASE || !ACCESS_TOKEN) {
+    return {
+      available: false,
+      verified: false,
+      email: normalizedEmail,
+      orders: [],
+      message: "BigCommerce Orders API is not configured.",
+    };
+  }
+
+  try {
+    const orders = await bcFetchV2<BigCommerceOrder[]>(
+      `/orders?email=${encodeURIComponent(normalizedEmail)}&limit=${Math.min(Math.max(limit, 1), 10)}&page=1&sort=date_created:desc`
+    );
+    const verifiedOrders = (orders || []).filter(
+      (order) => normalizeEmail(order.billing_address?.email || "") === normalizedEmail && order.id
+    );
+
+    const recentOrders = await Promise.all(
+      verifiedOrders.slice(0, limit).map(async (order) => {
+        const products = await bcFetchV2<BigCommerceOrderProduct[]>(
+          `/orders/${encodeURIComponent(String(order.id))}/products`
+        ).catch(() => []);
+
+        return {
+          orderNumber: String(order.id),
+          status: order.status || "Status unavailable",
+          createdAt: order.date_created || "",
+          total: Number(order.total_inc_tax || 0),
+          currencyCode: order.currency_code || "CAD",
+          products: products.map((product) => ({
+            productId: Number(product.product_id || 0),
+            variantId: product.variant_id ? Number(product.variant_id) : undefined,
+            sku: String(product.sku || ""),
+            name: String(product.name || ""),
+            quantity: Number(product.quantity || 0),
+          })).filter((product) => product.name || product.sku),
+        };
+      })
+    );
+
+    return {
+      available: true,
+      verified: true,
+      email: normalizedEmail,
+      orders: recentOrders,
+    };
+  } catch (error) {
+    return {
+      available: true,
+      verified: false,
+      email: normalizedEmail,
+      orders: [],
+      message: error instanceof Error ? error.message : "Unable to look up recent orders.",
+    };
+  }
+}
