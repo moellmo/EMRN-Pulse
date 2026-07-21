@@ -30,8 +30,9 @@ export async function GET(req: Request) {
   iframe.setAttribute("frameborder", "0");
   iframe.allow = "clipboard-write";
 
-  var launcherProxy = document.createElement("button");
-  launcherProxy.type = "button";
+  var launcherProxy = document.createElement("div");
+  launcherProxy.setAttribute("role", "button");
+  launcherProxy.setAttribute("tabindex", "0");
   launcherProxy.setAttribute("aria-label", "Open EMRN Pulse");
   launcherProxy.style.position = "fixed";
   launcherProxy.style.right = "0";
@@ -42,6 +43,10 @@ export async function GET(req: Request) {
   launcherProxy.style.padding = "0";
   launcherProxy.style.margin = "0";
   launcherProxy.style.background = "transparent";
+  launcherProxy.style.boxShadow = "none";
+  launcherProxy.style.outline = "0";
+  launcherProxy.style.appearance = "none";
+  launcherProxy.style.webkitAppearance = "none";
   launcherProxy.style.cursor = "pointer";
   launcherProxy.style.zIndex = "2147483001";
   launcherProxy.style.colorScheme = "normal";
@@ -344,6 +349,12 @@ export async function GET(req: Request) {
   });
   window.addEventListener("emrn-pulse:close", closePulse);
   launcherProxy.addEventListener("click", openPulse);
+  launcherProxy.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openPulse();
+    }
+  });
 
   window.addEventListener("message", function (event) {
     if (event.origin !== origin) return;
