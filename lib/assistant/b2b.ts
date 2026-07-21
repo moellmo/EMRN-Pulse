@@ -7,6 +7,7 @@ type UnknownRecord = Record<string, unknown>;
 export type B2BQuoteLookupResult = {
   available: boolean;
   found: boolean;
+  quoteId?: string;
   quoteNumber?: string;
   status?: string;
   createdAt?: string;
@@ -23,6 +24,7 @@ export type B2BQuoteLookupResult = {
 export type B2BInvoiceLookupResult = {
   available: boolean;
   found: boolean;
+  invoiceId?: string;
   invoiceNumber?: string;
   orderNumber?: string;
   status?: string;
@@ -101,8 +103,17 @@ function moneyValue(value: unknown) {
   return number(value);
 }
 
+function currencyCode(value: unknown) {
+  if (value && typeof value === "object") {
+    const record = value as UnknownRecord;
+    return text(record.currencyCode || record.code || record.token);
+  }
+  return text(value);
+}
+
 function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
-  const quoteNumber = text(record.quoteId || record.id || record.quoteNumber || record.rfqId);
+  const quoteId = text(record.quoteId || record.id || record.rfqId);
+  const quoteNumber = text(record.quoteNumber || record.referenceNumber || quoteId);
   const contact = record.contactInfo && typeof record.contactInfo === "object" ? record.contactInfo as UnknownRecord : {};
   const company = record.companyInfo && typeof record.companyInfo === "object" ? record.companyInfo as UnknownRecord : {};
   const productList = Array.isArray(record.productList)
@@ -115,6 +126,7 @@ function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
   return {
     available: true,
     found: Boolean(quoteNumber),
+    quoteId,
     quoteNumber,
     status: text(record.statusText || record.status || record.quoteStatus),
     createdAt: text(record.createdAt || record.created_at || record.createdTime),
@@ -122,8 +134,8 @@ function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
     quoteUrl: text(record.quoteUrl || record.url || record.checkoutUrl),
     customerEmail: text(record.userEmail || record.email || contact.email),
     companyName: text(record.company || record.companyName || company.companyName || company.name),
-    total: number(record.grandTotal || record.totalAmount || record.total || record.subtotal),
-    currencyCode: text(record.currencyCode || record.currency || "CAD"),
+    total: moneyValue(record.grandTotal || record.totalAmount || record.total || record.subtotal),
+    currencyCode: currencyCode(record.currencyCode || record.currency) || "CAD",
     items: productList
       .filter((item): item is UnknownRecord => Boolean(item && typeof item === "object"))
       .map((item) => ({
@@ -136,12 +148,14 @@ function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
 }
 
 function normalizeInvoice(record: UnknownRecord): B2BInvoiceLookupResult {
-  const invoiceNumber = text(record.invoiceNumber || record.invoiceNo || record.id || record.invoiceId);
+  const invoiceId = text(record.id || record.invoiceId);
+  const invoiceNumber = text(record.invoiceNumber || record.invoiceNo || invoiceId);
   const originalBalance = record.originalBalance && typeof record.originalBalance === "object" ? record.originalBalance as UnknownRecord : {};
   const openBalance = record.openBalance && typeof record.openBalance === "object" ? record.openBalance as UnknownRecord : {};
   return {
     available: true,
     found: Boolean(invoiceNumber),
+    invoiceId,
     invoiceNumber,
     orderNumber: text(record.orderNumber || record.bcOrderId || record.orderId),
     status: text(record.statusText || record.status),
@@ -177,13 +191,20 @@ export async function lookupB2BQuote(input: { quoteNumber?: string; email?: stri
     const quoteNumber = text(input.quoteNumber).replace(/^#/, "");
     const query = new URLSearchParams();
     query.set("limit", "20");
-    if (quoteNumber) query.set("quoteId", quoteNumber);
+    if (quoteNumber) {
+      if (/^\d+$/.test(quoteNumber)) query.set("quoteId", quoteNumber);
+      else query.set("quoteNumber", quoteNumber);
+    }
     if (input.company) query.set("company", input.company);
     const payload = await b2bFetch<unknown>(`/rfq?${query.toString()}`);
     const records = recordsFromPayload(payload)
       .map(normalizeQuote)
       .filter((quote) =>
-        (!quoteNumber || quote.quoteNumber === quoteNumber || matches(quote.quoteNumber || "", quoteNumber)) &&
+        (!quoteNumber ||
+          quote.quoteId === quoteNumber ||
+          quote.quoteNumber === quoteNumber ||
+          matches(quote.quoteNumber || "", quoteNumber) ||
+          matches(quote.quoteId || "", quoteNumber)) &&
         (!input.email || !quote.customerEmail || quote.customerEmail.toLowerCase() === input.email.toLowerCase())
       );
     const quote = records[0];
@@ -217,7 +238,7 @@ export async function lookupB2BInvoice(input: { orderNumber?: string; invoiceNum
     if (!invoice?.invoiceNumber) return { available: true, found: false };
 
     try {
-      const pdf = await b2bFetch<unknown>(`/ip/invoices/${encodeURIComponent(invoice.invoiceNumber)}/download-pdf`);
+      const pdf = await b2bFetch<unknown>(`/ip/invoices/${encodeURIComponent(invoice.invoiceId || invoice.invoiceNumber)}/download-pdf`);
       const records = recordsFromPayload(pdf);
       const pdfRecord = records[0] || (pdf && typeof pdf === "object" ? pdf as UnknownRecord : {});
       invoice.pdfUrl = text(pdfRecord.url || pdfRecord.pdfUrl || pdfRecord.downloadUrl || invoice.pdfUrl);

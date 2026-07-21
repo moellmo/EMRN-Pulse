@@ -160,6 +160,14 @@ function standaloneOrderNumberFromText(text: string) {
   return String(text || "").match(/\b\d{3,12}\b/)?.[0] || "";
 }
 
+function recentStandaloneOrderNumber(messages: AssistantMessage[]) {
+  return messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "user" && standaloneOrderNumberFromText(message.content))
+    ?.content.match(/\b\d{3,12}\b/)?.[0] || "";
+}
+
 function quoteNumberFromText(text: string) {
   return (
     text.match(/\b(?:quote|devis|rfq)\s+(?:status|lookup|look\s+up|number|#|no\.?|statut|numero|num[eé]ro)\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{3,30})\b/i)?.[1] ||
@@ -325,9 +333,12 @@ function invoiceLookupText(
       : `I found invoice${invoice.invoiceNumber ? ` ${invoice.invoiceNumber}` : ""} for order ${orderNumber}. Link: ${link}`;
   }
 
+  const printableOrderUrl = orderNumber
+    ? `https://emrn.ca/account.php?action=view_order&order_id=${encodeURIComponent(orderNumber)}`
+    : "https://emrn.ca/account.php?action=order_status";
   return language === "fr"
-    ? `J’ai confirmé la commande ${orderNumber}, mais je ne peux pas confirmer un lien de facture PDF disponible automatiquement. Vous pouvez vérifier dans votre compte EMRN, ou je peux envoyer cette demande au support.`
-    : `I confirmed order ${orderNumber}, but I cannot confirm an automatic invoice PDF link is available. You can check your EMRN account, or I can send this request to support.`;
+    ? `J’ai confirmé la commande ${orderNumber}, mais je ne vois pas de PDF de facture B2B disponible automatiquement. Vous pouvez ouvrir la page de la commande et utiliser « Print Invoice » si vous êtes connecté: ${printableOrderUrl}\n\nJe peux aussi envoyer cette demande au support.`
+    : `I confirmed order ${orderNumber}, but I do not see an automatic B2B invoice PDF available. You can open the order page and use “Print Invoice” if you are signed in: ${printableOrderUrl}\n\nI can also send this request to support.`;
 }
 
 function quoteLookupText(quote: Awaited<ReturnType<typeof lookupB2BQuote>>, language: "en" | "fr" | "unknown") {
@@ -1584,7 +1595,7 @@ async function handleAssistantPost(req: NextRequest) {
   if (isInvoiceLookupIntent(latest) || shouldContinueInvoiceLookup) {
     const email = orderHistoryEmail(messages);
     const conversationText = messages.map((message) => message.content).join("\n");
-    const orderNumber = orderNumberFromText(conversationText) || standaloneOrderNumberFromText(latest);
+    const orderNumber = orderNumberFromText(conversationText) || recentStandaloneOrderNumber(messages) || standaloneOrderNumberFromText(latest);
     const invoiceNumber = invoiceNumberFromText(messages.map((message) => message.content).join("\n"));
     if (!email || (!orderNumber && !invoiceNumber)) {
       return new Response(
@@ -1639,7 +1650,7 @@ async function handleAssistantPost(req: NextRequest) {
       );
     }
 
-    const checkout = await createB2BQuoteCheckout(quote.quoteNumber || quoteNumber);
+    const checkout = await createB2BQuoteCheckout(quote.quoteId || quote.quoteNumber || quoteNumber);
     return new Response(textStream(quoteCheckoutText(quote.quoteNumber || quoteNumber, checkout, language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
