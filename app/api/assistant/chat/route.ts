@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, searchBySKU, searchProducts } from "@/lib/assistant/catalog";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderStatus } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
@@ -291,6 +291,56 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
   return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
 }
 
+function packageInfo(product: CatalogProduct) {
+  const text = [product.name, product.description].filter(Boolean).join("\n");
+  const packageCode = text.match(/\b(BT|BX|BOX|PK|PACK|CS|CASE)\s*\/\s*(\d{1,5})\b/i);
+  if (packageCode?.[1] && packageCode[2]) {
+    const code = packageCode[1].toUpperCase();
+    const count = packageCode[2];
+    if (/^(BT|BX|BOX)$/.test(code)) return `box of ${count}`;
+    if (/^(PK|PACK)$/.test(code)) return `pack of ${count}`;
+    if (/^(CS|CASE)$/.test(code)) return `case of ${count}`;
+  }
+  const patterns = [
+    /\bbox\s+of\s+(\d{1,5})\b/i,
+    /\bpack\s+of\s+(\d{1,5})\b/i,
+    /\bcase\s+of\s+(\d{1,5})\b/i,
+    /\b(\d{1,5})\s*(?:\/|per)\s*(?:box|pack|case)\b/i,
+    /\b(\d{1,5})\s*(?:count|ct)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[0]) return match[0].replace(/\s+/g, " ").trim();
+  }
+  return "";
+}
+
+function looksLikePackageCode(value: string) {
+  return /^(?:BT|BX|BOX|PK|PACK|CS|CASE)\s*\/\s*\d{1,5}$/i.test(String(value || "").trim());
+}
+
+function soldByInfo(product: CatalogProduct) {
+  const values = [
+    valueAfterLabel(product.description || "", "Sold By"),
+    valueAfterLabel(product.description || "", "Manufacturer") ||
+    product.manufacturer ||
+      product.brand,
+  ];
+  return values.map((value) => String(value || "").trim()).find((value) => value && !looksLikePackageCode(value)) || "";
+}
+
+function cartSummaryLines(cartProducts: Array<{ product: CatalogProduct; quantity: number }>, language: "en" | "fr" | "unknown") {
+  return cartProducts.slice(0, 8).map(({ product, quantity }, index) => {
+    const pack = packageInfo(product);
+    const packText = pack
+      ? language === "fr"
+        ? `; vendu comme ${pack}`
+        : `; sold as ${pack}`
+      : "";
+    return `${index + 1}. ${quantity} x ${product.name} (SKU: ${product.sku})${packText}`;
+  });
+}
+
 function exactProductFoundText(product: CatalogProduct, language: "en" | "fr" | "unknown", query: string, includeNextAction = true) {
   const price = product.quoteOnly
     ? language === "fr"
@@ -321,17 +371,25 @@ function exactProductFoundText(product: CatalogProduct, language: "en" | "fr" | 
   return includeNextAction ? `${foundText}\n\n${purchaseAction}` : foundText;
 }
 
-function cartReadyText(itemCount: number, lineItems: Array<{ productId: number; variantId?: number; quantity: number }>, language: "en" | "fr" | "unknown") {
+function cartReadyText(
+  itemCount: number,
+  lineItems: Array<{ productId: number; variantId?: number; quantity: number }>,
+  language: "en" | "fr" | "unknown",
+  cartProducts: Array<{ product: CatalogProduct; quantity: number }> = []
+) {
   const token = cartItemsToken(lineItems);
+  const summary = cartProducts.length
+    ? `\n\n${language === "fr" ? "Panier:" : "Cart:"}\n${cartSummaryLines(cartProducts, language).join("\n")}`
+    : "";
   if (language === "fr") {
     return itemCount > 1
-      ? `J’ai ajouté ces articles au panier. Vous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`
-      : `J’ai ajouté l’article au panier. Vous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`;
+      ? `J’ai ajouté ces articles au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`
+      : `J’ai ajouté l’article au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: https://emrn.ca/cart.php${token}`;
   }
 
   return itemCount > 1
-    ? `I added those items to your cart. You can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`
-    : `I added the item to your cart. You can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`;
+    ? `I added those items to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`
+    : `I added the item to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: https://emrn.ca/cart.php${token}`;
 }
 
 function valueAfterLabel(text: string, label: string) {
@@ -349,6 +407,8 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
   const wantsAvailability = /\b(availability|available|in stock|stock|ships|lead time)\b/i.test(question);
+  const wantsPackage = /\b(how\s+many|box|boxes|pack|package|case|count|per box|per pack)\b/i.test(question);
+  const wantsSoldBy = /\b(who\s+makes|who\s+sells|sold\s+by|manufacturer|brand)\b/i.test(question);
   const lines: string[] = [];
 
   if (wantsPrice && product.price) {
@@ -358,6 +418,16 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   if (wantsAvailability) {
     const availability = product.availabilityDescription || product.availability;
     if (availability) lines.push(language === "fr" ? `Disponibilité: ${availability}` : `Availability: ${availability}`);
+  }
+
+  if (wantsPackage) {
+    const pack = packageInfo(product);
+    if (pack) lines.push(language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`);
+  }
+
+  if (wantsSoldBy) {
+    const soldBy = soldByInfo(product);
+    if (soldBy) lines.push(language === "fr" ? `Vendu par: ${soldBy}` : `Sold by: ${soldBy}`);
   }
 
   if (wantsColor) {
@@ -407,6 +477,99 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
     : "";
 
   return `${intro}\n\n${lines.map((line) => `- ${line}`).join("\n")}\n\n[View product](${product.url})${addPrompt}`;
+}
+
+function isCompareIntent(text: string) {
+  return /\b(compare|comparison|difference|differences|which is cheaper|which one is cheaper|which costs less|versus|vs\.?|comparez|difference entre|différence entre)\b/i.test(text);
+}
+
+function isResultFilterIntent(text: string) {
+  return /\b(cheaper|cheapest|least expensive|lowest price)\b/i.test(text) ||
+    /\b[a-z0-9&.-]{2,}\s+only\b/i.test(text) ||
+    /\b(?:only|just)\b.*\b(?:in stock|available now|low stock|brand|adult|child|pediatric|sterile|non-sterile|\d{1,4}\s*(?:ml|g|ga|gauge|inch|in)\b)/i.test(text) ||
+    /\b(?:in stock|available now|low stock|adult|child|pediatric|sterile|non-sterile|\d{1,4}\s*(?:ml|g|ga|gauge|inch|in)\b)\b.*\bonly\b/i.test(text) ||
+    /\bshow\s+(?:me\s+)?(?:only|just|cheaper|the cheapest|in stock|available now|low stock|adult|child|pediatric|sterile|non-sterile|\d{1,4}\s*(?:ml|g|ga|gauge|inch|in)\b)/i.test(text);
+}
+
+function availabilityBucket(product: CatalogProduct) {
+  return [product.availabilityDescription, product.availability].filter(Boolean).join(" ").toLowerCase();
+}
+
+function filterProductsFromText(products: CatalogProduct[], text: string) {
+  let filtered = [...products];
+  const normalized = text.toLowerCase();
+
+  if (/\b(cheaper|cheapest|least expensive|lowest price)\b/i.test(text)) {
+    filtered = filtered.filter((product) => product.price > 0).sort((a, b) => a.price - b.price);
+  }
+
+  if (/\b(in stock|available now)\b/i.test(text)) {
+    filtered = filtered.filter((product) => {
+      const availability = availabilityBucket(product);
+      return /\bin stock\b/.test(availability) || product.inventoryLevel > 0;
+    });
+  } else if (/\b(low stock)\b/i.test(text)) {
+    filtered = filtered.filter((product) => /\blow stock\b/.test(availabilityBucket(product)));
+  } else if (/\bavailable\b/i.test(text)) {
+    filtered = filtered.filter((product) => {
+      const availability = availabilityBucket(product);
+      return availability.includes("available") || availability.includes("in stock") || product.purchasable;
+    });
+  }
+
+  const brandMatch = normalized.match(/\b(?:brand\s+)?([a-z0-9&.-]{2,})\s+only\b/) || normalized.match(/\bonly\s+([a-z0-9&.-]{2,})\b/);
+  const brand = brandMatch?.[1] || "";
+  if (brand && !/^(in|stock|available|cheaper|adult|child|pediatric|sterile|non)$/.test(brand)) {
+    filtered = filtered.filter((product) =>
+      [product.brand, product.manufacturer, product.name, product.parentName, product.sku]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(brand))
+    );
+  }
+
+  if (/\badult\b/i.test(text)) filtered = filtered.filter((product) => /\badult\b/i.test(`${product.name} ${product.description}`));
+  if (/\b(child|pediatric|paediatric)\b/i.test(text)) filtered = filtered.filter((product) => /\b(child|pediatric|paediatric)\b/i.test(`${product.name} ${product.description}`));
+  if (/\bnon[-\s]?sterile\b/i.test(text)) filtered = filtered.filter((product) => /\bnon[-\s]?sterile\b/i.test(`${product.name} ${product.description}`));
+  else if (/\bsterile\b/i.test(text)) filtered = filtered.filter((product) => /\bsterile\b/i.test(`${product.name} ${product.description}`));
+
+  const sizeMatch = normalized.match(/\b(\d{1,4})\s*(ml|g|ga|gauge|inch|in)\b/);
+  if (sizeMatch) {
+    const value = sizeMatch[1];
+    const unit = sizeMatch[2];
+    const sizePattern = new RegExp(`\\b${value}\\s*(?:${unit}|${unit === "g" ? "ga|gauge" : unit === "ga" ? "g|gauge" : unit === "in" ? "inch" : unit})\\b`, "i");
+    filtered = filtered.filter((product) => sizePattern.test(`${product.name} ${product.description}`));
+  }
+
+  return filtered;
+}
+
+function compareProductsText(products: CatalogProduct[], language: "en" | "fr" | "unknown", question: string) {
+  const selected = selectProductsForCart(question, products).slice(0, 4);
+  const firstCount =
+    /\bfirst\s+two\b/i.test(question) ? 2 :
+      /\bfirst\s+three\b/i.test(question) ? 3 :
+        /\bfirst\s+four\b/i.test(question) ? 4 :
+          0;
+  const compared = firstCount ? products.slice(0, firstCount) : selected.length >= 2 ? selected : products.slice(0, 4);
+  if (compared.length < 2) return "";
+
+  const lines = compared.map((product, index) => {
+    const price = product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
+    const availability = product.availabilityDescription || product.availability || (language === "fr" ? "disponibilité à confirmer" : "availability should be confirmed");
+    const pack = packageInfo(product);
+    const soldBy = soldByInfo(product);
+    const packText = pack ? (language === "fr" ? `; vendu comme ${pack}` : `; sold as ${pack}`) : "";
+    const soldByText = soldBy ? (language === "fr" ? `; vendu par ${soldBy}` : `; sold by ${soldBy}`) : "";
+    return `${index + 1}. **${product.name}** — SKU: ${product.sku} — ${price}. ${availability}${packText}${soldByText}. [View product](${product.url})`;
+  });
+  const cheapest = compared.filter((product) => product.price > 0).sort((a, b) => a.price - b.price)[0];
+  const note = cheapest
+    ? language === "fr"
+      ? `\n\nLe moins cher dans cette sélection est **${cheapest.name}** à $${cheapest.price.toFixed(2)}.`
+      : `\n\nThe lowest-priced option in this set is **${cheapest.name}** at $${cheapest.price.toFixed(2)}.`
+    : "";
+  const intro = language === "fr" ? "Voici une comparaison rapide avec les données EMRN:" : "Here’s a quick comparison from EMRN product data:";
+  return `${intro}\n\n${lines.join("\n")}${note}\n\nTell me which number you want and the quantity, and I can add it to cart.`;
 }
 
 function isPartsOrAccessoryQuestion(text: string) {
@@ -780,7 +943,7 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isAvailabilityIntent(latest)) {
+  if (isAvailabilityIntent(latest) && !isResultFilterIntent(latest)) {
     const skuCandidates = extractSkuCandidates(latest);
     const pageProducts = skuCandidates.length
       ? (await Promise.all(skuCandidates.map((sku) => searchBySKU(sku)))).flat()
@@ -790,7 +953,8 @@ async function handleAssistantPost(req: NextRequest) {
     const rememberedProducts = !skuCandidates.length && !pageProducts.length
       ? await recentAssistantProducts(messages)
       : [];
-    const availabilityProducts = pageProducts.length ? pageProducts : rememberedProducts;
+    const availabilityPool = pageProducts.length ? pageProducts : rememberedProducts;
+    const availabilityProducts = availabilityPool.length ? selectProductsForCart(latest, availabilityPool) : [];
 
     if (availabilityProducts.length) {
       return new Response(textStream(availabilityText(availabilityProducts[0], language)), {
@@ -816,6 +980,8 @@ async function handleAssistantPost(req: NextRequest) {
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !isProductDetailIntent(latest) && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
+  const shouldCompareRememberedProducts = isCompareIntent(latest);
+  const shouldFilterRememberedProducts = isResultFilterIntent(latest) && !skuCandidates.length;
   const shouldHandleCart =
     isCartIntent(latest) ||
     replyingToCartChoice ||
@@ -827,6 +993,8 @@ async function handleAssistantPost(req: NextRequest) {
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
     isProductDetailIntent(latest) ||
+    shouldCompareRememberedProducts ||
+    shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
   const rememberedCartProducts = shouldHandleCart && !skuCandidates.length && !pageProductsForCart.length
     ? await recentAssistantProducts(messages)
@@ -881,6 +1049,32 @@ async function handleAssistantPost(req: NextRequest) {
         language === "fr"
           ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
           : "You can create or use an EMRN account from the account area on the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (shouldCompareRememberedProducts && products.length) {
+    const comparison = compareProductsText(products, language, latest);
+    if (comparison) {
+      return new Response(textStream(comparison), {
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+  }
+
+  if (shouldFilterRememberedProducts && products.length) {
+    const filteredProducts = filterProductsFromText(products, latest);
+    if (filteredProducts.length) {
+      return new Response(textStream(productResultsText(filteredProducts, language, searchQuery)), {
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je n’ai pas trouvé d’option correspondant à ce filtre dans les résultats affichés. Je peux essayer une nouvelle recherche si vous me donnez la marque, taille ou usage."
+          : "I did not find an option matching that filter in the results shown. I can try a fresh search if you give me the brand, size, or use."
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -949,7 +1143,10 @@ async function handleAssistantPost(req: NextRequest) {
     const selectedSkuSet = new Set(purchasableProducts.map((product) => product.sku.toUpperCase()));
     const cartProducts = [
       ...previousCartProducts.filter((item) => item && !selectedSkuSet.has(item.product.sku.toUpperCase())),
-      ...purchasableProducts.map((product) => ({ product, quantity: requestedQuantity })),
+      ...purchasableProducts.map((product) => ({
+        product,
+        quantity: quantityForProductSelection(latest, product, products.indexOf(product), requestedQuantity),
+      })),
     ];
 
     const cart = await createCart({
@@ -970,7 +1167,7 @@ async function handleAssistantPost(req: NextRequest) {
           quantity,
         }));
       return new Response(
-        textStream(cartReadyText(purchasableProducts.length, lineItems, language)),
+        textStream(cartReadyText(cartProducts.length, lineItems, language, cartProducts)),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }
@@ -1034,9 +1231,10 @@ async function handleAssistantPost(req: NextRequest) {
   if (isProductDetailIntent(latest)) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
+    const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
 
     if (isPartsOrAccessoryQuestion(latest) && detailProducts.length) {
-      const [selectedProduct] = selectProductsForCart(latest, detailProducts);
+      const [selectedProduct] = selectedDetailProducts;
       const baseProduct = selectedProduct || detailProducts[0];
       const partsQueries = relatedPartQueries(baseProduct);
       const partsResults = await Promise.all(partsQueries.map((query) => searchProducts({ query, language, limit: 8 })));
@@ -1064,8 +1262,8 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
 
-    if (detailProducts.length === 1) {
-      const catalogAnswer = productDetailFromCatalog(detailProducts[0], latest, language);
+    if (selectedDetailProducts.length === 1) {
+      const catalogAnswer = productDetailFromCatalog(selectedDetailProducts[0], latest, language);
       if (catalogAnswer) {
         return new Response(textStream(catalogAnswer), {
           headers: {

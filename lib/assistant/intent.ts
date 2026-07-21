@@ -48,13 +48,14 @@ export function isCartIntent(text: string) {
   return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to cart|cart|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s*(?:'|’)?(?:ll|d)?\s*(?:take|get|buy|order|purchase|want|need)\s+(?:it|this|that|them|these|those|one|ones?)\b/i.test(text) ||
+    /\b\d{1,5}\s+(?:of\s+)?(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s+(?:want|need|will take|would like|get|take)\s+\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\b/i.test(text) ||
     /^\s*\d{1,5}\s+(?:of\s+)?(?:it|them|these|those|this|that|the first|first|the second|second|the third|third|the item|the product|each|ones?)\s*$/i.test(text) ||
     /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text);
 }
 
 export function isProductDetailIntent(text: string) {
-  return /\b(how\s+big|how\s+large|how\s+long|how\s+much|what\s+colors?|what\s+colours?|what\s+sizes?|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|replacement parts|accessory|accessories|part|parts|handle|handles|wheelchair|manikin|mannequin|dimension|dimensions|measurements?|specs?|specifications?|sizes?|sizing|height|width|depth|length|weight|diameter|capacity|waterproof|water-resistant|water resistant|water resistance|rating|ratings|colors?|colours?|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur)\b/i.test(text);
+  return /\b(how\s+big|how\s+large|how\s+long|how\s+much|how\s+many|who\s+makes|who\s+sells|sold\s+by|manufacturer|brand|what\s+colors?|what\s+colours?|what\s+sizes?|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|replacement parts|accessory|accessories|part|parts|handle|handles|wheelchair|manikin|mannequin|dimension|dimensions|measurements?|specs?|specifications?|sizes?|sizing|height|width|depth|length|weight|diameter|capacity|box|boxes|pack|package|case|count|waterproof|water-resistant|water resistant|water resistance|rating|ratings|colors?|colours?|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur)\b/i.test(text);
 }
 
 export function isAccountIntent(text: string) {
