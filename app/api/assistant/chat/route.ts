@@ -282,7 +282,9 @@ function priorAssistantAskedCartQuantity(messages: AssistantMessage[]) {
 
 function isContextProductSelectionReply(text: string) {
   return /\b(?:it|them|these|those|this|that|the first|the second|the third|the item|the product|ones?)\b/i.test(text) ||
-    /^\s*(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\s*$/i.test(text);
+    /\b(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
+    /\b\d{1,5}\s+(?:of\s+)?(?:#|number|no\.?|option|item)\s*[1-5]\b/i.test(text) ||
+    /^\s*(?:add\s+to\s+cart|add\s+it\s+to\s+cart|add\s+this\s+to\s+cart|buy\s+it|purchase\s+it)\s*$/i.test(text);
 }
 
 function isSelectionWithoutQuantity(text: string) {
@@ -367,8 +369,8 @@ function normalizeSku(value: string) {
 
 function cleanProductQuery(text: string) {
   return String(text || "")
-    .replace(/\b(no,?\s+)?(do you have|do have|do u have|do you carry|can you find|find me|find|search for|search|show me|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
-    .replace(/\b(no|a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits)\b/gi, " ")
+    .replace(/\b(no,?\s+)?(do you have|do have|do u have|do you carry|can you find|find me|find|search for|search|show me|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|i would like|we would like|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
+    .replace(/\b(no|a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits|to|also|add|buy|purchase|order|get|take)\b/gi, " ")
     .replace(/[?!.]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -728,19 +730,26 @@ function cartReadyText(
   cartProducts: Array<{ product: CatalogProduct; quantity: number }> = [],
   cartUrl = "https://emrn.ca/cart.php"
 ) {
-  const token = process.env.BIGCOMMERCE_CART_PROVIDER === "mcp" ? "" : cartItemsToken(lineItems);
+  const token = cartItemsToken(lineItems);
+  const storeCartUrl = "https://emrn.ca/cart.php";
+  const checkoutText =
+    cartUrl && !/\/cart(?:\.php)?(?:[?#]|$)/i.test(cartUrl)
+      ? language === "fr"
+        ? `\nLien de paiement direct: ${cartUrl}`
+        : `\nDirect checkout link: ${cartUrl}`
+      : "";
   const summary = cartProducts.length
     ? `\n\n${language === "fr" ? "Panier:" : "Cart:"}\n${cartSummaryLines(cartProducts, language).join("\n")}`
     : "";
   if (language === "fr") {
     return itemCount > 1
-      ? `J’ai ajouté ces articles au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: ${cartUrl}${token}`
-      : `J’ai ajouté l’article au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: ${cartUrl}${token}`;
+      ? `J’ai ajouté ces articles au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: ${storeCartUrl}${checkoutText}${token}`
+      : `J’ai ajouté l’article au panier.${summary}\n\nVous pouvez continuer à chercher d’autres articles ici, ou ouvrir votre panier quand vous êtes prêt: ${storeCartUrl}${checkoutText}${token}`;
   }
 
   return itemCount > 1
-    ? `I added those items to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: ${cartUrl}${token}`
-    : `I added the item to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: ${cartUrl}${token}`;
+    ? `I added those items to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: ${storeCartUrl}${checkoutText}${token}`
+    : `I added the item to your cart.${summary}\n\nYou can keep looking for more items here, or open your cart when you’re ready: ${storeCartUrl}${checkoutText}${token}`;
 }
 
 function quoteSplitText(blockedProducts: CatalogProduct[], language: "en" | "fr" | "unknown") {
@@ -1484,8 +1493,17 @@ async function handleAssistantPost(req: NextRequest) {
     replyingToCartQuantity ||
     replyingToCartQuantityChange ||
     (priorAssistantOfferedCartAdd(messages) && isAffirmative(latest));
+  const shouldUseRememberedCartProducts =
+    shouldHandleCart &&
+    !skuCandidates.length &&
+    !pageProductsForCart.length &&
+    (replyingToCartChoice ||
+      replyingToCartQuantity ||
+      replyingToCartQuantityChange ||
+      isContextProductSelectionReply(latest) ||
+      (priorAssistantOfferedCartAdd(messages) && isAffirmative(latest)));
   const shouldUseRememberedProducts =
-    shouldHandleCart ||
+    shouldUseRememberedCartProducts ||
     isQuoteIntent(latest) ||
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
@@ -1493,7 +1511,7 @@ async function handleAssistantPost(req: NextRequest) {
     shouldCompareRememberedProducts ||
     shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
-  const rememberedCartProducts = shouldHandleCart && !skuCandidates.length && !pageProductsForCart.length
+  const rememberedCartProducts = shouldUseRememberedCartProducts
     ? await recentAssistantProducts(messages)
     : [];
   const rememberedContextProducts = shouldUseRememberedProducts && !skuCandidates.length && !pageProductsForCart.length
