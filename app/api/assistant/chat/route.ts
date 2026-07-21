@@ -341,19 +341,74 @@ function invoiceLookupText(
     : `I confirmed order ${orderNumber}, but I do not see an automatic B2B invoice PDF available. You can open the order page and use “Print Invoice” if you are signed in: ${printableOrderUrl}\n\nI can also send this request to support.`;
 }
 
-function quoteLookupText(quote: Awaited<ReturnType<typeof lookupB2BQuote>>, language: "en" | "fr" | "unknown") {
+function quoteStatusText(
+  status: string | undefined,
+  language: "en" | "fr" | "unknown",
+  allowCheckout?: boolean
+) {
+  if (allowCheckout) return language === "fr" ? "Prêt à acheter" : "Ready to purchase";
+  const value = String(status || "").trim();
+  const en: Record<string, string> = {
+    "0": "New",
+    "1": "Submitted",
+    "2": "In process",
+    "3": "Updated by customer",
+    "4": "Ordered",
+    "5": "Expired",
+  };
+  const fr: Record<string, string> = {
+    "0": "Nouveau",
+    "1": "Soumis",
+    "2": "En traitement",
+    "3": "Mis à jour par le client",
+    "4": "Commandé",
+    "5": "Expiré",
+  };
+  if (!value) return "";
+  return (language === "fr" ? fr[value] : en[value]) || value;
+}
+
+function quoteLookupText(
+  quote: Awaited<ReturnType<typeof lookupB2BQuote>>,
+  language: "en" | "fr" | "unknown",
+  purchaseUrl = ""
+) {
   if (!quote.found) {
     return language === "fr"
       ? "Je n’ai pas trouvé ce devis automatiquement. Je peux envoyer cette demande au support si vous voulez."
       : "I could not find that quote automatically. I can send this to support if you want.";
   }
 
-  const lines = quote.items.slice(0, 5).map((item, index) => `${index + 1}. ${item.quantity} x ${item.name}${item.sku ? ` (SKU: ${item.sku})` : ""}`);
-  const total = quote.total ? `\n${language === "fr" ? "Total" : "Total"}: ${quote.currencyCode || "CAD"} ${quote.total.toFixed(2)}` : "";
+  const money = (value?: number) => value && value > 0 ? `${quote.currencyCode || "CAD"} ${value.toFixed(2)}` : "";
+  const status = quoteStatusText(quote.status, language, quote.allowCheckout);
+  const lines = quote.items.slice(0, 8).map((item, index) => {
+    const itemPrice = money(item.price);
+    const itemDiscount = money(item.discount);
+    return `${index + 1}. ${item.quantity} x ${item.name}${item.sku ? ` (SKU: ${item.sku})` : ""}${itemPrice ? ` — ${itemPrice}` : ""}${itemDiscount ? `, ${language === "fr" ? "rabais" : "discount"} ${itemDiscount}` : ""}`;
+  });
+  const subtotal = money(quote.subtotal) ? `\n${language === "fr" ? "Sous-total" : "Subtotal"}: ${money(quote.subtotal)}` : "";
+  const discountLabel = quote.discountType === "1" && quote.discountValue
+    ? `${quote.discountValue}%${money(quote.discount) ? ` (${money(quote.discount)})` : ""}`
+    : quote.discountType === "2" && quote.discountValue
+      ? money(quote.discountValue)
+      : money(quote.discount);
+  const discount = discountLabel
+    ? `\n${language === "fr" ? "Rabais" : "Discount"}: ${discountLabel}`
+    : quote.subtotal || quote.total
+      ? `\n${language === "fr" ? "Rabais" : "Discount"}: ${language === "fr" ? "aucun" : "none"}`
+      : "";
+  const shipping = money(quote.shippingTotal) ? `\n${language === "fr" ? "Livraison" : "Shipping"}: ${money(quote.shippingTotal)}` : "";
+  const tax = money(quote.taxTotal) ? `\n${language === "fr" ? "Taxes" : "Tax"}: ${money(quote.taxTotal)}` : "";
+  const total = money(quote.total) ? `\n${language === "fr" ? "Total" : "Total"}: ${money(quote.total)}` : "";
   const link = quote.quoteUrl ? `\n${language === "fr" ? "Lien du devis" : "Quote link"}: ${quote.quoteUrl}` : "";
+  const purchase = purchaseUrl
+    ? `\n${language === "fr" ? "Lien de paiement" : "Purchase link"}: ${purchaseUrl}`
+    : quote.allowCheckout
+      ? `\n${language === "fr" ? "Voulez-vous que je crée un lien de paiement pour ce devis?" : "Would you like a purchase link for this quote?"}`
+      : "";
   return language === "fr"
-    ? `J’ai trouvé le devis ${quote.quoteNumber || ""}${quote.status ? ` — statut: ${quote.status}` : ""}.${total}${lines.length ? `\nArticles:\n${lines.join("\n")}` : ""}${link}`
-    : `I found quote ${quote.quoteNumber || ""}${quote.status ? ` — status: ${quote.status}` : ""}.${total}${lines.length ? `\nItems:\n${lines.join("\n")}` : ""}${link}`;
+    ? `J’ai trouvé le devis ${quote.quoteNumber || ""}${status ? ` — statut: ${status}` : ""}.${lines.length ? `\nArticles:\n${lines.join("\n")}` : ""}${subtotal}${discount}${shipping}${tax}${total}${link}${purchase}`
+    : `I found quote ${quote.quoteNumber || ""}${status ? ` — status: ${status}` : ""}.${lines.length ? `\nItems:\n${lines.join("\n")}` : ""}${subtotal}${discount}${shipping}${tax}${total}${link}${purchase}`;
 }
 
 function quoteCheckoutText(
@@ -1668,7 +1723,10 @@ async function handleAssistantPost(req: NextRequest) {
     }
 
     const quote = await lookupB2BQuote({ quoteNumber, email });
-    return new Response(textStream(quoteLookupText(quote, language)), {
+    const checkout = quote.found && quote.allowCheckout
+      ? await createB2BQuoteCheckout(quote.quoteId || quote.quoteNumber || quoteNumber)
+      : { created: false, checkoutUrl: "" };
+    return new Response(textStream(quoteLookupText(quote, language, checkout.checkoutUrl || "")), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }

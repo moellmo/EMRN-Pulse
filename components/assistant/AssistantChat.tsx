@@ -229,9 +229,10 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     }
 
     window.addEventListener("message", handleMessage);
+    window.parent?.postMessage({ type: "emrn-pulse:ready", open: isOpen, nudge: showNudge }, "*");
     window.parent?.postMessage({ type: "emrn-pulse:request-page-context" }, "*");
     return () => window.removeEventListener("message", handleMessage);
-  }, [currentLanguage, mode]);
+  }, [currentLanguage, isOpen, mode, showNudge]);
 
   function switchLanguage(nextLanguage: "en" | "fr") {
     setLanguage(nextLanguage);
@@ -610,7 +611,9 @@ function renderInlineMessage(text: string, isUser: boolean) {
   return parts.map((part, index) => {
     if (/^https?:\/\//.test(part)) {
       const normalizedPart = normalizeDisplayedUrl(part);
-      const label = normalizedPart.includes("/checkout")
+      const label = /loadInCheckout|isFromQuote=Y/i.test(normalizedPart)
+        ? "Purchase quote"
+        : normalizedPart.includes("/checkout")
         ? "Checkout"
         : /\/cart(?:\.php)?(?:[?#]|$)/i.test(normalizedPart)
           ? "Cart"

@@ -10,14 +10,21 @@ export type B2BQuoteLookupResult = {
   quoteId?: string;
   quoteNumber?: string;
   status?: string;
+  allowCheckout?: boolean;
   createdAt?: string;
   updatedAt?: string;
   quoteUrl?: string;
   customerEmail?: string;
   companyName?: string;
+  subtotal?: number;
+  discount?: number;
+  discountType?: string;
+  discountValue?: number;
+  taxTotal?: number;
+  shippingTotal?: number;
   total?: number;
   currencyCode?: string;
-  items: Array<{ sku?: string; name: string; quantity: number }>;
+  items: Array<{ sku?: string; name: string; quantity: number; price?: number; discount?: number; total?: number; productUrl?: string }>;
   message?: string;
 };
 
@@ -129,11 +136,18 @@ function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
     quoteId,
     quoteNumber,
     status: text(record.statusText || record.status || record.quoteStatus),
+    allowCheckout: typeof record.allowCheckout === "boolean" ? record.allowCheckout : undefined,
     createdAt: text(record.createdAt || record.created_at || record.createdTime),
     updatedAt: text(record.updatedAt || record.updated_at || record.updatedTime),
     quoteUrl: text(record.quoteUrl || record.url || record.checkoutUrl),
     customerEmail: text(record.userEmail || record.email || contact.email),
     companyName: text(record.company || record.companyName || company.companyName || company.name),
+    subtotal: moneyValue(record.subtotal),
+    discount: moneyValue(record.discount || record.discountAmount),
+    discountType: text(record.discountType),
+    discountValue: moneyValue(record.discountValue),
+    taxTotal: moneyValue(record.taxTotal || record.tax),
+    shippingTotal: moneyValue(record.shippingTotal || record.shipping),
     total: moneyValue(record.grandTotal || record.totalAmount || record.total || record.subtotal),
     currencyCode: currencyCode(record.currencyCode || record.currency) || "CAD",
     items: productList
@@ -142,6 +156,10 @@ function normalizeQuote(record: UnknownRecord): B2BQuoteLookupResult {
         sku: text(item.sku),
         name: text(item.productName || item.name || item.sku),
         quantity: number(item.quantity || item.qty) || 1,
+        price: moneyValue(item.offeredPrice || item.price || item.salePrice || item.basePrice),
+        discount: moneyValue(item.discount || item.discountAmount),
+        total: moneyValue(item.total || item.rowTotal || item.extendedPrice),
+        productUrl: text(item.productUrl || item.url),
       }))
       .filter((item) => item.name || item.sku),
   };
@@ -208,7 +226,25 @@ export async function lookupB2BQuote(input: { quoteNumber?: string; email?: stri
         (!input.email || !quote.customerEmail || quote.customerEmail.toLowerCase() === input.email.toLowerCase())
       );
     const quote = records[0];
-    return quote || { available: true, found: false, items: [] };
+    if (!quote) return { available: true, found: false, items: [] };
+
+    if (quote.quoteId) {
+      try {
+        const detailPayload = await b2bFetch<unknown>(`/rfq/${encodeURIComponent(quote.quoteId)}`);
+        const detailRecord = recordsFromPayload(detailPayload)[0] || (detailPayload && typeof detailPayload === "object" ? detailPayload as UnknownRecord : {});
+        const detailedQuote = normalizeQuote({ ...detailRecord, quoteId: quote.quoteId });
+        return {
+          ...quote,
+          ...detailedQuote,
+          quoteId: quote.quoteId,
+          quoteNumber: detailedQuote.quoteNumber || quote.quoteNumber,
+        };
+      } catch {
+        return quote;
+      }
+    }
+
+    return quote;
   } catch (error) {
     return {
       available: false,

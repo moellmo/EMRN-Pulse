@@ -30,6 +30,22 @@ export async function GET(req: Request) {
   iframe.setAttribute("frameborder", "0");
   iframe.allow = "clipboard-write";
 
+  var launcherProxy = document.createElement("button");
+  launcherProxy.type = "button";
+  launcherProxy.setAttribute("aria-label", "Open EMRN Pulse");
+  launcherProxy.style.position = "fixed";
+  launcherProxy.style.right = "0";
+  launcherProxy.style.bottom = "0";
+  launcherProxy.style.width = "120px";
+  launcherProxy.style.height = "120px";
+  launcherProxy.style.border = "0";
+  launcherProxy.style.padding = "0";
+  launcherProxy.style.margin = "0";
+  launcherProxy.style.background = "transparent";
+  launcherProxy.style.cursor = "pointer";
+  launcherProxy.style.zIndex = "2147483001";
+  launcherProxy.style.colorScheme = "normal";
+
   function text(selector) {
     var node = document.querySelector(selector);
     return node && node.textContent ? node.textContent.trim() : "";
@@ -277,6 +293,9 @@ export async function GET(req: Request) {
     iframe.style.height = open ? "780px" : nudge ? "150px" : "120px";
     iframe.style.maxWidth = "100vw";
     iframe.style.maxHeight = "100dvh";
+    launcherProxy.style.display = open ? "none" : "block";
+    launcherProxy.style.width = nudge ? "350px" : "120px";
+    launcherProxy.style.height = nudge ? "150px" : "120px";
   }
 
   function postToPulse(message) {
@@ -324,6 +343,18 @@ export async function GET(req: Request) {
     openWithSearchHelp(event && event.detail ? event.detail.query : "");
   });
   window.addEventListener("emrn-pulse:close", closePulse);
+  launcherProxy.addEventListener("click", openPulse);
+
+  window.addEventListener("message", function (event) {
+    if (event.origin !== origin) return;
+    if (!event.data || event.data.type !== "emrn-pulse:ready") return;
+    if (pendingSearchHelp) {
+      postToPulse(pendingSearchHelp);
+    } else if (desiredOpen) {
+      postToPulse({ type: "emrn-pulse:open" });
+    }
+    applySize(Boolean(event.data.open) || desiredOpen, Boolean(event.data.nudge));
+  });
 
   window.addEventListener("message", function (event) {
     if (event.origin !== origin) return;
@@ -398,9 +429,11 @@ export async function GET(req: Request) {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       document.body.appendChild(iframe);
+      document.body.appendChild(launcherProxy);
     });
   } else {
     document.body.appendChild(iframe);
+    document.body.appendChild(launcherProxy);
   }
 })();
 `;
