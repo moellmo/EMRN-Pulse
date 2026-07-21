@@ -49,6 +49,20 @@ export type ProductPageContext = {
   sku?: string;
   variantId?: number;
   productId?: number;
+  currentCart?: {
+    cartId?: string;
+    cartUrl?: string;
+    subtotal?: number;
+    items: Array<{
+      lineItemId?: string;
+      productId?: number;
+      variantId?: number;
+      sku?: string;
+      name: string;
+      quantity: number;
+      price?: number;
+    }>;
+  };
 };
 
 export type QuoteRequest = {

@@ -78,21 +78,52 @@ export async function GET(req: Request) {
     };
   }
 
-  function sendPageContext() {
+  function normalizeCartSnapshot(cart) {
+    var items = allPhysicalCartItems(cart).map(function (item) {
+      return {
+        lineItemId: cartLineItemId(item),
+        productId: Number(item.productId || item.product_id || item.productEntityId || 0) || undefined,
+        variantId: Number(item.variantId || item.variant_id || item.variantEntityId || 0) || undefined,
+        sku: item.sku || item.variantSku || item.productSku || "",
+        name: item.name || item.productName || "",
+        quantity: Number(item.quantity || 1),
+        price: Number(item.salePrice || item.listPrice || item.extendedSalePrice || item.extendedListPrice || 0) || undefined
+      };
+    }).filter(function (item) {
+      return item.name || item.sku || item.productId;
+    });
+    return {
+      cartId: cart && cart.id ? cart.id : "",
+      cartUrl: "https://emrn.ca/cart.php",
+      subtotal: Number(cart && (cart.baseAmount || cart.cartAmount || cart.subtotal || 0)) || undefined,
+      items: items
+    };
+  }
+
+  async function collectCurrentCartSnapshot() {
+    var cart = await getStorefrontCart();
+    if (!cart || !cart.id) return { cartUrl: "https://emrn.ca/cart.php", items: [] };
+    return normalizeCartSnapshot(cart);
+  }
+
+  async function sendPageContext() {
     if (!iframe.contentWindow) return;
+    var context = collectPageContext();
+    context.currentCart = await collectCurrentCartSnapshot();
     iframe.contentWindow.postMessage(
-      { type: "emrn-pulse:page-context", pageContext: collectPageContext() },
+      { type: "emrn-pulse:page-context", pageContext: context },
       origin
     );
   }
 
   var lastContextKey = "";
-  function sendPageContextIfChanged() {
+  async function sendPageContextIfChanged() {
     var context = collectPageContext();
     var key = [context.url, context.title, context.sku, context.productId, context.variantId].join("|");
     if (key === lastContextKey) return;
     lastContextKey = key;
     if (!iframe.contentWindow) return;
+    context.currentCart = await collectCurrentCartSnapshot();
     iframe.contentWindow.postMessage(
       { type: "emrn-pulse:page-context", pageContext: context },
       origin

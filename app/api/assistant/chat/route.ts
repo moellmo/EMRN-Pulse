@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createCart, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCartItem } from "@/lib/assistant/catalog";
+import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
-import { getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
+import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
 import type { AssistantMessage, CatalogProduct, ProductPageContext } from "@/lib/assistant/types";
 
@@ -81,8 +82,114 @@ function priorAssistantRequestedOrderHistory(messages: AssistantMessage[]) {
     );
 }
 
+function priorAssistantRequestedInvoiceLookup(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /invoice lookup|receipt lookup|look up the invoice|facture|numéro de commande et le courriel|order number and email/i.test(message.content)
+    );
+}
+
+function priorAssistantRequestedQuoteLookup(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /quote lookup|look up the quote|quote number|numéro du devis|numero du devis|devis/i.test(message.content)
+    );
+}
+
+function priorAssistantRequestedReorderLookup(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /reorder lookup|order to reorder|email used for the order|commande à recommander|commande a recommander/i.test(message.content)
+    );
+}
+
 function orderHistoryEmail(messages: AssistantMessage[]) {
   return messages.map((message) => message.content).join("\n").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+}
+
+function orderNumberFromText(text: string) {
+  return (
+    text.match(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30})\b/i)?.[1] ||
+    text.match(/\border\s*#\s*([A-Z0-9-]{4,30})\b/i)?.[1] ||
+    ""
+  );
+}
+
+function quoteNumberFromText(text: string) {
+  return (
+    text.match(/\b(?:quote|devis|rfq)\s+(?:status|lookup|look\s+up|number|#|no\.?|statut|numero|num[eé]ro)\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{3,30})\b/i)?.[1] ||
+    text.match(/\b(?:quote|devis|rfq)\s*(?:number|#|no\.?)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{3,30})\b/i)?.[1] ||
+    text.match(/\b(?:Q|RFQ)-?\d{3,}\b/i)?.[0] ||
+    ""
+  );
+}
+
+function recentAssistantQuoteNumber(messages: AssistantMessage[]) {
+  const assistantMessage = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "assistant" && /\b(?:quote|devis)\s+[A-Z0-9-]{3,30}\b/i.test(message.content));
+  return assistantMessage ? quoteNumberFromText(assistantMessage.content) : "";
+}
+
+function invoiceNumberFromText(text: string) {
+  return (
+    text.match(/\b(?:invoice|receipt|facture|recu|reçu)\s*(?:number|#|no\.?)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{3,30})\b/i)?.[1] ||
+    text.match(/\b(?:INV)-?\d{3,}\b/i)?.[0] ||
+    ""
+  );
+}
+
+function isInvoiceLookupIntent(text: string) {
+  return /\b(invoice|receipt|copy of invoice|send.*invoice|invoice copy|facture|recu|reçu)\b/i.test(text);
+}
+
+function isQuoteLookupIntent(text: string) {
+  return /\b(quote status|find.*quote|look up.*quote|lookup.*quote|my quote|saved quote|quote #|quote number|rfq|statut.*devis|trouver.*devis|mon devis)\b/i.test(text);
+}
+
+function isQuotePurchaseIntent(text: string) {
+  return /\b(?:buy|purchase|pay|checkout|complete|place|order)\s+(?:the\s+|my\s+|this\s+)?(?:quote|rfq)\b|\b(?:quote|rfq)\s+(?:checkout|payment|purchase|pay|buy)\b|\b(?:payer|acheter|commander|finaliser)\s+(?:le\s+|mon\s+|ce\s+)?devis\b|\bdevis\s+(?:paiement|achat|checkout)\b/i.test(text);
+}
+
+function isReorderIntent(text: string) {
+  return /\b(reorder|re-order|order again|same as last|usual order|buy again|purchase again|commander de nouveau|recommander)\b/i.test(text);
+}
+
+function isCurrentCartQuestion(text: string) {
+  return /\b(what(?:'| i)?s in my cart|what is in my cart|show my cart|cart total|how much is my cart|current cart|panier actuel|mon panier|total du panier)\b/i.test(text);
+}
+
+function currentCartText(pageContext: ProductPageContext, language: "en" | "fr" | "unknown") {
+  const cart = pageContext.currentCart;
+  if (!cart) {
+    return language === "fr"
+      ? "Je peux lire le panier sur le site EMRN lorsque le widget est ouvert sur la boutique. Ouvrez le panier ou ajoutez un article avec Meri, puis redemandez-moi."
+      : "I can read the live cart when the widget is open on the EMRN storefront. Open the cart or add an item with Meri, then ask me again.";
+  }
+  if (!cart.items.length) {
+    return language === "fr" ? "Votre panier semble vide." : "Your cart looks empty.";
+  }
+
+  const lines = cart.items.slice(0, 8).map((item, index) => {
+    const sku = item.sku ? ` (SKU: ${item.sku})` : "";
+    const price = item.price ? ` — $${item.price.toFixed(2)}` : "";
+    return `${index + 1}. ${item.quantity} x ${item.name}${sku}${price}`;
+  });
+  const total = cart.subtotal ? `\n${language === "fr" ? "Sous-total" : "Subtotal"}: $${cart.subtotal.toFixed(2)}` : "";
+  const link = cart.cartUrl || "https://emrn.ca/cart.php";
+  return language === "fr"
+    ? `Voici ce que je vois dans votre panier:\n${lines.join("\n")}${total}\n\nPanier: ${link}`
+    : `Here is what I see in your cart:\n${lines.join("\n")}${total}\n\nCart: ${link}`;
 }
 
 function recentOrdersText(
@@ -108,6 +215,110 @@ function recentOrdersText(
   return language === "fr"
     ? `J’ai trouvé ces commandes récentes:\n${lines.join("\n")}\n\nDites-moi quel SKU ou numéro de commande vous voulez recommander, et je peux chercher les articles disponibles.`
     : `I found these recent orders:\n${lines.join("\n")}\n\nTell me which SKU or order number you want to reorder, and I can look up the available items.`;
+}
+
+async function reorderFromOrderText(
+  orderNumber: string,
+  email: string,
+  sessionId: string,
+  language: "en" | "fr" | "unknown"
+) {
+  const orderDetails = await getOrderDetails({ orderNumber, email });
+  if (!orderDetails.verified || !orderDetails.order?.products.length) {
+    return language === "fr"
+      ? "Je n’ai pas pu confirmer cette commande avec ce courriel, ou aucun article recommandable n’a été trouvé. Je peux envoyer cette demande au support."
+      : "I could not verify that order with this email, or I could not find reorderable items. I can send this to support.";
+  }
+
+  const lookedUpProducts = (
+    await Promise.all(
+      orderDetails.order.products.map(async (item) => {
+        if (!item.sku) return null;
+        const [product] = await searchBySKU(item.sku);
+        return product ? { product, quantity: Math.max(1, item.quantity || 1) } : null;
+      })
+    )
+  ).filter((item): item is { product: CatalogProduct; quantity: number } => Boolean(item));
+
+  const purchasableProducts = lookedUpProducts.filter((item) => item.product.purchasable && !item.product.quoteOnly);
+  const blockedProducts = lookedUpProducts.filter((item) => item.product.quoteOnly || !item.product.purchasable);
+  if (!purchasableProducts.length) {
+    return language === "fr"
+      ? "J’ai trouvé la commande, mais je ne peux pas ajouter automatiquement ses articles au panier. Je peux préparer une demande de devis/support avec les articles."
+      : "I found the order, but I cannot automatically add its items to cart. I can prepare a quote/support request with the items.";
+  }
+
+  const cart = await createCart({
+    sessionId,
+    items: purchasableProducts.slice(0, 8).map(({ product, quantity }) => ({
+      productId: product.productId,
+      variantId: product.variantId || undefined,
+      quantity,
+    })),
+  });
+  const lineItems =
+    cart.lineItems ||
+    purchasableProducts.slice(0, 8).map(({ product, quantity }) => ({
+      productId: product.productId,
+      variantId: product.variantId || undefined,
+      quantity,
+    }));
+  rememberCartState(sessionId, purchasableProducts, lineItems, cart.checkoutUrl);
+  const browserLineItems = purchasableProducts.slice(0, 8).map(({ product, quantity }) => ({
+    productId: product.productId,
+    variantId: product.variantId || undefined,
+    quantity,
+  }));
+
+  return `${cartReadyText(purchasableProducts.length, lineItems, language, purchasableProducts, cart.checkoutUrl, browserLineItems)}${quoteSplitText(blockedProducts.map((item) => item.product), language)}`;
+}
+
+function invoiceLookupText(
+  orderNumber: string,
+  invoice: Awaited<ReturnType<typeof lookupB2BInvoice>>,
+  language: "en" | "fr" | "unknown"
+) {
+  if (invoice.found && (invoice.pdfUrl || invoice.invoiceUrl)) {
+    const link = invoice.pdfUrl || invoice.invoiceUrl;
+    return language === "fr"
+      ? `J’ai trouvé la facture${invoice.invoiceNumber ? ` ${invoice.invoiceNumber}` : ""} pour la commande ${orderNumber}. Lien: ${link}`
+      : `I found invoice${invoice.invoiceNumber ? ` ${invoice.invoiceNumber}` : ""} for order ${orderNumber}. Link: ${link}`;
+  }
+
+  return language === "fr"
+    ? `J’ai confirmé la commande ${orderNumber}, mais je ne peux pas confirmer un lien de facture PDF disponible automatiquement. Vous pouvez vérifier dans votre compte EMRN, ou je peux envoyer cette demande au support.`
+    : `I confirmed order ${orderNumber}, but I cannot confirm an automatic invoice PDF link is available. You can check your EMRN account, or I can send this request to support.`;
+}
+
+function quoteLookupText(quote: Awaited<ReturnType<typeof lookupB2BQuote>>, language: "en" | "fr" | "unknown") {
+  if (!quote.found) {
+    return language === "fr"
+      ? "Je n’ai pas trouvé ce devis automatiquement. Je peux envoyer cette demande au support si vous voulez."
+      : "I could not find that quote automatically. I can send this to support if you want.";
+  }
+
+  const lines = quote.items.slice(0, 5).map((item, index) => `${index + 1}. ${item.quantity} x ${item.name}${item.sku ? ` (SKU: ${item.sku})` : ""}`);
+  const total = quote.total ? `\n${language === "fr" ? "Total" : "Total"}: ${quote.currencyCode || "CAD"} ${quote.total.toFixed(2)}` : "";
+  const link = quote.quoteUrl ? `\n${language === "fr" ? "Lien du devis" : "Quote link"}: ${quote.quoteUrl}` : "";
+  return language === "fr"
+    ? `J’ai trouvé le devis ${quote.quoteNumber || ""}${quote.status ? ` — statut: ${quote.status}` : ""}.${total}${lines.length ? `\nArticles:\n${lines.join("\n")}` : ""}${link}`
+    : `I found quote ${quote.quoteNumber || ""}${quote.status ? ` — status: ${quote.status}` : ""}.${total}${lines.length ? `\nItems:\n${lines.join("\n")}` : ""}${link}`;
+}
+
+function quoteCheckoutText(
+  quoteNumber: string,
+  checkout: Awaited<ReturnType<typeof createB2BQuoteCheckout>>,
+  language: "en" | "fr" | "unknown"
+) {
+  if (checkout.created && checkout.checkoutUrl) {
+    return language === "fr"
+      ? `J’ai créé un lien de paiement sécurisé pour le devis ${quoteNumber}: ${checkout.checkoutUrl}`
+      : `I created a secure checkout link for quote ${quoteNumber}: ${checkout.checkoutUrl}`;
+  }
+
+  return language === "fr"
+    ? `Je n’ai pas pu créer automatiquement un lien de paiement pour le devis ${quoteNumber}. Je peux envoyer cette demande au support.`
+    : `I could not automatically create a checkout link for quote ${quoteNumber}. I can send this to support.`;
 }
 
 function orderTrackingText(
@@ -1317,6 +1528,136 @@ async function handleAssistantPost(req: NextRequest) {
 
   const looksLikeOrderDetailsReply =
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) || /\border\s*#?\s*\d{3,}\b|\b\d{5,}\b/i.test(latest);
+
+  if (isCurrentCartQuestion(latest)) {
+    return new Response(textStream(currentCartText(pageContext, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (isInvoiceLookupIntent(latest) || (priorAssistantRequestedInvoiceLookup(messages) && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
+    const email = orderHistoryEmail(messages);
+    const orderNumber = orderNumberFromText(messages.map((message) => message.content).join("\n"));
+    const invoiceNumber = invoiceNumberFromText(messages.map((message) => message.content).join("\n"));
+    if (!email || (!orderNumber && !invoiceNumber)) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Bien sûr. Pour la recherche de facture, envoyez-moi le numéro de commande et le courriel utilisé pour la commande."
+            : "Sure. For invoice lookup, please send the order number and the email used for the order."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    if (orderNumber) {
+      const orderDetails = await getOrderDetails({ orderNumber, email });
+      if (!orderDetails.verified) {
+        return new Response(
+          textStream(
+            language === "fr"
+              ? "Je n’ai pas pu confirmer cette commande avec ce courriel. Je peux envoyer cette demande au support."
+              : "I could not verify that order with this email. I can send this to support."
+          ),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+    }
+
+    const invoice = await lookupB2BInvoice({ orderNumber, invoiceNumber });
+    return new Response(textStream(invoiceLookupText(orderNumber || invoiceNumber, invoice, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (isQuotePurchaseIntent(latest)) {
+    const conversationText = messages.map((message) => message.content).join("\n");
+    const quoteNumber = quoteNumberFromText(conversationText) || recentAssistantQuoteNumber(messages);
+    if (!quoteNumber) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Bien sûr. Envoyez-moi le numéro du devis, et je vais vérifier si un lien de paiement peut être créé."
+            : "Sure. Send me the quote number, and I’ll check whether a checkout link can be created."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    const quote = await lookupB2BQuote({ quoteNumber });
+    if (!quote.found) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Je n’ai pas trouvé ce devis automatiquement. Je peux envoyer cette demande au support si vous voulez."
+            : "I could not find that quote automatically. I can send this to support if you want."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    const checkout = await createB2BQuoteCheckout(quote.quoteNumber || quoteNumber);
+    return new Response(textStream(quoteCheckoutText(quote.quoteNumber || quoteNumber, checkout, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (isQuoteLookupIntent(latest) || (priorAssistantRequestedQuoteLookup(messages) && !isQuickActionPrompt(latest))) {
+    const conversationText = messages.map((message) => message.content).join("\n");
+    const quoteNumber = quoteNumberFromText(conversationText);
+    const email = orderHistoryEmail(messages);
+    if (!quoteNumber && !email) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Bien sûr. Pour rechercher un devis, envoyez-moi le numéro du devis ou le courriel utilisé pour le devis."
+            : "Sure. For quote lookup, please send the quote number or the email used for the quote."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    const quote = await lookupB2BQuote({ quoteNumber, email });
+    return new Response(textStream(quoteLookupText(quote, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (isReorderIntent(latest) || (priorAssistantRequestedReorderLookup(messages) && !isQuickActionPrompt(latest))) {
+    const conversationText = messages.map((message) => message.content).join("\n");
+    const email = orderHistoryEmail(messages);
+    let orderNumber = orderNumberFromText(conversationText);
+    if (!email) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Bien sûr. Pour la recherche de recommandation, envoyez-moi le courriel utilisé pour la commande et, si vous l’avez, le numéro de commande."
+            : "Sure. For reorder lookup, please send the email used for the order and, if you have it, the order number."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    if (!orderNumber) {
+      const recentOrders = await getRecentOrdersByEmail(email, 1);
+      orderNumber = recentOrders.orders[0]?.orderNumber || "";
+    }
+
+    if (!orderNumber) {
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Je n’ai pas trouvé de commande récente pour ce courriel. Je peux envoyer cette demande au support."
+            : "I did not find a recent order for that email. I can send this to support."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+
+    return new Response(textStream(await reorderFromOrderText(orderNumber, email, sessionId, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
 
   if (isOrderStatusIntent(latest) || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
     const draft = buildOrderStatusDraft(messages, language);

@@ -79,6 +79,9 @@ const ui: Record<"en" | "fr", UiText> = {
     quickActions: [
       { label: "Find a Product", prompt: "Find a product", icon: "search" },
       { label: "Request a Quote", prompt: "I need a quote", icon: "quote" },
+      { label: "Find a Quote", prompt: "Look up a quote", icon: "quote" },
+      { label: "Reorder", prompt: "Reorder my last order", icon: "truck" },
+      { label: "Invoice", prompt: "Find my invoice", icon: "mail" },
       { label: "Check Availability", prompt: "Can you check availability?", icon: "box" },
       { label: "Check Order Status", prompt: "Check order status", icon: "truck" },
       { label: "Contact Us", prompt: "Contact support", icon: "mail" },
@@ -104,6 +107,9 @@ const ui: Record<"en" | "fr", UiText> = {
     quickActions: [
       { label: "Trouver un produit", prompt: "Je cherche un produit", icon: "search" },
       { label: "Demander un devis", prompt: "J’ai besoin d’un devis", icon: "quote" },
+      { label: "Trouver un devis", prompt: "Trouver un devis", icon: "quote" },
+      { label: "Recommander", prompt: "Recommander ma dernière commande", icon: "truck" },
+      { label: "Facture", prompt: "Trouver ma facture", icon: "mail" },
       { label: "Vérifier la disponibilité", prompt: "Pouvez-vous vérifier la disponibilité?", icon: "box" },
       { label: "Suivi de commande", prompt: "Je veux vérifier le statut de ma commande", icon: "truck" },
       { label: "Nous contacter", prompt: "Contacter le support", icon: "mail" },

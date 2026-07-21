@@ -43,6 +43,13 @@ export type RecentOrdersResult = {
   message?: string;
 };
 
+export type OrderDetailsResult = {
+  available: boolean;
+  verified: boolean;
+  order?: RecentOrder;
+  message?: string;
+};
+
 type BigCommerceOrder = {
   id?: number;
   status?: string;
@@ -202,6 +209,58 @@ export async function getRecentOrdersByEmail(email: string, limit = 5): Promise<
       email: normalizedEmail,
       orders: [],
       message: error instanceof Error ? error.message : "Unable to look up recent orders.",
+    };
+  }
+}
+
+export async function getOrderDetails(input: OrderLookupInput): Promise<OrderDetailsResult> {
+  const orderNumber = normalizeOrderNumber(input.orderNumber);
+  if (!API_V2_BASE || !ACCESS_TOKEN) {
+    return {
+      available: false,
+      verified: false,
+      message: "BigCommerce Orders API is not configured.",
+    };
+  }
+
+  try {
+    const order = await bcFetchV2<BigCommerceOrder>(`/orders/${encodeURIComponent(orderNumber)}`);
+    const orderEmail = normalizeEmail(order.billing_address?.email || "");
+    if (!order.id || !orderEmail || orderEmail !== normalizeEmail(input.email)) {
+      return {
+        available: true,
+        verified: false,
+        message: "Order email could not be verified.",
+      };
+    }
+
+    const products = await bcFetchV2<BigCommerceOrderProduct[]>(
+      `/orders/${encodeURIComponent(orderNumber)}/products`
+    ).catch(() => []);
+
+    return {
+      available: true,
+      verified: true,
+      order: {
+        orderNumber: String(order.id),
+        status: order.status || "Status unavailable",
+        createdAt: order.date_created || "",
+        total: Number(order.total_inc_tax || 0),
+        currencyCode: order.currency_code || "CAD",
+        products: products.map((product) => ({
+          productId: Number(product.product_id || 0),
+          variantId: product.variant_id ? Number(product.variant_id) : undefined,
+          sku: String(product.sku || ""),
+          name: String(product.name || ""),
+          quantity: Number(product.quantity || 0),
+        })).filter((product) => product.name || product.sku),
+      },
+    };
+  } catch (error) {
+    return {
+      available: true,
+      verified: false,
+      message: error instanceof Error ? error.message : "Unable to look up order.",
     };
   }
 }
