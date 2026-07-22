@@ -13,8 +13,11 @@ export type AssistantRuntimeConfig = {
   knowledgeShadowMode: boolean;
   qaDailyReminderEnabled: boolean;
   answerCacheEnabled: boolean;
+  trustedExternalDomains: string[];
   updatedAt?: string;
 };
+
+export type AssistantRuntimeBooleanFeature = Exclude<keyof Omit<AssistantRuntimeConfig, "updatedAt">, "trustedExternalDomains">;
 
 function envFlag(name: string, fallback: boolean) {
   const value = process.env[name];
@@ -27,6 +30,19 @@ function booleanValue(value: unknown, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function domainListValue(value: unknown, fallback: string[]) {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]+/)
+      : fallback;
+  const domains = raw
+    .map((item) => String(item || "").toLowerCase().trim())
+    .map((item) => item.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0])
+    .filter((item) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(item));
+  return Array.from(new Set(domains));
+}
+
 function defaultConfig(): AssistantRuntimeConfig {
   return {
     aiSearchHelperEnabled: envFlag("EMRN_AI_SEARCH_HELPER_ENABLED", false),
@@ -36,6 +52,7 @@ function defaultConfig(): AssistantRuntimeConfig {
     knowledgeShadowMode: envFlag("EMRN_KNOWLEDGE_SHADOW_MODE", true),
     qaDailyReminderEnabled: envFlag("EMRN_QA_DAILY_REMINDER_ENABLED", true),
     answerCacheEnabled: envFlag("EMRN_ANSWER_CACHE_ENABLED", true),
+    trustedExternalDomains: domainListValue(process.env.EMRN_TRUSTED_EXTERNAL_DOMAINS, []),
   };
 }
 
@@ -59,6 +76,7 @@ export function readAssistantConfigSync(): AssistantRuntimeConfig {
     knowledgeShadowMode: booleanValue(saved.knowledgeShadowMode, defaults.knowledgeShadowMode),
     qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, defaults.qaDailyReminderEnabled),
     answerCacheEnabled: booleanValue(saved.answerCacheEnabled, defaults.answerCacheEnabled),
+    trustedExternalDomains: domainListValue(saved.trustedExternalDomains, defaults.trustedExternalDomains),
     updatedAt: saved.updatedAt,
   };
 }
@@ -78,6 +96,7 @@ export async function readAssistantConfig(): Promise<AssistantRuntimeConfig> {
       knowledgeShadowMode: booleanValue(saved.knowledgeShadowMode, localConfig.knowledgeShadowMode),
       qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, localConfig.qaDailyReminderEnabled),
       answerCacheEnabled: booleanValue(saved.answerCacheEnabled, localConfig.answerCacheEnabled),
+      trustedExternalDomains: domainListValue(saved.trustedExternalDomains, localConfig.trustedExternalDomains),
       updatedAt: saved.updatedAt,
     };
   } catch (error) {
@@ -96,6 +115,7 @@ export async function saveAssistantConfig(input: Partial<AssistantRuntimeConfig>
     knowledgeShadowMode: booleanValue(input.knowledgeShadowMode, current.knowledgeShadowMode),
     qaDailyReminderEnabled: booleanValue(input.qaDailyReminderEnabled, current.qaDailyReminderEnabled),
     answerCacheEnabled: booleanValue(input.answerCacheEnabled, current.answerCacheEnabled),
+    trustedExternalDomains: domainListValue(input.trustedExternalDomains, current.trustedExternalDomains),
     updatedAt: new Date().toISOString(),
   };
 
@@ -109,10 +129,10 @@ export async function saveAssistantConfig(input: Partial<AssistantRuntimeConfig>
   return config;
 }
 
-export function assistantFeatureEnabled(feature: keyof Omit<AssistantRuntimeConfig, "updatedAt">) {
+export function assistantFeatureEnabled(feature: AssistantRuntimeBooleanFeature) {
   return readAssistantConfigSync()[feature];
 }
 
-export async function assistantFeatureEnabledAsync(feature: keyof Omit<AssistantRuntimeConfig, "updatedAt">) {
+export async function assistantFeatureEnabledAsync(feature: AssistantRuntimeBooleanFeature) {
   return (await readAssistantConfig())[feature];
 }

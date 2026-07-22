@@ -1,5 +1,5 @@
 import { logAiUsage, logAnalyticsEvent } from "./analytics";
-import { assistantFeatureEnabledAsync } from "./admin-config";
+import { assistantFeatureEnabledAsync, readAssistantConfig } from "./admin-config";
 import { buildSystemPrompt, faqContext, productContext } from "./prompt";
 import type { AssistantLanguage, AssistantMessage, CatalogProduct } from "./types";
 
@@ -18,12 +18,15 @@ const trustedProductSourceDomains = [
   "laerdal.com",
   "prestanproducts.com",
   "bd.com",
+  "baxter.com",
   "stryker.com",
   "zoll.com",
   "philips.com",
+  "physio-control.com",
   "drivemedical.com",
   "dynarex.com",
   "medline.com",
+  "ansell.com",
   "3m.com",
   "riester.de",
   "vyaire.com",
@@ -31,8 +34,116 @@ const trustedProductSourceDomains = [
   "nascohealthcare.com",
   "simulaids.com",
   "statpacks.com",
+  "statpacks.ca",
   "meretusa.com",
   "sol-m.com",
+  "ferno.com",
+  "ferno.ca",
+  "ruthlee.co.uk",
+  "ruthlee.com",
+  "pocketnurse.com",
+  "gohcl.com",
+  "healthcarelogistics.com",
+  "life-assist.com",
+  "boundtree.com",
+  "alliedhpi.com",
+  "alliedmed.com",
+  "alliedusa.com",
+  "airlife.com",
+  "sun-med.com",
+  "adcmedical.com",
+  "adctoday.com",
+  "welchallyn.com",
+  "hillrom.com",
+  "baxter.com",
+  "mindray.com",
+  "nonin.com",
+  "masimo.com",
+  "gehealthcare.com",
+  "nihonkohden.com",
+  "edwards.com",
+  "medtronic.com",
+  "teleflex.com",
+  "hudsonrci.com",
+  "mercurymed.com",
+  "intersurgical.com",
+  "salterlabs.com",
+  "alliedmed.com",
+  "cardinalhealth.com",
+  "hartmann.info",
+  "bsnmedical.com",
+  "essity.com",
+  "sammons-preston.com",
+  "braydenmanikin.com",
+  "wnlproducts.com",
+  "worldpoint.com",
+  "safeguardmedical.com",
+  "curaplex.com",
+  "northamericanrescue.com",
+  "narescue.com",
+  "sammedical.com",
+  "combatmedical.com",
+  "chinookmed.com",
+  "rescue-essentials.com",
+  "everreadyfirstaid.com",
+  "waterjel.com",
+  "honeywell.com",
+  "msasafety.com",
+  "dukal.com",
+  "deroyal.com",
+  "dukesafety.com",
+  "grahammedical.com",
+  "medicom.com",
+  "pri-med.com",
+  "amdritmed.com",
+  "busseinc.com",
+  "crosstex.com",
+  "cypressmedical.com",
+  "dukal.com",
+  "dynatronics.com",
+  "fabricationenterprises.com",
+  "feimedical.com",
+  "mabisdmi.com",
+  "drivehealthcare.com",
+  "healthsmart.com",
+  "invacare.com",
+  "karmanhealthcare.com",
+  "medline.com",
+  "mobbhealthcare.com",
+  "nuprodx.com",
+  "tidi.com",
+  "sklarcorp.com",
+  "miltex.com",
+  "integra-life.com",
+  "aspensurgical.com",
+  "bd.com",
+  "sol-m.com",
+  "terumotmp.com",
+  "terumo.com",
+  "exelint.com",
+  "smiths-medical.com",
+  "icumed.com",
+  "bbraunusa.com",
+  "bbraun.com",
+  "convatec.com",
+  "hollister.com",
+  "coloplast.com",
+  "molnlycke.com",
+  "smith-nephew.com",
+  "hartmann.info",
+  "lohmann-rauscher.com",
+  "urgo.com",
+  "dermasciences.com",
+  "kci1.com",
+  "3mcanada.ca",
+  "bracco.com",
+  "bayer.com",
+  "clinton-ind.com",
+  "hausmann.com",
+  "brewercompany.com",
+  "detecto.com",
+  "seca.com",
+  "taylorusa.com",
   "mckesson.com",
   "mms.mckesson.com",
   "henryschein.com",
@@ -79,16 +190,251 @@ const trustedProductSourceDomains = [
   "manuals.plus",
 ];
 
-function trustedDomainsForProducts(products: CatalogProduct[]) {
+const emrnCatalogBrandNames = [
+  "3M",
+  "Ferno",
+  "Sol-M",
+  "Cardinal Health",
+  "AMD Ritmed",
+  "Laerdal",
+  "Otwo",
+  "Statpacks",
+  "ALG Safety",
+  "Drive Medical",
+  "BD",
+  "Microflex",
+  "Medpac",
+  "Smiths Medical",
+  "DUPONT",
+  "FLOTEC",
+  "BSN",
+  "Medegen",
+  "Biodex",
+  "Cascades",
+  "Five Star Label",
+  "PharmaSystems",
+  "Saf T Pak",
+  "Stevens",
+  "Sager",
+  "CAE Healthcare",
+  "Alcavis",
+  "INOVO",
+  "PDI",
+  "HALYARD",
+  "Coloplast",
+  "Purell",
+  "NexTemp",
+  "Wayne Safety",
+  "Technologist Choice",
+  "Welch Allyn",
+  "Metrex",
+  "Diversey Care",
+  "TALGE",
+  "Makrite",
+  "CLOROX",
+  "KIMTECH",
+  "Ansell",
+  "Pampers",
+  "MedPro",
+  "Safeguard",
+  "OPTIM 1",
+  "Terumo",
+  "Inspired by Drive",
+  "AMG Medical",
+  "Covidien",
+  "Dynarex",
+  "EMRN",
+  "Wallcur",
+  "Combat Medical",
+  "AMBU",
+  "TENA",
+  "Braun",
+  "Baxter",
+  "Bayer",
+  "BLS",
+  "SAM",
+  "CareFusion",
+  "CAT",
+  "Germs Be Gone",
+  "Glenwood",
+  "Graham",
+  "Healthmark",
+  "H-Ray",
+  "Intersurgical",
+  "Lernapharm",
+  "MEDBEC",
+  "MEDLINE",
+  "OSSUR",
+  "Pfizer",
+  "ROCHE",
+  "Skedco",
+  "Surgilast",
+  "Taylor Healthcare",
+  "Teleflex",
+  "Vyaire Medical",
+  "Water Jel",
+  "Winchester",
+  "NASCO",
+  "ADC",
+  "Amvex",
+  "CMC",
+  "St-John Ambulance",
+  "Dixie",
+  "Ecolab",
+  "Zoll",
+  "Derma Sciences",
+  "Prestan",
+  "Almedic",
+  "Ascensia",
+  "Johnson & Johnson",
+  "Safe Cross",
+  "Medela",
+  "3B Scientific",
+  "Philips",
+  "MERET",
+  "Pocket Nurse International",
+  "VanishPoint",
+  "Solic Medical",
+  "Riester",
+  "EDAN",
+  "Innov2Learn",
+  "PRIMED",
+  "Traverse Rescue",
+  "Cook Medical",
+  "Cardiac Science",
+  "Physio Control",
+  "HeartSine Samaritan",
+  "Pelican",
+  "Sterling",
+  "RUTH LEE",
+  "EKG CONCEPTS LLC",
+  "Artron",
+  "Molnlycke",
+  "Prevail",
+  "Heal In Colour",
+  "SCN Industrial",
+  "Nasco Education",
+  "MedaCure",
+  "Kennedy",
+  "Trademark Supplies",
+  "Amico",
+  "Hollister",
+  "EMS Logik",
+  "MedXL",
+  "SSCOR",
+  "HelloVein",
+  "Safetec",
+  "Lysol",
+  "Amsino",
+  "Hartwell Medical",
+  "Rescue Essentials",
+  "SOOTSOAP Supply Co.",
+  "re:do",
+  "North American Rescue",
+  "AirLife",
+  "Bard",
+];
+
+const trustedBrandDomainRules: Array<[RegExp, string[]]> = [
+  [/\b(?:3m|littmann)\b/i, ["3m.com"]],
+  [/\b(?:adc|american diagnostic)\b/i, ["adcmedical.com", "adctoday.com"]],
+  [/\bambu\b/i, ["ambu.com"]],
+  [/\bansell\b/i, ["ansell.com"]],
+  [/\bbaxter\b/i, ["baxter.com"]],
+  [/\b(?:bd|becton|dickinson)\b/i, ["bd.com"]],
+  [/\bbrayden\b/i, ["braydenmanikin.com"]],
+  [/\bcardiac\s*science\b/i, ["cardiacscience.com"]],
+  [/\bcardinal\b/i, ["cardinalhealth.com"]],
+  [/\bcarefusion\b/i, ["bd.com"]],
+  [/\bclorox\b/i, ["cloroxpro.com", "clorox.com"]],
+  [/\bcoloplast\b/i, ["coloplast.com"]],
+  [/\bcook\s*medical\b/i, ["cookmedical.com"]],
+  [/\bcovidien\b/i, ["medtronic.com"]],
+  [/\bdrive\b/i, ["drivemedical.com"]],
+  [/\bdynarex\b/i, ["dynarex.com"]],
+  [/\becolab\b/i, ["ecolab.com"]],
+  [/\bedan\b/i, ["edan.com"]],
+  [/\bferno\b/i, ["ferno.com"]],
+  [/\b(?:ge healthcare|gehc)\b/i, ["gehealthcare.com"]],
+  [/\bhartmann\b/i, ["hartmann.info"]],
+  [/\bheartsine\b/i, ["stryker.com", "heartsine.com"]],
+  [/\bhollister\b/i, ["hollister.com"]],
+  [/\b(?:hillrom|hill-rom|welch allyn)\b/i, ["hillrom.com", "welchallyn.com"]],
+  [/\bintersurgical\b/i, ["intersurgical.com"]],
+  [/\binvacare\b/i, ["invacare.com"]],
+  [/\bjohnson\s*&\s*johnson\b/i, ["jnjmedtech.com", "jnj.com"]],
+  [/\blaerdal\b/i, ["laerdal.com"]],
+  [/\bmasimo\b/i, ["masimo.com"]],
+  [/\bmedline\b/i, ["medline.com"]],
+  [/\bmedtronic\b/i, ["medtronic.com"]],
+  [/\bmeret\b/i, ["meretusa.com"]],
+  [/\bmetrex\b/i, ["metrex.com"]],
+  [/\bmindray\b/i, ["mindray.com"]],
+  [/\bmolnlycke\b/i, ["molnlycke.com"]],
+  [/\bnasco\b/i, ["nascohealthcare.com"]],
+  [/\bnonin\b/i, ["nonin.com"]],
+  [/\bphilips\b/i, ["philips.com"]],
+  [/\bpocket\s*nurse\b/i, ["pocketnurse.com"]],
+  [/\bprestan\b/i, ["prestanproducts.com"]],
+  [/\bpurell\b/i, ["gojo.com", "purell.com"]],
+  [/\briester\b/i, ["riester.de"]],
+  [/\broche\b/i, ["roche.com", "accu-chek.com"]],
+  [/\bruth\s*lee\b/i, ["ruthlee.co.uk"]],
+  [/\bsafeguard\b/i, ["safeguardmedical.com"]],
+  [/\bsscor\b/i, ["sscor.com"]],
+  [/\bskedco\b/i, ["skedco.com"]],
+  [/\bsimulaids?\b/i, ["simulaids.com"]],
+  [/\bsmiths\s*medical\b/i, ["icumed.com", "smiths-medical.com"]],
+  [/\bsol[\s-]?m\b/i, ["sol-m.com"]],
+  [/\b(?:statpack|g3\+|load n go|load-n-go)\b/i, ["statpacks.com"]],
+  [/\bstryker\b/i, ["stryker.com"]],
+  [/\bteleflex\b/i, ["teleflex.com"]],
+  [/\bterumo\b/i, ["terumo.com", "terumotmp.com"]],
+  [/\bvanishpoint\b/i, ["retractable.com"]],
+  [/\bvyaire\b/i, ["vyaire.com"]],
+  [/\bwater\s*jel\b/i, ["waterjel.com"]],
+  [/\bworldpoint\b/i, ["worldpoint.com"]],
+  [/\bzoll\b/i, ["zoll.com"]],
+];
+
+function hostnameMatchesTrustedDomain(hostname: string, domain: string) {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function compactBrandName(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\b(?:inc|llc|ltd|limited|corp|corporation|company|co|medical|products|supplies|healthcare|international|llc)\b/g, " ")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function compactForDomain(value: string) {
+  return compactBrandName(value).replace(/\s+/g, "");
+}
+
+function domainClearlyMatchesBrand(domain: string, brandName: string) {
+  const compactDomain = domain.replace(/\.(?:com|ca|org|net|de|co|io|info|edu|gov|uk)(?:\.[a-z]{2})?$/i, "").replace(/[^a-z0-9]/g, "");
+  const compactBrand = compactForDomain(brandName);
+  const firstToken = compactBrandName(brandName).split(/\s+/)[0] || "";
+  if (compactBrand.length >= 4 && compactDomain.includes(compactBrand)) return true;
+  if (firstToken.length >= 4 && compactDomain.includes(firstToken)) return true;
+  return false;
+}
+
+function trustedDomainsForProducts(products: CatalogProduct[], extraDomains: string[] = []) {
   const domains = new Set(trustedProductSourceDomains);
+  for (const domain of extraDomains) domains.add(domain);
   for (const product of products) {
     const text = [product.brand, product.manufacturer, product.name].join(" ").toLowerCase();
+    for (const [pattern, mappedDomains] of trustedBrandDomainRules) {
+      if (pattern.test(text)) mappedDomains.forEach((domain) => domains.add(domain));
+    }
     for (const value of [product.brand, product.manufacturer]) {
       const normalized = value
-        .toLowerCase()
-        .replace(/\b(?:inc|llc|ltd|limited|corp|corporation|company|co|medical|products|supplies|healthcare)\b/g, " ")
-        .replace(/[^a-z0-9]+/g, " ")
-        .trim();
+        ? compactBrandName(value)
+        : "";
       if (!normalized) continue;
       const compact = normalized.replace(/\s+/g, "");
       const firstToken = normalized.split(/\s+/)[0];
@@ -99,28 +445,41 @@ function trustedDomainsForProducts(products: CatalogProduct[]) {
         }
       }
     }
-    if (text.includes("laerdal")) domains.add("laerdal.com");
-    if (text.includes("prestan")) domains.add("prestanproducts.com");
-    if (/\bbd\b|becton/.test(text)) domains.add("bd.com");
-    if (text.includes("stryker")) domains.add("stryker.com");
-    if (text.includes("zoll")) domains.add("zoll.com");
-    if (text.includes("philips")) domains.add("philips.com");
-    if (text.includes("drive")) domains.add("drivemedical.com");
-    if (text.includes("dynarex")) domains.add("dynarex.com");
-    if (text.includes("medline")) domains.add("medline.com");
     if (text.includes("mckesson")) domains.add("mckesson.com");
     if (text.includes("henry schein")) domains.add("henryschein.com");
     if (text.includes("bound tree")) domains.add("boundtree.com");
-    if (text.includes("3m") || text.includes("littmann")) domains.add("3m.com");
-    if (text.includes("riester")) domains.add("riester.de");
-    if (text.includes("vyaire")) domains.add("vyaire.com");
-    if (text.includes("ambu")) domains.add("ambu.com");
-    if (text.includes("nasco")) domains.add("nascohealthcare.com");
-    if (text.includes("statpack") || text.includes("g3+") || text.includes("load n go") || text.includes("load-n-go")) domains.add("statpacks.com");
-    if (text.includes("meret")) domains.add("meretusa.com");
-    if (text.includes("sol-m")) domains.add("sol-m.com");
   }
-  return Array.from(domains).slice(0, 40);
+  return Array.from(domains).slice(0, 120);
+}
+
+async function trustedDomainsForProductsAsync(products: CatalogProduct[]) {
+  const config = await readAssistantConfig();
+  return trustedDomainsForProducts(products, config.trustedExternalDomains);
+}
+
+async function trustedDomainInstructions(products: CatalogProduct[]) {
+  const domains = await trustedDomainsForProductsAsync(products);
+  return [
+    "Trusted source domains for this lookup:",
+    domains.join(", "),
+    "",
+    `Known EMRN catalog brands include: ${emrnCatalogBrandNames.join(", ")}.`,
+    "Official brand/manufacturer websites are trusted when the domain clearly matches the supplied product brand/manufacturer, even if the exact brand domain is not listed above.",
+    "StatPacks official product pages on statpacks.com are trusted for StatPacks/G3/Load N Go product details.",
+  ].join("\n");
+}
+
+async function filteredTrustedSourceUrls(urls: string[], products: CatalogProduct[]) {
+  const domains = await trustedDomainsForProductsAsync(products);
+  return urls.filter((url) => {
+    const domain = domainFromUrl(url);
+    if (!domain) return false;
+    if (domains.some((trusted) => hostnameMatchesTrustedDomain(domain, trusted))) return true;
+    if (emrnCatalogBrandNames.some((brand) => domainClearlyMatchesBrand(domain, brand))) return true;
+    return products.some((product) => {
+      return [product.brand, product.manufacturer].some((brand) => brand && domainClearlyMatchesBrand(domain, brand));
+    });
+  });
 }
 
 async function shouldShowExternalSources() {
@@ -150,7 +509,7 @@ function detailAnswerInstructions(language: AssistantLanguage, showExternalSourc
     "Product detail and compatibility fallback rules:",
     "- First use the supplied EMRN catalog/product context.",
     "- If the EMRN context clearly answers the compatibility, dimension, accessory, replacement-part, or specification question, answer from EMRN context and do not rely on general memory.",
-    "- If EMRN context is unclear and web search is available, search only trusted EMRN/manufacturer/large medical supplier domains supplied by the tool filter.",
+    "- If EMRN context is unclear and web search is available, search only trusted EMRN/manufacturer/large medical supplier domains listed in the request.",
     "- Search the exact brand/manufacturer page first when a brand or model is mentioned. If the manufacturer page is not enough, use large medical supplier catalogs or product catalog pages only as support.",
     "- For EMRN catalog lookup, treat the supplied EMRN SKU as exact. For manufacturer/web lookup, remember EMRN SKUs may add store-specific prefixes or suffixes, such as DY for Dynarex or trailing internal letters for Nasco. Search and match by manufacturer name, manufacturer model/part number embedded in the SKU or product title, exact product title, dimensions, and option labels too.",
     "- Do not reject a manufacturer source just because its part number omits an EMRN prefix/suffix, but do require the product title/model/dimensions/options to clearly match the EMRN product.",
@@ -304,19 +663,14 @@ export async function lookupExternalKnowledge({
       {
         type: webSearchToolType,
         search_context_size: "low",
-        ...(webSearchToolType === "web_search"
-          ? {
-              filters: {
-                allowed_domains: trustedDomainsForProducts(products),
-              },
-            }
-          : {}),
       },
     ],
     tool_choice: "required",
     input: [
       "EMRN catalog context:",
       productContext(products),
+      "",
+      await trustedDomainInstructions(products),
       "",
       "Conversation:",
       ...messages.slice(-8).map((message) => `${message.role.toUpperCase()}: ${message.content}`),
@@ -351,6 +705,9 @@ export async function lookupExternalKnowledge({
 
   const json = await response.json();
   const lookup = parseExternalLookup(json);
+  if (lookup) {
+    lookup.sourceUrls = await filteredTrustedSourceUrls(lookup.sourceUrls, products);
+  }
   const usage = (json as { usage?: Record<string, unknown> }).usage;
   await logAiUsage({
     feature: "trusted_web_search",
@@ -399,17 +756,10 @@ export async function streamAssistantResponse({
     : process.env.OPENAI_ASSISTANT_MODEL || "gpt-4.1-mini";
   const webSearchToolType = process.env.OPENAI_WEB_SEARCH_TOOL || "web_search";
   const webSearchTool = trustedWebSearch
-    ? [
+      ? [
         {
           type: webSearchToolType,
           search_context_size: "low",
-          ...(webSearchToolType === "web_search"
-            ? {
-                filters: {
-                  allowed_domains: trustedDomainsForProducts(products),
-                },
-              }
-            : {}),
         },
       ]
     : undefined;
@@ -425,6 +775,8 @@ export async function streamAssistantResponse({
       "Catalog search results:",
       productContext(products),
       "",
+      trustedWebSearch ? await trustedDomainInstructions(products) : "",
+      trustedWebSearch ? "" : "",
       "Conversation:",
       ...messages.slice(-12).map((message) => `${message.role.toUpperCase()}: ${message.content}`),
       "",
