@@ -217,7 +217,7 @@ export function MeriTestCenter() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: testSessionId("custom"),
-          language: "en",
+          language: "unknown",
           messages: [{ role: "user", content: customMessages }],
         }),
       });

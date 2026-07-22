@@ -2448,7 +2448,8 @@ async function handleAssistantPost(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const messages = (body?.messages || []) as AssistantMessage[];
   const sessionId = String(body?.sessionId || crypto.randomUUID());
-  const language = body?.language || detectCustomerLanguage(messages);
+  const requestedLanguage = body?.language;
+  const language = requestedLanguage && requestedLanguage !== "unknown" ? requestedLanguage : detectCustomerLanguage(messages);
   const pageContext = (body?.pageContext || {}) as ProductPageContext;
   const latest = messages.at(-1)?.content || "";
   const createdAt = new Date().toISOString();

@@ -16,6 +16,12 @@ const frenchSignals = [
   "je cherche",
   "j'ai besoin",
   "besoin",
+  "vendez-vous",
+  "vendez vous",
+  "particulier",
+  "particuliers",
+  "achetez",
+  "acheter",
 ];
 
 const englishSignals = [
