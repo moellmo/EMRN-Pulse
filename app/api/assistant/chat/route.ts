@@ -3,7 +3,7 @@ import { createCart, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCa
 import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductCapabilityIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistant/openai";
@@ -1547,12 +1547,78 @@ function sentenceContaining(text: string, pattern: RegExp) {
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return "";
-  return cleaned
+  const sentenceMatch = cleaned
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
     .find((sentence) => pattern.test(sentence))
-    ?.replace(/\s+/g, " ")
-    .slice(0, 220) || "";
+    ?.replace(/\s+/g, " ");
+  if (!sentenceMatch) return "";
+  if (sentenceMatch.length <= 220) return sentenceMatch;
+
+  const matchIndex = sentenceMatch.search(pattern);
+  if (matchIndex < 0) return sentenceMatch.slice(0, 220);
+  const start = Math.max(0, matchIndex - 90);
+  const end = Math.min(sentenceMatch.length, matchIndex + 150);
+  const snippet = sentenceMatch.slice(start, end).trim();
+  return `${start > 0 ? "..." : ""}${snippet}${end < sentenceMatch.length ? "..." : ""}`;
+}
+
+function productCapabilityEvidence(text: string, question: string) {
+  const cleaned = String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "";
+
+  const questionTerms = capabilityQuestionTerms(question);
+  const capabilityPattern = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|support|supports|include|includes|come with|comes with|have|has|mount|mounts|attach|attaches|connect|connects|compatible|waterproof|water-resistant|sterile|latex|oxygen|o2|tank|cylinder|compartment|pocket|pouch|strap|sleeve|holder)\b/i;
+  const candidates = cleaned
+    .split(/(?<=[.!?])\s+|(?:\s{2,})|(?:\s[-•]\s)/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const best = candidates
+    .map((sentence) => ({
+      sentence,
+      overlap: questionTerms.reduce((sum, term) => sum + (sentence.toLowerCase().includes(term) ? 1 : 0), 0),
+      score:
+        (capabilityPattern.test(sentence) ? 6 : 0) +
+        questionTerms.reduce((sum, term) => sum + (sentence.toLowerCase().includes(term) ? 2 : 0), 0),
+    }))
+    .sort((a, b) => b.score - a.score)[0];
+
+  if (!best || best.score < 6 || best.overlap === 0) return "";
+  if (best.sentence.length <= 220) return best.sentence;
+  const focusPattern = questionTerms.length ? new RegExp(questionTerms.map(escapeRegExp).join("|"), "i") : capabilityPattern;
+  return sentenceContaining(best.sentence, focusPattern);
+}
+
+function oxygenStorageEvidence(text: string) {
+  const cleaned = String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (
+    cleaned.match(/\bO2\s*\(([^)]{8,140})\)/i)?.[0]?.trim() ||
+    cleaned.match(/\b(?:accommodates?|holds?|carries?|fits?)\s+[^.]{0,140}?(?:oxygen|o2)\s+(?:tank|cylinder)\b/i)?.[0]?.trim() ||
+    cleaned.match(/\b(?:oxygen|o2)\s+(?:tank|cylinder)[^.]{0,140}?\b(?:compartment|pocket|holder|sleeve|strap)\b/i)?.[0]?.trim() ||
+    sentenceContaining(cleaned, /\b(oxygen|o2|tank|cylinder)\b/i)
+  );
+}
+
+function capabilityQuestionTerms(question: string) {
+  const stop = new Set([
+    "can", "does", "do", "will", "would", "is", "are", "this", "that", "these", "those", "product", "item",
+    "the", "a", "an", "with", "for", "and", "or", "it", "its", "sku", "peut", "peuvent", "est", "que",
+    "ce", "cet", "cette", "ces", "produit", "article", "avec", "pour", "les", "des", "une", "un",
+  ]);
+  return Array.from(new Set(
+    String(question || "")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/[^a-z0-9]+/)
+      .filter((term) => term.length >= 3 && !stop.has(term) && !/^\d+$/.test(term) && !/^[a-z]?\d+[a-z0-9]*$/.test(term))
+  )).slice(0, 8);
 }
 
 function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
@@ -1565,6 +1631,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const wantsSoldBy = /\b(who\s+makes|who\s+sells|sold\s+by|manufacturer|brand)\b/i.test(question);
   const wantsOxygenStorage = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|tank|cylinder|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene|oxygène|oxygene)\b/i.test(question) &&
     /\b(oxygen|o2|tank|cylinder|oxygène|oxygene|réservoir|reservoir|cylindre)\b/i.test(question);
+  const wantsCapability = isProductCapabilityIntent(question);
   const lines: string[] = [];
 
   if (wantsPrice && product.price) {
@@ -1592,18 +1659,23 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   }
 
   if (wantsOxygenStorage) {
-    const oxygenSentence = sentenceContaining(text, /\b(oxygen|o2|tank|cylinder)\b/i);
+    const oxygenSentence = oxygenStorageEvidence(text);
     if (oxygenSentence) {
       lines.push(
         language === "fr"
           ? `Oxygène: oui. Détail EMRN trouvé: “${oxygenSentence}”`
           : `Oxygen storage: yes. EMRN detail found: “${oxygenSentence}”`
       );
-    } else {
+    }
+  }
+
+  if (wantsCapability && !wantsOxygenStorage) {
+    const evidence = productCapabilityEvidence(text, question);
+    if (evidence) {
       lines.push(
         language === "fr"
-          ? "Oxygène: je ne vois pas de mention claire d’un réservoir/cylindre d’oxygène dans les détails EMRN fournis pour ce produit."
-          : "Oxygen storage: I do not see a clear oxygen tank/cylinder mention in the supplied EMRN details for this product."
+          ? `Détail pertinent EMRN: “${evidence}”`
+          : `Relevant EMRN detail: “${evidence}”`
       );
     }
   }
