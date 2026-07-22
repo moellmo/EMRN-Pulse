@@ -134,6 +134,7 @@ async function mirrorToGoogleSheets(payload: SheetLogPayload): Promise<SheetMirr
 }
 
 async function readGoogleSheetsAdminRows(limit = 200): Promise<Omit<SheetsAdminData, "source"> | null> {
+  if (process.env.EMRN_GOOGLE_SHEETS_ADMIN_READ_ENABLED !== "true") return null;
   const baseUrl = googleSheetsWebhookUrl();
   if (!baseUrl) return null;
 

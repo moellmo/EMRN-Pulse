@@ -87,7 +87,7 @@ export async function saveCachedAnswer(input: {
     if (!oldestKey) break;
     cache.delete(oldestKey);
   }
-  void writeDurableCacheItem(entry);
+  await writeDurableCacheItem(entry);
   return entry;
 }
 
