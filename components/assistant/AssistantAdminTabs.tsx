@@ -2,9 +2,9 @@
 
 import { Children, ReactNode, useState } from "react";
 
-export function AssistantAdminTabs({ labels, children }: { labels: string[]; children: ReactNode }) {
+export function AssistantAdminTabs({ labels, children, initialIndex = 0 }: { labels: string[]; children: ReactNode; initialIndex?: number }) {
   const panels = Children.toArray(children);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(Math.max(0, Math.min(initialIndex, panels.length - 1)));
 
   return (
     <div className="mt-8">

@@ -6,6 +6,7 @@ import { AssistantAdminTabs } from "@/components/assistant/AssistantAdminTabs";
 import { AssistantConfigAdmin } from "@/components/assistant/AssistantConfigAdmin";
 import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmin";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
+import type { KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
 import type { AssistantAiUsageEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +35,14 @@ type PerformanceRow = AdminRow & {
 };
 
 type AdminPageProps = {
-  searchParams: Promise<{ token?: string | string[]; history?: string | string[] }>;
+  searchParams: Promise<{
+    token?: string | string[];
+    history?: string | string[];
+    teachQuery?: string | string[];
+    teachType?: string | string[];
+    teachTerms?: string | string[];
+    teachNote?: string | string[];
+  }>;
 };
 
 export default async function AssistantAdminPage({ searchParams }: AdminPageProps) {
@@ -42,6 +50,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
   const params = await searchParams;
   const providedToken = params.token;
   const historyMode = Array.isArray(params.history) ? params.history[0] : params.history;
+  const teachQuery = searchParamValue(params.teachQuery);
   const fullHistory = historyMode === "full";
   const isAuthorized =
     !token ||
@@ -66,6 +75,15 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
   const knowledgeMemory = await readKnowledgeMemory();
   const skuConfig = readSkuConfigSync();
   const adminToken = Array.isArray(providedToken) ? providedToken[0] || "" : providedToken || "";
+  const teachDraft = teachQuery
+    ? {
+        type: safeKnowledgeType(searchParamValue(params.teachType)) || "alias",
+        query: teachQuery,
+        correctSearchTerms: searchParamValue(params.teachTerms),
+        note: searchParamValue(params.teachNote),
+        status: "approved" as const,
+      }
+    : undefined;
 
   return (
     <main className="min-h-screen bg-slate-50 p-6 text-slate-950">
@@ -126,7 +144,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 ) : null}
               </div>
             ) : (
-              <AssistantAdminTabs labels={["Overview", "Performance", "Teach", "Settings", "Logs"]}>
+              <AssistantAdminTabs labels={["Overview", "Performance", "Teach", "Settings", "Logs"]} initialIndex={teachDraft ? 2 : 0}>
                 <div>
                   <section className="grid gap-4 md:grid-cols-4">
                     {Object.entries(data.metrics)
@@ -148,14 +166,14 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 </div>
 
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-                  <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." />
-                  <PerformancePanel title="Recent Timings" rows={data.performance || []} emptyText="No timing records yet." compact />
+                  <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
+                  <PerformancePanel title="Recent Timings" rows={data.performance || []} emptyText="No timing records yet." compact token={adminToken} fullHistory={fullHistory} />
                   <ExternalSourcesPanel rows={data.externalKnowledgeSources || []} />
                   <AiUsagePanel rows={data.aiUsage} />
                   <KnowledgeShadowPanel rows={data.knowledgeShadow || []} />
                 </section>
 
-                <KnowledgeReviewAdmin token={adminToken} items={knowledgeMemory} failedSearches={data.failedSearches || []} />
+                <KnowledgeReviewAdmin token={adminToken} items={knowledgeMemory} failedSearches={data.failedSearches || []} initialDraft={teachDraft} />
 
                 <div>
                   <AssistantConfigAdmin token={adminToken} config={assistantConfig} />
@@ -231,7 +249,21 @@ function Panel({ title, rows }: { title: string; rows: AdminRow[] }) {
   );
 }
 
-function PerformancePanel({ title, rows, emptyText, compact = false }: { title: string; rows: PerformanceRow[]; emptyText: string; compact?: boolean }) {
+function PerformancePanel({
+  title,
+  rows,
+  emptyText,
+  compact = false,
+  token,
+  fullHistory,
+}: {
+  title: string;
+  rows: PerformanceRow[];
+  emptyText: string;
+  compact?: boolean;
+  token: string;
+  fullHistory: boolean;
+}) {
   const sortedRows = sortRowsByTime(rows);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
@@ -241,7 +273,7 @@ function PerformancePanel({ title, rows, emptyText, compact = false }: { title: 
       </div>
       <div className="max-h-[620px] overflow-y-auto">
         {sortedRows.length ? (
-          sortedRows.slice(0, compact ? 12 : 25).map((row, index) => <PerformanceCard key={`${row.createdAt}-${index}`} row={row} compact={compact} />)
+          sortedRows.slice(0, compact ? 12 : 25).map((row, index) => <PerformanceCard key={`${row.createdAt}-${index}`} row={row} compact={compact} token={token} fullHistory={fullHistory} />)
         ) : (
           <div className="p-4 text-sm text-slate-500">{emptyText}</div>
         )}
@@ -250,7 +282,7 @@ function PerformancePanel({ title, rows, emptyText, compact = false }: { title: 
   );
 }
 
-function PerformanceCard({ row, compact }: { row: PerformanceRow; compact: boolean }) {
+function PerformanceCard({ row, compact, token, fullHistory }: { row: PerformanceRow; compact: boolean; token: string; fullHistory: boolean }) {
   const perf = row.performance || {};
   const totalMs = Number(perf.totalMs || 0);
   const searchMs = Number(perf.searchMs || 0);
@@ -269,6 +301,7 @@ function PerformanceCard({ row, compact }: { row: PerformanceRow; compact: boole
           ? "bg-blue-50 text-blue-700"
           : "bg-emerald-50 text-emerald-700";
   const bottleneck = biggestBottleneck({ searchMs, openAiMs, supabaseMs, knowledgeMs });
+  const teachHref = teachLinkForRow(row, token, fullHistory);
 
   return (
     <article className="border-b border-slate-100 p-4">
@@ -277,7 +310,12 @@ function PerformanceCard({ row, compact }: { row: PerformanceRow; compact: boole
           <div className="font-semibold text-slate-950">{rowQuery(row) || "Unknown question"}</div>
           <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · {row.language || "unknown"} · session {shortId("sessionId" in row ? row.sessionId : undefined)}</div>
         </div>
-        <span className={`rounded px-2 py-1 text-xs font-semibold ${ratingClass}`}>{rating}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <a href={teachHref} className="rounded bg-slate-950 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800">
+            Teach this
+          </a>
+          <span className={`rounded px-2 py-1 text-xs font-semibold ${ratingClass}`}>{rating}</span>
+        </div>
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -431,6 +469,47 @@ function rowTitle(row: AdminRow) {
 
 function rowQuery(row: AdminRow) {
   return "query" in row ? row.query || "" : "";
+}
+
+function searchParamValue(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] || "" : value || "";
+}
+
+function safeKnowledgeType(value: string): KnowledgeMemoryType | "" {
+  return ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "note"].includes(value)
+    ? value as KnowledgeMemoryType
+    : "";
+}
+
+function teachLinkForRow(row: PerformanceRow, token: string, fullHistory: boolean) {
+  const perf = row.performance || {};
+  const query = rowQuery(row);
+  const answerPath = String(perf.answerPath || "unknown");
+  const searchUsed = String(perf.searchQuery || "");
+  const type = knowledgeTypeForPerformanceRow(query, answerPath);
+  const note = [
+    `From Performance row: ${humanAnswerPath(answerPath)}.`,
+    `Server time: ${formatMs(Number(perf.totalMs || 0))}.`,
+    perf.openAiUsed ? "OpenAI was used." : "OpenAI was not used.",
+    `Products found: ${String(perf.productCount ?? 0)}.`,
+  ].join(" ");
+  const params = new URLSearchParams({
+    ...(token ? { token } : {}),
+    ...(fullHistory ? { history: "full" } : {}),
+    teachQuery: query,
+    teachType: type,
+    teachTerms: searchUsed,
+    teachNote: note,
+  });
+  return `/ai-assistant-admin?${params.toString()}#teach`;
+}
+
+function knowledgeTypeForPerformanceRow(query: string, answerPath: string): KnowledgeMemoryType {
+  if (/\b(compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that)\b/i.test(query)) return "compatibility";
+  if (/\b(replacement|parts?|pads?|padz|electrodes?|airways?|lungs?|batter(?:y|ies)|cables?)\b/i.test(query)) return "replacement_part";
+  if (/\b(color|colour|orange|red|blue|black|white|green|yellow|pink|purple)\b/i.test(query)) return "color_option";
+  if (/\bapproved_knowledge|emrn_compatibility|catalog_compatibility\b/i.test(answerPath)) return "preferred_product";
+  return "alias";
 }
 
 function formatMs(value: number) {

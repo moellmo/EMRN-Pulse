@@ -15,6 +15,7 @@ type KnowledgeReviewAdminProps = {
   token: string;
   items: KnowledgeMemoryItem[];
   failedSearches: FailedRow[];
+  initialDraft?: Partial<typeof emptyDraft>;
 };
 
 const typeOptions: KnowledgeMemoryType[] = ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "note"];
@@ -72,10 +73,10 @@ const emptyDraft = {
   status: "approved" as KnowledgeMemoryStatus,
 };
 
-export function KnowledgeReviewAdmin({ token, items, failedSearches }: KnowledgeReviewAdminProps) {
+export function KnowledgeReviewAdmin({ token, items, failedSearches, initialDraft }: KnowledgeReviewAdminProps) {
   const [memoryItems, setMemoryItems] = useState(items);
-  const [draft, setDraft] = useState(emptyDraft);
-  const [status, setStatus] = useState("");
+  const [draft, setDraft] = useState({ ...emptyDraft, ...(initialDraft || {}) });
+  const [status, setStatus] = useState(initialDraft?.query ? "Prefilled from a performance row. Review, choose the answer, then save." : "");
 
   function fillFailedQuery(query = "") {
     setDraft((current) => ({ ...current, query }));
@@ -126,6 +127,11 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches }: Knowledge
       <p className="mt-1 text-sm text-slate-600">
         Teach Pulse approved aliases, preferred SKUs, compatibility facts, replacement parts, and color-option rules.
       </p>
+      {initialDraft?.query ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          This row was prefilled from Performance. Add the correct SKU, exact search terms, answer, and proof note before saving.
+        </div>
+      ) : null}
       <details className="mt-3 rounded-md border border-blue-100 bg-blue-50 p-3 text-sm text-blue-950">
         <summary className="cursor-pointer font-semibold">What type should I use?</summary>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
