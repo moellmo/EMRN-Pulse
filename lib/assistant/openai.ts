@@ -287,16 +287,14 @@ function parseOpenAiSse({
             });
             if (feature === "trusted_web_search") {
               const externalSources = extractResponseSources(event.response);
-              if (externalSources.length) {
-                void logAnalyticsEvent({
-                  type: "external_knowledge_sources",
-                  sessionId: sessionId || "unknown",
-                  language,
-                  query,
-                  externalSources,
-                  createdAt: new Date().toISOString(),
-                });
-              }
+              void logAnalyticsEvent({
+                type: "external_knowledge_sources",
+                sessionId: sessionId || "unknown",
+                language,
+                query,
+                externalSources,
+                createdAt: new Date().toISOString(),
+              });
             }
           }
         } catch {

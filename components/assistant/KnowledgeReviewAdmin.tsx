@@ -19,6 +19,7 @@ type KnowledgeReviewAdminProps = {
 
 const typeOptions: KnowledgeMemoryType[] = ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "note"];
 const statusOptions: KnowledgeMemoryStatus[] = ["approved", "needs_review", "disabled"];
+const answerOptions: Array<NonNullable<KnowledgeMemoryItem["answer"]>> = ["", "confirmed", "not_compatible", "cant_confirm"];
 
 const typeHelp: Record<KnowledgeMemoryType, { title: string; useWhen: string; example: string; fields: string }> = {
   alias: {
@@ -37,13 +38,13 @@ const typeHelp: Record<KnowledgeMemoryType, { title: string; useWhen: string; ex
     title: "Compatibility: does item A work with item B?",
     useWhen: "Use this for works with, fits, compatible with, goes with, or does not fit questions.",
     example: "Example: FRx SMART Pads II are compatible with Philips FRx.",
-    fields: "Fill Customer Query and Correct SKU. Use Note to explain compatible, not compatible, or needs verification.",
+    fields: "Fill Customer Query, Answer, and Correct SKU if known. Use Note to explain the proof in plain language.",
   },
   replacement_part: {
     title: "Replacement part: part/accessory for a parent product",
     useWhen: "Use this when the customer needs pads, lungs, batteries, airways, cables, or parts for a product.",
     example: "Example: replacement lungs for Little Junior QCPR -> Little Junior QCPR airways/lungs.",
-    fields: "Fill Customer Query and Correct Search Terms. Add Correct SKU if one exact part should win.",
+    fields: "Fill Customer Query, Correct Search Terms, and Answer if this is a verified fit. Add Correct SKU if one exact part should win.",
   },
   color_option: {
     title: "Color/option: teach available or unavailable options",
@@ -140,6 +141,7 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches }: Knowledge
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <Select label="Type" value={draft.type} options={typeOptions} onChange={(value) => setDraft((current) => ({ ...current, type: value as KnowledgeMemoryType }))} />
         <Select label="Status" value={draft.status} options={statusOptions} onChange={(value) => setDraft((current) => ({ ...current, status: value as KnowledgeMemoryStatus }))} />
+        <Select label="Answer" value={draft.answer || ""} options={answerOptions} onChange={(value) => setDraft((current) => ({ ...current, answer: value as KnowledgeMemoryItem["answer"] }))} />
         <Input label="Correct SKU" value={draft.correctSku || ""} onChange={(value) => setDraft((current) => ({ ...current, correctSku: value }))} placeholder="989803139261" />
         <Input label="Customer Query" value={draft.query} onChange={(value) => setDraft((current) => ({ ...current, query: value }))} placeholder="electrodes pour philips frx" />
         <Input label="Correct Search Terms" value={draft.correctSearchTerms || ""} onChange={(value) => setDraft((current) => ({ ...current, correctSearchTerms: value }))} placeholder="Philips FRx SMART Pads II" />

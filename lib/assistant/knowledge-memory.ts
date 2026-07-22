@@ -157,8 +157,27 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
 
   return (await approvedKnowledgeMemory()).filter((item) => {
     const normalizedItemQuery = normalizeSearchText(item.query);
-    return normalizedItemQuery && (normalizedQuery.includes(normalizedItemQuery) || normalizedItemQuery.includes(normalizedQuery));
+    if (normalizedItemQuery && (normalizedQuery.includes(normalizedItemQuery) || normalizedItemQuery.includes(normalizedQuery))) {
+      return true;
+    }
+    return hasMeaningfulOverlap(normalizedQuery, item.correctSearchTerms || "");
   });
+}
+
+function hasMeaningfulOverlap(normalizedQuery: string, value: string) {
+  const queryTerms = significantTerms(normalizedQuery);
+  const valueTerms = significantTerms(normalizeSearchText(value));
+  if (!queryTerms.length || !valueTerms.length) return false;
+  const matches = valueTerms.filter((term) => queryTerms.includes(term));
+  return matches.length >= Math.min(3, valueTerms.length);
+}
+
+function significantTerms(value: string) {
+  return value
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3)
+    .filter((term) => !/^(the|and|for|with|this|that|item|product|part|parts|accessory|accessories|replacement|compatible|compatibility|work|works|fit|fits|pour|avec|produit|article|piece|pièce)$/.test(term));
 }
 
 function dedupeKnowledgeRows(items: KnowledgeMemoryItem[]) {

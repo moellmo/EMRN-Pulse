@@ -1835,6 +1835,64 @@ function catalogCompatibilityAnswerFromProducts(products: CatalogProduct[], ques
   return `${intro}\n\n${uniqueBySku(negativeProducts).slice(0, 3).map(line).join("\n")}`;
 }
 
+function approvedKnowledgeAnswer(
+  rules: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>,
+  products: CatalogProduct[],
+  language: "en" | "fr" | "unknown"
+) {
+  const rule = rules.find((item) => item.answer && ["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type));
+  if (!rule?.answer) return "";
+
+  const requestedPartType = requestedProductTypePattern(`${rule.query} ${rule.correctSearchTerms} ${rule.note}`);
+  const relevantProducts = products
+    .filter((product) => {
+      if (rule.correctSku) return product.sku.toUpperCase() === rule.correctSku.toUpperCase();
+      if (!requestedPartType) return false;
+      return requestedPartType.test(`${product.name} ${product.parentName} ${product.categories.join(" ")}`);
+    })
+    .slice(0, 3);
+  const productLines = relevantProducts.map((product) => {
+    const price = product.price > 0 ? `, $${product.price.toFixed(2)}` : "";
+    const availability = displayAvailability(product, language).replace(/[.。\s]+$/g, "");
+    return `- **${product.name}** — SKU **${product.sku || "N/A"}**${price}.${availability ? ` ${availability}.` : ""}\n  ${product.url}`;
+  });
+  const proof = (rule.note || rule.correctSearchTerms || rule.query).replace(/[.。\s]+$/g, "");
+
+  if (rule.answer === "confirmed") {
+    const intro = language === "fr"
+      ? `Confirmed compatible: D’après les renseignements approuvés EMRN/fabricant, ${proof}.`
+      : `Confirmed compatible: Based on approved EMRN/manufacturer information, ${proof}.`;
+    const next = productLines.length
+      ? language === "fr"
+        ? "Voulez-vous que je l’ajoute au panier ou que je prépare un devis?"
+        : "Would you like me to add it to cart or prepare a quote?"
+      : language === "fr"
+        ? "Je ne vois pas l’article exact dans les résultats EMRN fournis. Voulez-vous que j’envoie une demande de sourcing/devis à EMRN?"
+        : "I do not see the exact item in the supplied EMRN results. Would you like me to send an EMRN item-sourcing/quote request?";
+    return `${intro}${productLines.length ? `\n\n${productLines.join("\n")}` : ""}\n\n${next}`;
+  }
+
+  if (rule.answer === "not_compatible") {
+    const intro = language === "fr"
+      ? `Not compatible: D’après les renseignements approuvés EMRN/fabricant, ${proof}.`
+      : `Not compatible: Based on approved EMRN/manufacturer information, ${proof}.`;
+    return `${intro}${productLines.length ? `\n\nRelated EMRN product:\n${productLines.join("\n")}` : ""}\n\n${language === "fr" ? "Voulez-vous que je l’envoie au support pour vérifier?" : "Would you like me to send this to support to double-check?"}`;
+  }
+
+  const intro = language === "fr"
+    ? `Can’t confirm: ${proof || "Je ne peux pas confirmer cette compatibilité avec les renseignements approuvés disponibles."}`
+    : `Can’t confirm: ${proof || "I can’t confirm this compatibility from the approved information available."}`;
+  return `${intro}${productLines.length ? `\n\n${productLines.join("\n")}` : ""}\n\n${language === "fr" ? "Répondez oui et je l’enverrai au support." : "Reply yes and I’ll send this to support."}`;
+}
+
+function requestedProductTypePattern(text: string) {
+  if (/\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(text)) return /\b(airways?|voies?\s+a[eé]riennes?)\b/i;
+  if (/\b(lungs?)\b/i.test(text)) return /\b(lungs?)\b/i;
+  if (/\b(pads?|electrodes?|électrodes?)\b/i.test(text)) return /\b(pads?|electrodes?|électrodes?)\b/i;
+  if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return /\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i;
+  return null;
+}
+
 function productFamilyForPartsSearch(product: CatalogProduct) {
   return (product.parentName || product.name)
     .replace(/\b(?:4[-\s]?pack|single|dark skin|light skin)\b/gi, " ")
@@ -2686,6 +2744,51 @@ async function handleAssistantPost(req: NextRequest) {
       : shouldContinueMissingProductFlow
         ? missingProductFollowUpQuery(messages, latest)
       : searchQueryForLatest(messages, latest, []);
+  const preSearchKnowledgeStartedAt = Date.now();
+  const preSearchKnowledgeMatches =
+    !pageProductsForCart.length && !skuCandidates.length && !rememberedContextProducts.length
+      ? await matchingApprovedKnowledgeForQuery(latest)
+      : [];
+  const preSearchKnowledgeMs = Date.now() - preSearchKnowledgeStartedAt;
+  const preSearchSkus = Array.from(new Set(preSearchKnowledgeMatches.map((item) => item.correctSku || "").filter(Boolean)));
+  const preSearchSkuStartedAt = Date.now();
+  const preSearchSkuProducts = preSearchSkus.length
+    ? (await Promise.all(preSearchSkus.map((sku) => searchBySKU(sku)))).flat()
+    : [];
+  const preSearchSkuMs = Date.now() - preSearchSkuStartedAt;
+  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !preSearchSkuProducts.length
+    ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language)
+    : "";
+  if (earlyApprovedRuleAnswer) {
+    const totalMs = Date.now() - requestStartedAt;
+    await logAnalyticsEvent({
+      type: "assistant_performance",
+      sessionId,
+      language,
+      query: latest,
+      productIds: [],
+      performance: {
+        totalMs,
+        searchMs: 0,
+        supabaseMs: preSearchKnowledgeMs,
+        openAiMs: 0,
+        knowledgeMs: 0,
+        productCount: 0,
+        searchQuery,
+        answerPath: "approved_knowledge",
+        slow: totalMs >= 2500,
+        openAiUsed: false,
+        supabaseUsed: true,
+      },
+      createdAt: new Date().toISOString(),
+    });
+    return new Response(textStream(earlyApprovedRuleAnswer), {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
   let searchResult: {
     products: CatalogProduct[];
     found: number;
@@ -2720,10 +2823,17 @@ async function handleAssistantPost(req: NextRequest) {
     }
   } else if (rememberedContextProducts.length) {
     searchResult = { products: rememberedContextProducts, found: rememberedContextProducts.length };
+  } else if (preSearchSkuProducts.length) {
+    searchQuery = preSearchSkus.join(", ");
+    searchResult = { products: preSearchSkuProducts, found: preSearchSkuProducts.length, searchQuery, language };
   } else {
     searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
   }
-  searchTiming = searchResult.timings || {};
+  searchTiming = {
+    ...(searchResult.timings || {}),
+    totalMs: (searchResult.timings?.totalMs || 0) + preSearchSkuMs,
+    supabaseMs: (searchResult.timings?.supabaseMs || 0) + preSearchKnowledgeMs,
+  };
   let products = searchResult.products;
   const colorFallback = await colorFallbackSearch({ latest, searchQuery, products, language });
   if (colorFallback) {
@@ -3004,10 +3114,21 @@ async function handleAssistantPost(req: NextRequest) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
+    const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
+    const ruleAnswer = approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language);
+    if (ruleAnswer) {
+      await logPerformance("approved_knowledge");
+      return new Response(textStream(ruleAnswer), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
     const trustedCompatibilitySkus = Array.from(
       new Set([
         ...skuCandidates,
-        ...(await matchingApprovedKnowledgeForQuery(latest))
+        ...approvedKnowledgeMatches
           .map((item) => item.correctSku || "")
           .filter(Boolean),
       ].map((sku) => sku.toUpperCase()))

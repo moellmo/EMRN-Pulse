@@ -428,6 +428,7 @@ function formatDate(value: string) {
 function humanAnswerPath(value: string) {
   const labels: Record<string, string> = {
     emrn_compatibility: "EMRN taught/catalog answer",
+    approved_knowledge: "Approved taught answer",
     openai_detail: "OpenAI verified answer",
     external_knowledge: "External knowledge verified",
     external_knowledge_off: "External knowledge off",
