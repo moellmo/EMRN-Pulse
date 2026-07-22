@@ -10,6 +10,7 @@ import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistan
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
 import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
 import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
+import { getCachedAnswer, saveCachedAnswer, shouldUseAnswerCache } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
 import type { ExternalKnowledgeLookup } from "@/lib/assistant/openai";
@@ -3010,6 +3011,48 @@ async function handleAssistantPost(req: NextRequest) {
       : shouldContinueMissingProductFlow
         ? missingProductFollowUpQuery(messages, latest)
       : searchQueryForLatest(messages, latest, []);
+  const canUseAnswerCache = shouldUseAnswerCache({
+    query: latest,
+    messageCount: messages.length,
+    hasPageSku: Boolean(pageContext.sku),
+  });
+  if (canUseAnswerCache) {
+    const cachedAnswer = getCachedAnswer(latest, language);
+    if (cachedAnswer) {
+      const totalMs = Date.now() - requestStartedAt;
+      await logAnalyticsEvent({
+        type: "assistant_performance",
+        sessionId,
+        language,
+        query: latest,
+        productIds: cachedAnswer.productIds,
+        performance: {
+          totalMs,
+          searchMs: 0,
+          supabaseMs: 0,
+          openAiMs: 0,
+          knowledgeMs: 0,
+          productCount: cachedAnswer.productIds.length || cachedAnswer.productSkus.length,
+          searchQuery: cachedAnswer.searchQuery || searchQuery,
+          answerPath: "cached_answer",
+          answerPreview: answerPreviewText(cachedAnswer.answer),
+          proofSearchTerms: [cachedAnswer.query, cachedAnswer.searchQuery || ""].filter(Boolean),
+          emrnMatchedSkus: cachedAnswer.productSkus,
+          deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
+          slow: false,
+          openAiUsed: false,
+          supabaseUsed: false,
+        },
+        createdAt: new Date().toISOString(),
+      });
+      return new Response(textStream(cachedAnswer.answer), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+  }
   const preSearchKnowledgeStartedAt = Date.now();
   const preSearchKnowledgeMatches =
     !pageProductsForCart.length && !skuCandidates.length && !rememberedContextProducts.length
@@ -3051,6 +3094,17 @@ async function handleAssistantPost(req: NextRequest) {
       },
       createdAt: new Date().toISOString(),
     });
+    if (canUseAnswerCache) {
+      saveCachedAnswer({
+        query: latest,
+        language,
+        answer: earlyApprovedRuleAnswer,
+        answerPath: "approved_knowledge",
+        searchQuery,
+        productIds: [],
+        productSkus: [],
+      });
+    }
     return new Response(textStream(earlyApprovedRuleAnswer), {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
@@ -3203,6 +3257,17 @@ async function handleAssistantPost(req: NextRequest) {
       },
       createdAt: new Date().toISOString(),
     });
+    if (canUseAnswerCache && extra?.answerPreview) {
+      saveCachedAnswer({
+        query: latest,
+        language,
+        answer: extra.answerPreview,
+        answerPath,
+        searchQuery,
+        productIds: products.slice(0, 8).map((product) => product.productId),
+        productSkus: products.slice(0, 8).map((product) => product.sku).filter(Boolean),
+      });
+    }
   };
 
   if (isAccountIntent(latest)) {

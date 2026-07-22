@@ -972,6 +972,7 @@ function humanAnswerPath(value: string) {
     single_product: "One product found",
     catalog_detail: "EMRN product detail",
     catalog_compatibility: "EMRN compatibility detail",
+    cached_answer: "Cached answer",
     related_parts: "Related parts search",
     no_products: "No product found",
     quote_request_sent: "Quote request sent",
