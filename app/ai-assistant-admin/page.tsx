@@ -182,7 +182,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
                   <PerformancePanel title="Recent Timings" rows={data.performance || []} emptyText="No timing records yet." compact token={adminToken} fullHistory={fullHistory} />
-                  <AnswerCachePanel rows={data.answerCache || []} />
+                  <AnswerCachePanel rows={data.answerCache || []} metrics={data.metrics} />
                   <ExternalSourcesPanel rows={data.externalKnowledgeSources || []} />
                   <AiUsagePanel rows={data.aiUsage} />
                   <KnowledgeShadowPanel rows={data.knowledgeShadow || []} />
@@ -607,10 +607,28 @@ function AiUsagePanel({ rows }: { rows: AssistantAiUsageEvent[] }) {
   );
 }
 
-function AnswerCachePanel({ rows }: { rows: CachedAnswer[] }) {
+function AnswerCachePanel({ rows, metrics }: { rows: CachedAnswer[]; metrics: Record<string, unknown> }) {
+  const readError = String(metrics.answerCacheDurableReadError || "");
+  const writeError = String(metrics.answerCacheDurableWriteError || "");
+  const durableRows = Number(metrics.answerCacheDurableRows || 0);
+  const memoryRows = Number(metrics.answerCacheMemoryRows || 0);
+  const supabaseConfigured = Boolean(metrics.answerCacheSupabaseConfigured);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
-      <h2 className="border-b border-slate-200 px-4 py-3 text-lg font-semibold">Answer Cache</h2>
+      <div className="border-b border-slate-200 px-4 py-3">
+        <h2 className="text-lg font-semibold">Answer Cache</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Durable rows: {durableRows} · memory rows on this server: {memoryRows} · Supabase cache: {supabaseConfigured ? "configured" : "not configured"}
+        </p>
+      </div>
+      {readError || writeError ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="font-semibold">Cache needs attention</div>
+          {readError ? <div className="mt-1">Read error: {readError}</div> : null}
+          {writeError ? <div className="mt-1">Last write error: {writeError}</div> : null}
+          <div className="mt-1">For live Vercel, make sure `EMRN_SUPABASE_SERVICE_ROLE_KEY` is set and the `assistant_answer_cache` SQL has been run.</div>
+        </div>
+      ) : null}
       <div className="max-h-[520px] overflow-y-auto">
         {rows.length ? rows.slice(0, 30).map((row) => (
           <article key={row.key} className="border-b border-slate-100 p-4">

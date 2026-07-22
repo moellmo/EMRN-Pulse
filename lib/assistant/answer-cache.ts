@@ -3,6 +3,7 @@ import {
   readSupabaseAnswerCacheItem,
   readSupabaseAnswerCacheRows,
   saveSupabaseAnswerCacheItem,
+  supabaseAdminConfigured,
 } from "./supabase-admin";
 
 export type CachedAnswer = {
@@ -24,6 +25,8 @@ export type CachedAnswer = {
 const cache = new Map<string, CachedAnswer>();
 const MAX_CACHE_ROWS = 250;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
+let lastDurableReadError = "";
+let lastDurableWriteError = "";
 
 function ttlMs() {
   const raw = Number(process.env.EMRN_ANSWER_CACHE_TTL_MS || "");
@@ -116,6 +119,7 @@ function shouldCacheAnswer(answerPath: string, answer: string) {
 
 export async function readAnswerCacheSnapshot(limit = 100) {
   const memoryRows = Array.from(cache.values());
+  lastDurableReadError = "";
   const durableRows = await readDurableCacheRows(limit);
   const rowsByKey = new Map<string, CachedAnswer>();
   for (const row of [...durableRows, ...memoryRows]) {
@@ -130,6 +134,11 @@ export async function readAnswerCacheSnapshot(limit = 100) {
       cachedAnswerCount: rows.length,
       cachedAnswerHits: rows.reduce((sum, row) => sum + (row.hits || 0), 0),
       cachedAnswerWithHits: rows.filter((row) => row.hits > 0).length,
+      answerCacheMemoryRows: memoryRows.length,
+      answerCacheDurableRows: durableRows.length,
+      answerCacheSupabaseConfigured: supabaseAdminConfigured(),
+      answerCacheDurableReadError: lastDurableReadError,
+      answerCacheDurableWriteError: lastDurableWriteError,
     },
   };
 }
@@ -155,6 +164,7 @@ async function readDurableCacheItem(key: string) {
     if (item) cache.set(key, item);
     return item;
   } catch (error) {
+    lastDurableReadError = error instanceof Error ? error.message : String(error);
     console.warn("[EMRN Pulse] Supabase answer cache read skipped", error);
     return null;
   }
@@ -164,6 +174,7 @@ async function readDurableCacheRows(limit: number) {
   try {
     return await readSupabaseAnswerCacheRows(limit);
   } catch (error) {
+    lastDurableReadError = error instanceof Error ? error.message : String(error);
     console.warn("[EMRN Pulse] Supabase answer cache list skipped", error);
     return [];
   }
@@ -172,7 +183,9 @@ async function readDurableCacheRows(limit: number) {
 async function writeDurableCacheItem(item: CachedAnswer) {
   try {
     await saveSupabaseAnswerCacheItem(item);
+    lastDurableWriteError = "";
   } catch (error) {
+    lastDurableWriteError = error instanceof Error ? error.message : String(error);
     console.warn("[EMRN Pulse] Supabase answer cache write skipped", error);
   }
 }
