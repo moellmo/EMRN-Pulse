@@ -1,6 +1,7 @@
 import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "./types";
 import type { AssistantRuntimeConfig } from "./admin-config";
 import type { KnowledgeMemoryItem } from "./knowledge-memory";
+import type { CachedAnswer } from "./answer-cache";
 
 export type SupabaseAdminData = {
   analytics: AssistantAnalyticsEvent[];
@@ -182,6 +183,44 @@ export async function deleteSupabaseKnowledgeMemoryItem(id: string) {
   if (!supabaseAdminConfigured()) return false;
   await supabaseRequest(`assistant_knowledge_memory?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
   return true;
+}
+
+export async function readSupabaseAnswerCacheItem(key: string): Promise<CachedAnswer | null> {
+  if (!supabaseAdminConfigured()) return null;
+  const rows = await supabaseRequest<Array<{ payload: CachedAnswer }>>(
+    `assistant_answer_cache?key=eq.${encodeURIComponent(key)}&select=payload&limit=1`
+  );
+  return rows[0]?.payload || null;
+}
+
+export async function readSupabaseAnswerCacheRows(limit = 100): Promise<CachedAnswer[]> {
+  if (!supabaseAdminConfigured()) return [];
+  const safeLimit = Math.max(10, Math.min(250, Math.round(limit)));
+  const rows = await supabaseRequest<Array<{ payload: CachedAnswer }>>(
+    `assistant_answer_cache?select=payload&order=last_hit_at.desc.nullslast,created_at.desc&limit=${safeLimit}`
+  );
+  return payloadFromRows(rows);
+}
+
+export async function saveSupabaseAnswerCacheItem(item: CachedAnswer) {
+  if (!supabaseAdminConfigured()) return null;
+  const rows = await supabaseRequest<Array<{ payload: CachedAnswer }>>("assistant_answer_cache?on_conflict=key", {
+    method: "POST",
+    body: JSON.stringify({
+      key: item.key,
+      language: item.language,
+      query: item.query,
+      answer_path: item.answerPath,
+      hit_count: item.hits,
+      expires_at: new Date(item.expiresAt).toISOString(),
+      last_hit_at: item.lastHitAt ? new Date(item.lastHitAt).toISOString() : null,
+      payload: item,
+      created_at: new Date(item.createdAt).toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+  });
+  return rows[0]?.payload || item;
 }
 
 export async function readSupabaseAdminData(limit = 200): Promise<SupabaseAdminData | null> {

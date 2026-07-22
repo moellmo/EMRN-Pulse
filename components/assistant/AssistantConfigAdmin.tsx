@@ -39,6 +39,11 @@ const labels: Array<[keyof Omit<AssistantRuntimeConfig, "updatedAt">, string, st
     "Daily QA Reminder Email",
     "ON sends one daily email to the admin reminder address only when the QA Queue has questions to review. Turn off anytime if you do not want reminders.",
   ],
+  [
+    "answerCacheEnabled",
+    "Answer Cache",
+    "ON lets Meri reuse recent successful product/compatibility answers for speed. It never caches quote, invoice, order, cart, support, availability, no-product, or can’t-confirm answers.",
+  ],
 ];
 
 export function AssistantConfigAdmin({ token, config }: AssistantConfigAdminProps) {

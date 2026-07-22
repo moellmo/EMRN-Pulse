@@ -9,6 +9,7 @@ import { PerformanceReviewedButton } from "@/components/assistant/PerformanceRev
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
 import type { KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
 import type { AssistantAiUsageEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
+import type { CachedAnswer } from "@/lib/assistant/answer-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -181,6 +182,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
                   <PerformancePanel title="Recent Timings" rows={data.performance || []} emptyText="No timing records yet." compact token={adminToken} fullHistory={fullHistory} />
+                  <AnswerCachePanel rows={data.answerCache || []} />
                   <ExternalSourcesPanel rows={data.externalKnowledgeSources || []} />
                   <AiUsagePanel rows={data.aiUsage} />
                   <KnowledgeShadowPanel rows={data.knowledgeShadow || []} />
@@ -605,6 +607,35 @@ function AiUsagePanel({ rows }: { rows: AssistantAiUsageEvent[] }) {
   );
 }
 
+function AnswerCachePanel({ rows }: { rows: CachedAnswer[] }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white">
+      <h2 className="border-b border-slate-200 px-4 py-3 text-lg font-semibold">Answer Cache</h2>
+      <div className="max-h-[520px] overflow-y-auto">
+        {rows.length ? rows.slice(0, 30).map((row) => (
+          <article key={row.key} className="border-b border-slate-100 p-4">
+            <div className="font-semibold text-slate-950">{row.query}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              Created {formatDate(new Date(row.createdAt).toISOString())}
+              {row.lastHitAt ? ` · last used ${formatDate(new Date(row.lastHitAt).toISOString())}` : ""}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <HumanMetric label="Cache hits" value={String(row.hits || 0)} />
+              <HumanMetric label="Original answer route" value={humanAnswerPath(row.sourceAnswerPath || row.answerPath)} />
+              <HumanMetric label="Search used" value={String(row.searchQuery || row.query).slice(0, 80)} />
+              <HumanMetric label="Products/SKUs" value={(row.productSkus.length ? row.productSkus.join(", ") : row.productIds.join(", ")) || "not logged"} />
+            </div>
+            <details className="mt-3">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-500">Cached answer preview</summary>
+              <div className="mt-2 rounded bg-slate-50 p-3 text-sm text-slate-700">{answerPreviewText(row.answer)}</div>
+            </details>
+          </article>
+        )) : <div className="p-4 text-sm text-slate-500">No cached answers yet. Repeated successful product answers will show here.</div>}
+      </div>
+    </div>
+  );
+}
+
 function ExternalSourcesPanel({ rows }: { rows: AdminRow[] }) {
   const sortedRows = sortRowsByTime(rows);
   return (
@@ -680,6 +711,10 @@ function rowQuery(row: AdminRow) {
 
 function cleanAdminAnswerPreview(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function answerPreviewText(value: string) {
+  return cleanAdminAnswerPreview(value).slice(0, 600);
 }
 
 function quickActionQuestionLabel(question: string) {

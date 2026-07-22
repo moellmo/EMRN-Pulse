@@ -67,12 +67,30 @@ create table if not exists public.assistant_knowledge_memory (
 create index if not exists assistant_knowledge_memory_status_idx on public.assistant_knowledge_memory (status);
 create index if not exists assistant_knowledge_memory_updated_at_idx on public.assistant_knowledge_memory (updated_at desc);
 
+create table if not exists public.assistant_answer_cache (
+  key text primary key,
+  language text,
+  query text,
+  answer_path text,
+  hit_count integer not null default 0,
+  payload jsonb not null,
+  expires_at timestamptz not null,
+  last_hit_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists assistant_answer_cache_expires_at_idx on public.assistant_answer_cache (expires_at);
+create index if not exists assistant_answer_cache_last_hit_at_idx on public.assistant_answer_cache (last_hit_at desc);
+create index if not exists assistant_answer_cache_query_idx on public.assistant_answer_cache (query);
+
 alter table public.assistant_config enable row level security;
 alter table public.assistant_analytics enable row level security;
 alter table public.assistant_quotes enable row level security;
 alter table public.assistant_support enable row level security;
 alter table public.assistant_ai_usage enable row level security;
 alter table public.assistant_knowledge_memory enable row level security;
+alter table public.assistant_answer_cache enable row level security;
 
 -- Use EMRN_SUPABASE_SERVICE_ROLE_KEY on the server. The service role bypasses RLS.
 -- Do not create public anon policies for these admin tables unless you are deliberately building a separate locked-down client flow.

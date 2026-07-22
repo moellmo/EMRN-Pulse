@@ -3011,13 +3011,14 @@ async function handleAssistantPost(req: NextRequest) {
       : shouldContinueMissingProductFlow
         ? missingProductFollowUpQuery(messages, latest)
       : searchQueryForLatest(messages, latest, []);
-  const canUseAnswerCache = shouldUseAnswerCache({
+  const answerCacheEnabled = await assistantFeatureEnabledAsync("answerCacheEnabled");
+  const canUseAnswerCache = answerCacheEnabled && shouldUseAnswerCache({
     query: latest,
     messageCount: messages.length,
     hasPageSku: Boolean(pageContext.sku),
   });
   if (canUseAnswerCache) {
-    const cachedAnswer = getCachedAnswer(latest, language);
+    const cachedAnswer = await getCachedAnswer(latest, language);
     if (cachedAnswer) {
       const totalMs = Date.now() - requestStartedAt;
       await logAnalyticsEvent({
@@ -3095,7 +3096,7 @@ async function handleAssistantPost(req: NextRequest) {
       createdAt: new Date().toISOString(),
     });
     if (canUseAnswerCache) {
-      saveCachedAnswer({
+      await saveCachedAnswer({
         query: latest,
         language,
         answer: earlyApprovedRuleAnswer,
@@ -3258,7 +3259,7 @@ async function handleAssistantPost(req: NextRequest) {
       createdAt: new Date().toISOString(),
     });
     if (canUseAnswerCache && extra?.answerPreview) {
-      saveCachedAnswer({
+      await saveCachedAnswer({
         query: latest,
         language,
         answer: extra.answerPreview,

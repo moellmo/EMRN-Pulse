@@ -12,6 +12,7 @@ export type AssistantRuntimeConfig = {
   showExternalSources: boolean;
   knowledgeShadowMode: boolean;
   qaDailyReminderEnabled: boolean;
+  answerCacheEnabled: boolean;
   updatedAt?: string;
 };
 
@@ -34,6 +35,7 @@ function defaultConfig(): AssistantRuntimeConfig {
     showExternalSources: envFlag("EMRN_SHOW_EXTERNAL_SOURCES", false),
     knowledgeShadowMode: envFlag("EMRN_KNOWLEDGE_SHADOW_MODE", true),
     qaDailyReminderEnabled: envFlag("EMRN_QA_DAILY_REMINDER_ENABLED", true),
+    answerCacheEnabled: envFlag("EMRN_ANSWER_CACHE_ENABLED", true),
   };
 }
 
@@ -56,6 +58,7 @@ export function readAssistantConfigSync(): AssistantRuntimeConfig {
     showExternalSources: booleanValue(saved.showExternalSources, defaults.showExternalSources),
     knowledgeShadowMode: booleanValue(saved.knowledgeShadowMode, defaults.knowledgeShadowMode),
     qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, defaults.qaDailyReminderEnabled),
+    answerCacheEnabled: booleanValue(saved.answerCacheEnabled, defaults.answerCacheEnabled),
     updatedAt: saved.updatedAt,
   };
 }
@@ -74,6 +77,7 @@ export async function readAssistantConfig(): Promise<AssistantRuntimeConfig> {
       showExternalSources: booleanValue(saved.showExternalSources, localConfig.showExternalSources),
       knowledgeShadowMode: booleanValue(saved.knowledgeShadowMode, localConfig.knowledgeShadowMode),
       qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, localConfig.qaDailyReminderEnabled),
+      answerCacheEnabled: booleanValue(saved.answerCacheEnabled, localConfig.answerCacheEnabled),
       updatedAt: saved.updatedAt,
     };
   } catch (error) {
@@ -91,6 +95,7 @@ export async function saveAssistantConfig(input: Partial<AssistantRuntimeConfig>
     showExternalSources: booleanValue(input.showExternalSources, current.showExternalSources),
     knowledgeShadowMode: booleanValue(input.knowledgeShadowMode, current.knowledgeShadowMode),
     qaDailyReminderEnabled: booleanValue(input.qaDailyReminderEnabled, current.qaDailyReminderEnabled),
+    answerCacheEnabled: booleanValue(input.answerCacheEnabled, current.answerCacheEnabled),
     updatedAt: new Date().toISOString(),
   };
 

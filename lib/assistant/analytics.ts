@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "./types";
+import { readAnswerCacheSnapshot } from "./answer-cache";
 import {
   logSupabaseAiUsage,
   logSupabaseAnalyticsEvent,
@@ -315,13 +316,14 @@ export async function logAiUsage(event: Omit<AssistantAiUsageEvent, "createdAt" 
 
 export async function readAssistantAdminData(options: { limit?: number; full?: boolean } = {}) {
   const rowLimit = options.full ? 1000 : Math.max(25, Math.min(250, options.limit || 100));
-  const [localAnalytics, localQuotes, localSupport, localAiUsage, sheets, supabase] = await Promise.all([
+  const [localAnalytics, localQuotes, localSupport, localAiUsage, sheets, supabase, answerCache] = await Promise.all([
     readJsonl<AssistantAnalyticsEvent>("analytics.jsonl"),
     readJsonl<QuoteRequest & { createdAt: string }>("quotes.jsonl"),
     readJsonl<SupportRequest & { createdAt: string }>("support.jsonl"),
     readJsonl<AssistantAiUsageEvent>("ai-usage.jsonl"),
     readGoogleSheetsAdminRows(rowLimit),
     readSupabaseAdminData(rowLimit),
+    readAnswerCacheSnapshot(100),
   ]);
   const analytics = dedupeRows([...localAnalytics, ...(sheets?.analytics || []), ...(supabase?.analytics || [])]) as AssistantAnalyticsEvent[];
   const quotes = dedupeRows([...localQuotes, ...(sheets?.quotes || []), ...(supabase?.quotes || [])]) as Array<QuoteRequest & { createdAt: string }>;
@@ -378,6 +380,7 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
       aiOutputTokensThisMonth: sum(aiUsageThisMonth.map((event) => event.outputTokens)),
       aiEstimatedCostThisMonth: roundCurrency(sum(aiUsageThisMonth.map((event) => event.estimatedCostUsd))),
       aiEstimatedCostAllTime: roundCurrency(sum(aiUsage.map((event) => event.estimatedCostUsd))),
+      ...answerCache.metrics,
       languages,
       mostSearchedProducts: topCounts(searches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
       searchFailures: topCounts(failedSearches.map((event) => "query" in event ? event.query || "" : "").filter(Boolean)),
@@ -406,6 +409,7 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
     quotes: quotes.slice(-100).reverse(),
     support: support.slice(-100).reverse(),
     aiUsage: aiUsage.slice(-100).reverse(),
+    answerCache: answerCache.rows,
   };
 }
 
