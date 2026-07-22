@@ -60,7 +60,7 @@ export function isCartIntent(text: string) {
 }
 
 export function isProductDetailIntent(text: string) {
-  return /\b(how\s+big|how\s+large|how\s+long|how\s+much|how\s+many|who\s+makes|who\s+sells|sold\s+by|manufacturer|brand|what\s+colors?|what\s+colours?|what\s+sizes?|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|replacement parts|accessory|accessories|part|parts|handle|handles|wheelchair|manikin|mannequin|dimension|dimensions|measurements?|specs?|specifications?|sizes?|sizing|height|width|depth|length|weight|diameter|capacity|box|boxes|pack|package|case|count|waterproof|water-resistant|water resistant|water resistance|rating|ratings|colors?|colours?|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur)\b/i.test(text);
+  return /\b(how\s+big|how\s+large|how\s+long|how\s+much|how\s+many|who\s+makes|who\s+sells|sold\s+by|manufacturer|brand|what\s+colors?|what\s+colours?|what\s+sizes?|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|replacement part|replacement parts|accessory|accessories|part|parts|handle|handles|dimension|dimensions|measurements?|specs?|specifications?|sizes?|sizing|height|width|depth|length|weight|diameter|capacity|box|boxes|pack|package|case|count|waterproof|water-resistant|water resistant|water resistance|rating|ratings|colors?|colours?|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur)\b/i.test(text);
 }
 
 export function isAccountIntent(text: string) {
