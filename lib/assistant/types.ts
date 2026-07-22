@@ -153,6 +153,7 @@ export type AssistantAnalyticsEvent =
         | "product_recommended"
         | "knowledge_shadow"
         | "assistant_performance"
+        | "admin_reviewed_performance"
         | "external_knowledge_sources"
         | "quote_request"
         | "quote_lookup"
@@ -161,6 +162,7 @@ export type AssistantAnalyticsEvent =
       sessionId: string;
       language: AssistantLanguage;
       query?: string;
+      reviewedPerformanceKey?: string;
       productIds?: number[];
       knowledge?: {
         kind: "compatibility" | "product_detail" | "none";

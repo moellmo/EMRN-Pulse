@@ -1,10 +1,11 @@
-import { readAssistantAdminData } from "@/lib/assistant/analytics";
+import { performanceReviewKey, readAssistantAdminData } from "@/lib/assistant/analytics";
 import { readAssistantConfig } from "@/lib/assistant/admin-config";
 import { readKnowledgeMemory } from "@/lib/assistant/knowledge-memory";
 import { readSkuConfigSync } from "@/lib/assistant/sku-config";
 import { AssistantAdminTabs } from "@/components/assistant/AssistantAdminTabs";
 import { AssistantConfigAdmin } from "@/components/assistant/AssistantConfigAdmin";
 import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmin";
+import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
 import type { KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
 import type { AssistantAiUsageEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
@@ -266,15 +267,27 @@ function PerformancePanel({
   fullHistory: boolean;
 }) {
   const sortedRows = sortRowsByTime(rows);
+  const visibleCount = compact ? 12 : 25;
+  const toggleHref = `/ai-assistant-admin?${new URLSearchParams({
+    ...(token ? { token } : {}),
+    ...(fullHistory ? {} : { history: "full" }),
+  }).toString()}#performance`;
   return (
     <div className="rounded-md border border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <div className="mt-1 text-xs text-slate-500">Newest first · Eastern time</div>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div>
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <div className="mt-1 text-xs text-slate-500">
+            Newest first · Eastern time · showing {Math.min(sortedRows.length, visibleCount)} of {sortedRows.length}
+          </div>
+        </div>
+        <a className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" href={toggleHref}>
+          {fullHistory ? "Recent only" : "View more"}
+        </a>
       </div>
       <div className="max-h-[620px] overflow-y-auto">
         {sortedRows.length ? (
-          sortedRows.slice(0, compact ? 12 : 25).map((row, index) => <PerformanceCard key={`${row.createdAt}-${index}`} row={row} compact={compact} token={token} fullHistory={fullHistory} />)
+          sortedRows.slice(0, visibleCount).map((row, index) => <PerformanceCard key={`${row.createdAt}-${index}`} row={row} compact={compact} token={token} fullHistory={fullHistory} />)
         ) : (
           <div className="p-4 text-sm text-slate-500">{emptyText}</div>
         )}
@@ -318,6 +331,7 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
           <a href={teachHref} className="rounded bg-slate-950 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800">
             Teach this
           </a>
+          <PerformanceReviewedButton token={token} reviewedPerformanceKey={performanceReviewKey(row)} query={question} />
           <span className={`rounded px-2 py-1 text-xs font-semibold ${ratingClass}`}>{rating}</span>
         </div>
       </div>

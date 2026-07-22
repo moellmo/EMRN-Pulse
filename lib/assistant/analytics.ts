@@ -336,7 +336,15 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
   const failedSearches = analytics.filter((event) => event.type === "no_result_search" || event.type === "search_failure");
   const knowledgeShadow = analytics.filter((event) => event.type === "knowledge_shadow");
   const externalKnowledgeSources = analytics.filter((event) => event.type === "external_knowledge_sources");
-  const performanceEvents = analytics.filter(isPerformanceEvent);
+  const reviewedPerformanceKeys = new Set(
+    analytics
+      .filter((event) => event.type === "admin_reviewed_performance")
+      .map((event) => "reviewedPerformanceKey" in event ? event.reviewedPerformanceKey || "" : "")
+      .filter(Boolean)
+  );
+  const performanceEvents = analytics
+    .filter(isPerformanceEvent)
+    .filter((event) => !reviewedPerformanceKeys.has(performanceReviewKey(event)));
   const slowPerformanceEvents = performanceEvents.filter((event) => event.performance?.slow);
   const completedConversations = analytics.filter((event) => event.type === "conversation_completed");
   const monthPrefix = new Date().toISOString().slice(0, 7);
@@ -412,9 +420,25 @@ function dedupeRows<T>(rows: T[]) {
 }
 
 function isPerformanceEvent(event: AssistantAnalyticsEvent): event is AssistantAnalyticsEvent & {
-  performance: { slow?: boolean };
+  performance: NonNullable<Extract<AssistantAnalyticsEvent, { performance?: unknown }>["performance"]>;
 } {
   return event.type === "assistant_performance" && "performance" in event;
+}
+
+export function performanceReviewKey(event: {
+  createdAt?: string;
+  sessionId?: string;
+  query?: string;
+  performance?: { answerPath?: string; searchQuery?: string; totalMs?: number };
+}) {
+  return [
+    event.createdAt || "",
+    event.sessionId || "",
+    event.query || "",
+    event.performance?.answerPath || "",
+    event.performance?.searchQuery || "",
+    String(event.performance?.totalMs || ""),
+  ].join("|");
 }
 
 function topCounts(values: string[]) {
