@@ -1623,6 +1623,7 @@ function capabilityQuestionTerms(question: string) {
 
 function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
   const text = product.description || "";
+  const normalizedQuestion = question.toLowerCase();
   const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity)\b/i.test(question);
   const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
@@ -1632,6 +1633,8 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const wantsOxygenStorage = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|tank|cylinder|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene|oxygène|oxygene)\b/i.test(question) &&
     /\b(oxygen|o2|tank|cylinder|oxygène|oxygene|réservoir|reservoir|cylindre)\b/i.test(question);
   const wantsCapability = isProductCapabilityIntent(question);
+  const specificCapabilityPattern =
+    /\b(latex|latex-free|latex free|material|materials|made of|disposable|reusable|single-use|single use|clean|cleaned|wash|washed|disinfect|disinfected|autoclave|autoclaved|sterilize|sterilized|sterilise|sterilised|sans latex|matériau|materiau|jetable|réutilisable|reutilisable|nettoyer|lavable|désinfecter|desinfecter|stériliser|steriliser)\b/i;
   const lines: string[] = [];
 
   if (wantsPrice && product.price) {
@@ -1671,7 +1674,9 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
 
   if (wantsCapability && !wantsOxygenStorage) {
     const evidence = productCapabilityEvidence(text, question);
-    if (evidence) {
+    const needsSpecificCapability = specificCapabilityPattern.test(normalizedQuestion);
+    const evidenceMatchesSpecificCapability = !needsSpecificCapability || specificCapabilityPattern.test(evidence);
+    if (evidence && evidenceMatchesSpecificCapability) {
       lines.push(
         language === "fr"
           ? `Détail pertinent EMRN: “${evidence}”`
@@ -3744,8 +3749,9 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
 
-    if (selectedDetailProducts.length === 1) {
-      const catalogAnswer = productDetailFromCatalog(selectedDetailProducts[0], latest, language);
+    const catalogDetailCandidates = (selectedDetailProducts.length ? selectedDetailProducts : detailProducts).slice(0, 8);
+    for (const product of catalogDetailCandidates) {
+      const catalogAnswer = productDetailFromCatalog(product, latest, language);
       if (catalogAnswer) {
         await logPerformance("catalog_detail", { answerPreview: catalogAnswer });
         return new Response(textStream(catalogAnswer), {

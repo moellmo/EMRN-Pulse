@@ -389,6 +389,69 @@ function documentCategoryText(hit: SearchHit) {
   return normalizeSearchText(values.map((value) => String(value || "")).join(" "));
 }
 
+function documentBrandText(hit: SearchHit) {
+  const doc = hit.document || {};
+  return normalizeSearchText([doc.brand, doc.sold_by].filter(Boolean).join(" "));
+}
+
+const brandModelStopTerms = new Set([
+  "the", "and", "for", "with", "that", "this", "what", "which", "size", "does", "work", "works", "fit", "fits",
+  "hold", "holds", "carry", "carries", "can", "will", "would", "replacement", "part", "parts", "item", "product",
+  "bag", "bags", "pack", "packs", "medical", "medic", "ems", "emt", "aed", "oxygen", "tank", "cylinder", "pads",
+  "electrode", "electrodes", "battery", "batteries", "airway", "airways", "lung", "lungs",
+]);
+
+function meaningfulQueryTokens(value: string) {
+  return Array.from(new Set(
+    normalizeCommonSearchTypos(value)
+      .split(/\s+/)
+      .map((token) => token.replace(/[^a-z0-9+.-]/g, ""))
+      .filter((token) => token.length >= 3 && !brandModelStopTerms.has(token))
+  ));
+}
+
+function brandTokensForHit(hit: SearchHit) {
+  return meaningfulQueryTokens(documentBrandText(hit)).filter((token) => token.length >= 3);
+}
+
+function rankBrandModelHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  const queryTokens = meaningfulQueryTokens(query);
+  if (queryTokens.length < 2) return hits;
+
+  const score = (hit: SearchHit) => {
+    const doc = hit.document || {};
+    const name = documentNameText(hit);
+    const brand = documentBrandText(hit);
+    const categories = documentCategoryText(hit);
+    const sku = normalizeSku(String(doc.sku || ""));
+    const allSkus = normalizeSearchText(String(doc.all_skus || ""));
+    const haystack = ` ${name} ${brand} ${categories} ${sku.toLowerCase()} ${allSkus} `;
+    const hitBrandTokens = brandTokensForHit(hit);
+    const queryMentionsBrand = hitBrandTokens.some((token) => query.includes(token));
+    const overlap = queryTokens.filter((token) => haystack.includes(token));
+    const nameOverlap = queryTokens.filter((token) => name.includes(token));
+    let value = 0;
+
+    if (queryMentionsBrand) value += 4200;
+    else if (hitBrandTokens.length && queryTokens.some((token) => hitBrandTokens.includes(token))) value += 2400;
+    if (queryMentionsBrand && nameOverlap.length) value += nameOverlap.length * 900;
+    value += overlap.length * 260;
+    if (sku && query.includes(sku.toLowerCase())) value += 5000;
+    if (query.includes("g3") && name.includes("g3")) value += 1800;
+    if (query.includes("qcpr") && name.includes("qcpr")) value += 1800;
+    if (query.includes("frx") && name.includes("frx")) value += 1800;
+    if (query.includes("aed plus") && name.includes("aed plus")) value += 1800;
+    if (query.includes("backup") && name.includes("backup")) value += 1800;
+    if (query.includes("load n go") && name.includes("load n go")) value += 1800;
+    if (queryTokens.some((token) => brand.includes(token)) && !queryMentionsBrand) value += 500;
+
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
 function supplementalRecallQueries(originalQuery: string, translatedQuery: string, fallbackTerms: string[]) {
   const query = normalizeSearchText(`${originalQuery} ${translatedQuery} ${fallbackTerms.join(" ")}`);
   const typoNormalizedQuery = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery} ${fallbackTerms.join(" ")}`);
@@ -428,6 +491,10 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
 
   if (includesAny(query, ["g3 load n go", "load n go", "load-n-go", "loadngo"])) {
     add("G3 Load N Go Medic Backpack", "G35004", "G35004BU", "G35004RE", "G35004TK");
+  }
+
+  if (includesAny(query, ["g3 backup", "g3+ backup", "statpacks backup", "statpack backup"])) {
+    add("G3+ Backup", "StatPacks G3+ Backup", "G35006TK+");
   }
 
   if (
@@ -557,7 +624,7 @@ function rankMedicalBagHits(hits: SearchHit[], originalQuery: string, translated
 
 function rankKnownProductFamilyHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
   const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
-  if (!includesAny(query, ["g3 load n go", "load n go", "load-n-go", "loadngo", "g35004"])) return hits;
+  if (!includesAny(query, ["g3 load n go", "load n go", "load-n-go", "loadngo", "g35004", "g3 backup", "g3+ backup", "statpacks backup", "statpack backup", "g35006"])) return hits;
 
   const score = (hit: SearchHit) => {
     const doc = hit.document || {};
@@ -565,8 +632,10 @@ function rankKnownProductFamilyHits(hits: SearchHit[], originalQuery: string, tr
     const sku = normalizeSku(String(doc.sku || ""));
     let value = 0;
     if (name.includes("load n go")) value += 6000;
+    if (name.includes("backup")) value += 6000;
     if (name.includes("g3+")) value += 1200;
     if (sku.startsWith("G35004")) value += 5000;
+    if (sku.startsWith("G35006")) value += 5000;
     return value;
   };
 
@@ -1354,6 +1423,7 @@ export async function searchProducts(input: ProductSearchInput) {
   );
   mergedHits = rankExactProductNameHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankMedicalBagHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankBrandModelHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankKnownProductFamilyHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankCprManikinHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankReplacementPartHits(mergedHits, rawQuery, smartQuery.search_query);
@@ -1372,7 +1442,7 @@ export async function searchProducts(input: ProductSearchInput) {
         rankAedHits(
           rankReplacementPartHits(
             rankCprManikinHits(
-              rankKnownProductFamilyHits(rankMedicalBagHits(exactRankedHits, rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query),
+              rankKnownProductFamilyHits(rankBrandModelHits(rankMedicalBagHits(exactRankedHits, rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query),
               rawQuery,
               smartQuery.search_query
             ),

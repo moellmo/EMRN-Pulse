@@ -66,7 +66,7 @@ export function isProductCapabilityIntent(text: string) {
 
   const asksCapability = /\b(can|does|do|will|would|is|are|peut|peuvent|est-ce que|es[-\s]?ce que)\b/i.test(text);
   const hasProductReference =
-    /\b(this|that|it|these|those|product|item|bag|pack|device|unit|ce|cet|cette|ces|produit|article|sac)\b/i.test(text) ||
+    /\b(this|that|it|these|those|product|item|bag|pack|device|unit|pads?|electrodes?|batter(?:y|ies)|airways?|lungs?|manikins?|monitors?|cuffs?|dressings?|gloves?|needles?|syringes?|catheters?|ce|cet|cette|ces|produit|article|sac)\b/i.test(text) ||
     /\b(?=[A-Z0-9+.-]*\d)[A-Z0-9]{3,}(?:[-+.][A-Z0-9]{1,})*\b/i.test(text);
   const capabilityTerm = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|support|supports|include|includes|come with|comes with|have|has|mount|mounts|attach|attaches|connect|connects|use with|works? with|compatible|waterproof|water-resistant|sterile|latex|oxygen|o2|tank|cylinder|tenir|contient|contenir|transporter|supporte|inclut|compris|compatible|étanche|etanche|stérile|sterile|latex|oxygène|oxygene|réservoir|reservoir|cylindre)\b/i.test(text);
   const broadCapabilityShape = /\b(?:can|will|would|is|are|peut|peuvent|est-ce que|es[-\s]?ce que)\b.{0,90}\b(?:be|used|use|go|handle|cleaned|washed|disinfected|autoclaved|sterilized|sterilised|mounted|attached|connected|placed|stored|transported|utilis[eé]|nettoy[eé]|lav[eé]|d[eé]sinfect[eé]|autoclav[eé]|st[eé]rilis[eé]|mont[eé]|attach[eé]|connect[eé]|plac[eé]|stock[eé]|transport[eé])\b/i.test(text);
@@ -75,7 +75,7 @@ export function isProductCapabilityIntent(text: string) {
 }
 
 export function isProductDetailIntent(text: string) {
-  return isProductCapabilityIntent(text) || /\b(how\s+big|how\s+large|how\s+long|how\s+much|how\s+many|who\s+makes|who\s+sells|sold\s+by|manufacturer|brand|what\s+colors?|what\s+colours?|what\s+sizes?|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|hold|holds|holding|carry|carries|carrying|accommodate|accommodates|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|for this|for that|replacement part|replacement parts|accessory|accessories|part|parts|handle|handles|dimension|dimensions|measurements?|specs?|specifications?|sizes?|sizing|height|width|depth|length|weight|diameter|capacity|box|boxes|pack|package|case|count|waterproof|water-resistant|water resistant|water resistance|rating|ratings|colors?|colours?|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur|tenir|contient|contenir|transporter|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene)\b/i.test(text);
+  return isProductCapabilityIntent(text) || /\b(how\s+big|how\s+large|how\s+long|how\s+much|how\s+many|who\s+makes|who\s+sells|sold\s+by|manufacturer|brand|what\s+colors?|what\s+colours?|what\s+sizes?|price|cost|compatible|compatibility|fit|fits|work with|works with|go with|goes with|hold|holds|holding|carry|carries|carrying|accommodate|accommodates|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|for this|for that|replacement part|replacement parts|accessory|accessories|part|parts|handle|handles|dimension|dimensions|measurements?|specs?|specifications?|sizes?|sizing|height|width|depth|length|weight|diameter|capacity|box|boxes|pack|package|case|count|waterproof|water-resistant|water resistant|water resistance|rating|ratings|latex|latex-free|latex free|material|materials|made of|disposable|reusable|single-use|single use|clean|cleaned|wash|washed|disinfect|disinfected|autoclave|autoclaved|sterilize|sterilized|sterilise|sterilised|colors?|colours?|compatible|compatibilite|compatibilité|dimensions?|mesures?|taille|poids|largeur|longueur|hauteur|prix|couleur|tenir|contient|contenir|transporter|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene|latex|sans latex|matériau|materiau|jetable|réutilisable|reutilisable|nettoyer|lavable|désinfecter|desinfecter|autoclave|stériliser|steriliser)\b/i.test(text);
 }
 
 export function isAccountIntent(text: string) {
@@ -382,7 +382,10 @@ export function inferSearchQuery(messages: AssistantMessage[], products: Catalog
   const followUpChoice = latest.match(/\b(?:i'?ll|i will|we'?ll|we will)\s+go\s+with\s+(?:the\s+)?(.+)/i);
   if (followUpChoice?.[1]) return followUpChoice[1].replace(/[.?!]+$/, "").trim();
 
-  const brandModel = latest.match(/\b(ferno|zoll|laerdal|philips|physio-control|prestan|nasco|ambu)(?:\s+(?:model\s*)?[A-Z0-9-]+)?\b/i);
+  if (/\b(?:statpacks?|g3\+?)\b/i.test(latest) && /\bbackup\b/i.test(latest)) return "G35006TK+ G3+ Backup StatPacks";
+  if (/\b(?:statpacks?|g3)\b/i.test(latest) && /\b(?:load\s*n\s*go|load-n-go|loadngo)\b/i.test(latest)) return "G35004 G3 Load N Go Medic Backpack StatPacks";
+
+  const brandModel = latest.match(/\b(ferno|zoll|laerdal|philips|physio-control|prestan|nasco|ambu|statpacks?)(?:\s+(?:model\s*)?[A-Z0-9-]+)?\b/i);
   if (brandModel?.[0]) return brandModel[0].trim();
 
   return latest;
