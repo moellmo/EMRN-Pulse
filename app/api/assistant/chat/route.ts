@@ -2286,6 +2286,16 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
     );
   }
 
+  if (
+    /\b(sell|selling|sell to|sell directly|public|individuals?|individual customers?|personal customers?|consumers?|retail customers?|do you sell to people|can i buy|can individuals buy)\b/i.test(text) ||
+    /\b(vendez[-\s]?vous|vente|vendre|particuliers?|clients? individuels?|grand public|consommateurs?|clientele individuelle|clientèle individuelle|acheter comme particulier)\b/i.test(text)
+  ) {
+    return answer(
+      `Yes. EMRN sells to individuals as well as businesses, clinics, EMS, healthcare facilities, schools, government organizations, and other professional buyers. Many items can be ordered online without a business account, though some specialized products may have restrictions or require review. You can browse products on EMRN.ca or contact the team here: ${link("Contact EMRN", contactLink)}`,
+      `Oui. EMRN vend aux particuliers ainsi qu’aux entreprises, cliniques, services EMS, établissements de santé, écoles, organisations gouvernementales et autres acheteurs professionnels. Plusieurs articles peuvent être commandés en ligne sans compte entreprise, mais certains produits spécialisés peuvent avoir des restrictions ou nécessiter une vérification. Vous pouvez parcourir les produits sur EMRN.ca ou contacter l’équipe ici: ${link("Contacter EMRN", contactLink)}`
+    );
+  }
+
   if (/\b(create.*account|make.*account|register|business account|enterprise account|doctor|doctor.s office|schools|clinics|ems|government|account benefits|purchase history|reorder|compte entreprise|compte d'entreprise|demander un compte|créer un compte|creer un compte)\b/i.test(text)) {
     return answer(
       `You can apply here: ${link("Business account application", businessLink)}. Business or enterprise accounts are useful for clinics, schools, EMS departments, companies, healthcare facilities, government organizations, and larger purchasing teams. You can also review ${link("business medical supplies", businessSolutionsLink)} or ${link("sign in / register", accountLink)}. You do not need to be a doctor’s office or have a business account to purchase many items, though some specialized products may have restrictions.`,
@@ -2401,7 +2411,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 }
 
 function isSiteInfoQuestion(text: string) {
-  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour)\b/i.test(text) ||
+  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public)\b/i.test(text) ||
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
 }
 

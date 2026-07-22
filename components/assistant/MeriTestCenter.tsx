@@ -69,6 +69,13 @@ const tests: TestCase[] = [
     expect: ["J’ai trouvé le devis QN001611", "Articles:", "Expiration:", "Lien de paiement:"],
   },
   {
+    name: "French Individual Customers FAQ",
+    description: "French individual-customer questions should answer policy, not product search.",
+    language: "fr",
+    messages: [{ role: "user", content: "Vendez-vous à des particuliers ?" }],
+    expect: ["Oui", "particuliers", "commandés en ligne"],
+  },
+  {
     name: "Compatibility Fallback",
     description: "Compatibility answers should use a structured confidence label.",
     language: "en",
