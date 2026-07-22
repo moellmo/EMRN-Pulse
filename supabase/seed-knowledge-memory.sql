@@ -41,7 +41,7 @@ values
   'replacement_part',
   'replacement lungs for Little Junior QCPR',
   'approved',
-  '{"id":"f6fe193d-d0aa-4a85-b2e6-182870564224","type":"replacement_part","query":"replacement lungs for Little Junior QCPR","correctSearchTerms":"Little Junior QCPR replacement airways lungs Laerdal","correctSku":"","relatedSku":"","answer":"confirmed","sourceUrl":"https://laerdal.com/item/183211/","note":"Laerdal Little Junior QCPR replacement airways are for Little Junior QCPR manikins. Little Junior family parts should rank above unrelated lungs.","status":"approved","createdAt":"2026-07-22T14:47:04.698Z","updatedAt":"2026-07-22T14:47:04.698Z"}'::jsonb,
+  '{"id":"f6fe193d-d0aa-4a85-b2e6-182870564224","type":"replacement_part","query":"replacement lungs for Little Junior QCPR","correctSearchTerms":"Little Junior QCPR replacement airways lungs Laerdal 183210 183211","correctSku":"183210","relatedSku":"183211","answer":"confirmed","sourceUrl":"https://laerdal.com/item/183211/","note":"Laerdal Little Junior QCPR replacement airways are for Little Junior QCPR manikins. EMRN carries 183210 25-pack and 183211 100-pack. Little Junior family parts should rank above unrelated lungs.","status":"approved","createdAt":"2026-07-22T14:47:04.698Z","updatedAt":"2026-07-22T14:47:04.698Z"}'::jsonb,
   '2026-07-22T14:47:04.698Z',
   '2026-07-22T14:47:04.698Z'
 ),
@@ -50,9 +50,18 @@ values
   'compatibility',
   'Do Laerdal Little Junior QCPR replacement airways work with Little Junior QCPR',
   'approved',
-  '{"id":"7e4a1224-5a52-4e7c-8f08-little-junior-airways","type":"compatibility","query":"Do Laerdal Little Junior QCPR replacement airways work with Little Junior QCPR","correctSearchTerms":"Laerdal LJ QCPR Airway Little Junior QCPR replacement airways","correctSku":"","relatedSku":"","answer":"confirmed","sourceUrl":"https://laerdal.com/item/183211/","note":"Laerdal LJ QCPR replacement airways fit Little Junior QCPR manikins.","status":"approved","createdAt":"2026-07-22T15:25:00.000Z","updatedAt":"2026-07-22T15:25:00.000Z"}'::jsonb,
+  '{"id":"7e4a1224-5a52-4e7c-8f08-little-junior-airways","type":"compatibility","query":"Do Laerdal Little Junior QCPR replacement airways work with Little Junior QCPR","correctSearchTerms":"Laerdal LJ QCPR Airway Little Junior QCPR replacement airways 183210 183211","correctSku":"183210","relatedSku":"183211","answer":"confirmed","sourceUrl":"https://laerdal.com/item/183211/","note":"Laerdal LJ QCPR replacement airways fit Little Junior QCPR manikins. EMRN carries 183210 25-pack and 183211 100-pack.","status":"approved","createdAt":"2026-07-22T15:25:00.000Z","updatedAt":"2026-07-22T15:25:00.000Z"}'::jsonb,
   '2026-07-22T15:25:00.000Z',
   '2026-07-22T15:25:00.000Z'
+),
+(
+  'c0a35e98-6a52-4f1e-9dd6-little-baby-little-anne',
+  'compatibility',
+  'Are Little Baby QCPR airways compatible with Little Anne QCPR',
+  'approved',
+  '{"id":"c0a35e98-6a52-4f1e-9dd6-little-baby-little-anne","type":"compatibility","query":"Are Little Baby QCPR airways compatible with Little Anne QCPR","correctSearchTerms":"Little Baby QCPR airways Little Anne QCPR airways","correctSku":"","relatedSku":"","answer":"not_compatible","sourceUrl":"","note":"Little Baby QCPR airways should not be treated as compatible with Little Anne QCPR. Use the correct Little Anne QCPR airway parts for Little Anne QCPR.","status":"approved","createdAt":"2026-07-22T15:40:00.000Z","updatedAt":"2026-07-22T15:40:00.000Z"}'::jsonb,
+  '2026-07-22T15:40:00.000Z',
+  '2026-07-22T15:40:00.000Z'
 ),
 (
   '257e6095-f94b-4e90-b105-6ad4ded3269f',

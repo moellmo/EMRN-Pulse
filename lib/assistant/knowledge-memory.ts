@@ -156,11 +156,14 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
   if (!normalizedQuery) return [];
 
   return (await approvedKnowledgeMemory()).filter((item) => {
+    const itemText = `${item.query} ${item.correctSearchTerms || ""} ${item.note || ""}`;
+    if (hasFamilyConflict(normalizedQuery, itemText)) return false;
+
     const normalizedItemQuery = normalizeSearchText(item.query);
     if (normalizedItemQuery && (normalizedQuery.includes(normalizedItemQuery) || normalizedItemQuery.includes(normalizedQuery))) {
       return true;
     }
-    return hasMeaningfulOverlap(normalizedQuery, item.correctSearchTerms || "");
+    return hasMeaningfulOverlap(normalizedQuery, itemText);
   });
 }
 
@@ -170,6 +173,32 @@ function hasMeaningfulOverlap(normalizedQuery: string, value: string) {
   if (!queryTerms.length || !valueTerms.length) return false;
   const matches = valueTerms.filter((term) => queryTerms.includes(term));
   return matches.length >= Math.min(3, valueTerms.length);
+}
+
+function hasFamilyConflict(normalizedQuery: string, value: string) {
+  const queryFamilies = familyTokens(normalizedQuery);
+  const itemFamilies = familyTokens(normalizeSearchText(value));
+  if (!queryFamilies.size || !itemFamilies.size) return false;
+
+  const littleFamilies = ["little junior", "little baby", "little anne"];
+  const queryLittle = littleFamilies.filter((family) => queryFamilies.has(family));
+  const itemLittle = littleFamilies.filter((family) => itemFamilies.has(family));
+  if (queryLittle.length && itemLittle.length && !queryLittle.some((family) => itemFamilies.has(family))) return true;
+
+  const philipsFamilies = ["frx", "onsite"];
+  const queryPhilips = philipsFamilies.filter((family) => queryFamilies.has(family));
+  const itemPhilips = philipsFamilies.filter((family) => itemFamilies.has(family));
+  return Boolean(queryPhilips.length && itemPhilips.length && !queryPhilips.some((family) => itemFamilies.has(family)));
+}
+
+function familyTokens(value: string) {
+  const families = new Set<string>();
+  if (/\blittle\s+(?:junior|jr)\b/.test(value)) families.add("little junior");
+  if (/\blittle\s+baby\b/.test(value)) families.add("little baby");
+  if (/\blittle\s+anne\b/.test(value)) families.add("little anne");
+  if (/\bfrx\b/.test(value)) families.add("frx");
+  if (/\b(?:onsite|heartstart\s+onsite|hs1)\b/.test(value)) families.add("onsite");
+  return families;
 }
 
 function significantTerms(value: string) {

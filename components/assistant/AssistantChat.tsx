@@ -79,6 +79,7 @@ const ui: Record<"en" | "fr", UiText> = {
     proactivePrompt: "Need help finding a product? I can help.",
     proactiveDismiss: "Dismiss help message",
     quickActions: [
+      { label: "Ask Product Question", prompt: "I have a product question about compatibility, parts, or which item fits", icon: "search" },
       { label: "Find a Product", prompt: "Find a product", icon: "search" },
       { label: "Request a Quote", prompt: "I need a quote", icon: "quote" },
       { label: "Find a Quote", prompt: "Look up a quote", icon: "quote" },
@@ -108,6 +109,7 @@ const ui: Record<"en" | "fr", UiText> = {
     proactivePrompt: "Besoin d’aide pour trouver un produit? Je peux vous aider.",
     proactiveDismiss: "Masquer le message d’aide",
     quickActions: [
+      { label: "Question produit", prompt: "J’ai une question produit sur la compatibilité, les pièces ou le bon article", icon: "search" },
       { label: "Trouver un produit", prompt: "Je cherche un produit", icon: "search" },
       { label: "Demander un devis", prompt: "J’ai besoin d’un devis", icon: "quote" },
       { label: "Trouver un devis", prompt: "Trouver un devis", icon: "quote" },

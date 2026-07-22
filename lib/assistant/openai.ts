@@ -144,6 +144,8 @@ function detailAnswerInstructions(language: AssistantLanguage, showExternalSourc
     "- Search the exact brand/manufacturer page first when a brand or model is mentioned. If the manufacturer page is not enough, use large medical supplier catalogs or product catalog pages only as support.",
     "- For EMRN catalog lookup, treat the supplied EMRN SKU as exact. For manufacturer/web lookup, remember EMRN SKUs may add store-specific prefixes or suffixes, such as DY for Dynarex or trailing internal letters for Nasco. Search and match by manufacturer name, manufacturer model/part number embedded in the SKU or product title, exact product title, dimensions, and option labels too.",
     "- Do not reject a manufacturer source just because its part number omits an EMRN prefix/suffix, but do require the product title/model/dimensions/options to clearly match the EMRN product.",
+    "- When a manufacturer, catalog, manual, or approved supplier source identifies the exact part number, model number, or catalog SKU, include that part number in the reply even when EMRN does not currently have a matching catalog product supplied.",
+    "- If the exact item is confirmed externally but not found in EMRN catalog context, say EMRN can source/check the manufacturer part number through a quote request. Ask for name, email, quantity, and deadline instead of sending the customer to another site.",
     "- Prefer manufacturer pages, manuals, PDFs, official product pages, or EMRN pages as proof.",
     "- Large medical suppliers and marketplaces such as Medline, McKesson, Henry Schein, Bound Tree, Cardinal Health, Owens & Minor, Concordance, VWR, Fisher Scientific, Grainger, School Health, or Amazon may support specifications or model matching, but do not treat marketplace text as stronger than a manufacturer compatibility list/manual.",
     "- Answer only when the source match is exact enough: same brand, model/family, option, size, SKU/part number when available, and same intended use. If there is any doubt, say Can’t confirm and offer EMRN support/item-sourcing.",
@@ -370,6 +372,7 @@ function sanitizeExternalSourceLinks(text: string) {
       const url = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl;
       return `${isEmrnUrl(url) ? url : ""}${isEmrnUrl(url) ? trailing : ""}`;
     })
+    .replace(/\(\s*(manufacturer|supplier|catalog)\s+information\s*$/gi, "($1 information)")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\(\s*\)/g, "")
     .replace(/\n{3,}/g, "\n\n");

@@ -1017,6 +1017,10 @@ function displayAvailability(product: CatalogProduct, language: "en" | "fr" | "u
     .replace(/\bavailable\b/gi, "disponible");
 }
 
+function sentenceFragment(value: string) {
+  return value.replace(/[.。\s]+$/g, "");
+}
+
 function hasExtendedLeadTime(product: CatalogProduct) {
   return /\b(backorder|back order|extended lead|available to order|preorder|pre-order)\b/i.test(productAvailabilityText(product));
 }
@@ -1085,7 +1089,7 @@ function substitutesText(substitutes: CatalogProduct[], language: "en" | "fr" | 
   if (!substitutes.length) return "";
   const lines = substitutes.map((product, index) => {
     const price = product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
-    const availability = displayAvailability(product, language);
+    const availability = sentenceFragment(displayAvailability(product, language));
     const link = language === "fr" ? "Voir le produit" : "View product";
     return `${index + 1}. **${product.name}** — SKU: ${product.sku} — ${price}. ${availability}. [${link}](${product.url})`;
   });
@@ -1106,7 +1110,7 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
   const shown = products.slice(0, 5);
   const lines = shown.map((product, index) => {
     const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
-    const availability = displayAvailability(product, language);
+    const availability = sentenceFragment(displayAvailability(product, language));
     const action = product.quoteOnly || !product.purchasable
       ? language === "fr"
         ? "Demander un devis"
@@ -1283,7 +1287,7 @@ function missingRequestedColorProducts(products: CatalogProduct[], text: string)
 function colorFallbackText(products: CatalogProduct[], requestedColor: string, language: "en" | "fr" | "unknown", query: string) {
   const lines = products.slice(0, 5).map((product, index) => {
     const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
-    const availability = displayAvailability(product, language);
+    const availability = sentenceFragment(displayAvailability(product, language));
     const link = language === "fr" ? "Voir le produit" : "View product";
     return `${index + 1}. **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. [${link}](${product.url})`;
   });
@@ -1844,9 +1848,10 @@ function approvedKnowledgeAnswer(
   if (!rule?.answer) return "";
 
   const requestedPartType = requestedProductTypePattern(`${rule.query} ${rule.correctSearchTerms} ${rule.note}`);
+  const ruleSkus = new Set(knowledgeRuleSkus(rule).map((sku) => sku.toUpperCase()));
   const relevantProducts = products
     .filter((product) => {
-      if (rule.correctSku) return product.sku.toUpperCase() === rule.correctSku.toUpperCase();
+      if (ruleSkus.size) return ruleSkus.has(product.sku.toUpperCase());
       if (!requestedPartType) return false;
       return requestedPartType.test(`${product.name} ${product.parentName} ${product.categories.join(" ")}`);
     })
@@ -1883,6 +1888,16 @@ function approvedKnowledgeAnswer(
     ? `Can’t confirm: ${proof || "Je ne peux pas confirmer cette compatibilité avec les renseignements approuvés disponibles."}`
     : `Can’t confirm: ${proof || "I can’t confirm this compatibility from the approved information available."}`;
   return `${intro}${productLines.length ? `\n\n${productLines.join("\n")}` : ""}\n\n${language === "fr" ? "Répondez oui et je l’enverrai au support." : "Reply yes and I’ll send this to support."}`;
+}
+
+function knowledgeRuleSkus(rule: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>[number]) {
+  return [rule.correctSku, rule.relatedSku].filter(Boolean) as string[];
+}
+
+function approvedKnowledgeProductSearchQuery(rules: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>) {
+  const rule = rules.find((item) => item.answer && ["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type));
+  if (!rule) return "";
+  return rule.correctSearchTerms || rule.query || "";
 }
 
 function requestedProductTypePattern(text: string) {
@@ -2750,13 +2765,14 @@ async function handleAssistantPost(req: NextRequest) {
       ? await matchingApprovedKnowledgeForQuery(latest)
       : [];
   const preSearchKnowledgeMs = Date.now() - preSearchKnowledgeStartedAt;
-  const preSearchSkus = Array.from(new Set(preSearchKnowledgeMatches.map((item) => item.correctSku || "").filter(Boolean)));
+  const preSearchSkus = Array.from(new Set(preSearchKnowledgeMatches.flatMap((item) => knowledgeRuleSkus(item)).filter(Boolean)));
+  const preSearchRuleSearchQuery = approvedKnowledgeProductSearchQuery(preSearchKnowledgeMatches);
   const preSearchSkuStartedAt = Date.now();
   const preSearchSkuProducts = preSearchSkus.length
     ? (await Promise.all(preSearchSkus.map((sku) => searchBySKU(sku)))).flat()
     : [];
   const preSearchSkuMs = Date.now() - preSearchSkuStartedAt;
-  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !preSearchSkuProducts.length
+  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
     ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language)
     : "";
   if (earlyApprovedRuleAnswer) {
@@ -2826,6 +2842,9 @@ async function handleAssistantPost(req: NextRequest) {
   } else if (preSearchSkuProducts.length) {
     searchQuery = preSearchSkus.join(", ");
     searchResult = { products: preSearchSkuProducts, found: preSearchSkuProducts.length, searchQuery, language };
+  } else if (preSearchRuleSearchQuery) {
+    searchQuery = preSearchRuleSearchQuery;
+    searchResult = await searchProducts({ query: searchQuery, language, limit: 12 });
   } else {
     searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
   }
@@ -3129,7 +3148,7 @@ async function handleAssistantPost(req: NextRequest) {
       new Set([
         ...skuCandidates,
         ...approvedKnowledgeMatches
-          .map((item) => item.correctSku || "")
+          .flatMap((item) => knowledgeRuleSkus(item))
           .filter(Boolean),
       ].map((sku) => sku.toUpperCase()))
     );
