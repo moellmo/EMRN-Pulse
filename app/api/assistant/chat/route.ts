@@ -1758,8 +1758,21 @@ function meaningfulCompatibilityTokens(value: string) {
     .filter((token) => !/^(the|and|for|with|this|that|item|product|part|parts|accessory|accessories|compatible|compatibility|fit|fits|work|works|goes|manikin|mannequin|defibrillator|pour|avec|produit|article|piece|pièce)$/.test(token));
 }
 
+function catalogProductMatchesRequestedType(question: string, product: CatalogProduct) {
+  const questionType = requestedProductTypeKey(question);
+  if (!questionType) return true;
+
+  const productText = `${product.name} ${product.parentName} ${product.categories.join(" ")}`.toLowerCase();
+  if (questionType === "pad") return /\b(pads?|padz|electrodes?|électrodes?|smart\s*pads?)\b/i.test(productText);
+  if (questionType === "battery") return /\b(batter(?:y|ies)|batterie|batteries|pile|piles|lithium|alkaline|123a|cr123)\b/i.test(productText);
+  if (questionType === "lung") return /\b(lungs?)\b/i.test(productText);
+  if (questionType === "airway") return /\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(productText);
+  return true;
+}
+
 function catalogCompatibilityAnswer(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
   if (!isCompatibilityQuestion(question)) return "";
+  if (!catalogProductMatchesRequestedType(question, product)) return "";
   const target = compatibilityTargetFromQuestion(question);
   if (!target || /\b(this|that|it|ce|cet|cette)\b/i.test(target)) return "";
 
@@ -1793,21 +1806,6 @@ function catalogCompatibilityAnswerFromProducts(products: CatalogProduct[], ques
   const trustedSkuSet = new Set(trustedSkus.map((sku) => sku.toUpperCase()).filter(Boolean));
   if (!trustedSkuSet.size) return "";
 
-  const matchesRequestedProductType = (product: CatalogProduct) => {
-    const questionText = question.toLowerCase();
-    const productText = `${product.name} ${product.parentName} ${product.categories.join(" ")}`.toLowerCase();
-    if (/\b(pads?|electrodes?|électrodes?|electrodes?)\b/i.test(questionText)) {
-      return /\b(pads?|electrodes?|électrodes?|smart\s*pads?)\b/i.test(productText);
-    }
-    if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(questionText)) {
-      return /\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(productText);
-    }
-    if (/\b(lungs?|airways?|voies?\s+a[eé]riennes?)\b/i.test(questionText)) {
-      return /\b(lungs?|airways?|voies?\s+a[eé]riennes?)\b/i.test(productText);
-    }
-    return true;
-  };
-
   const uniqueBySku = (items: CatalogProduct[]) => {
     const seen = new Set<string>();
     return items.filter((product) => {
@@ -1821,12 +1819,12 @@ function catalogCompatibilityAnswerFromProducts(products: CatalogProduct[], ques
   const confirmedProducts = products
     .slice(0, 10)
     .filter((product) => trustedSkuSet.has(product.sku.toUpperCase()))
-    .filter(matchesRequestedProductType)
+    .filter((product) => catalogProductMatchesRequestedType(question, product))
     .filter((product) => /^Confirmed compatible:/i.test(catalogCompatibilityAnswer(product, question, language)));
   const negativeProducts = products
     .slice(0, 6)
     .filter((product) => trustedSkuSet.has(product.sku.toUpperCase()))
-    .filter(matchesRequestedProductType)
+    .filter((product) => catalogProductMatchesRequestedType(question, product))
     .filter((product) => /^Not compatible:/i.test(catalogCompatibilityAnswer(product, question, language)));
 
   if (!confirmedProducts.length && !negativeProducts.length) return "";
@@ -1873,9 +1871,15 @@ function catalogCompatibilityAnswerFromProducts(products: CatalogProduct[], ques
 function approvedKnowledgeAnswer(
   rules: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>,
   products: CatalogProduct[],
-  language: "en" | "fr" | "unknown"
+  language: "en" | "fr" | "unknown",
+  currentQuery = ""
 ) {
-  const rule = rules.find((item) => item.answer && ["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type));
+  const currentType = requestedProductTypeKey(currentQuery);
+  const rule = rules.find((item) => {
+    if (!item.answer || !["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type)) return false;
+    const ruleType = requestedProductTypeKey(`${item.query} ${item.correctSearchTerms} ${item.note}`);
+    return !currentType || !ruleType || currentType === ruleType;
+  });
   if (!rule?.answer) return "";
 
   const requestedPartType = requestedProductTypePattern(`${rule.query} ${rule.correctSearchTerms} ${rule.note}`);
@@ -1986,7 +1990,7 @@ function externalLookupProductMatches(lookup: ExternalKnowledgeLookup, products:
       const haystack = `${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer} ${product.categories.join(" ")} ${product.description}`;
       const normalizedHaystack = normalizeSearchText(haystack);
       const sku = normalizeSku(product.sku);
-      if (partNumbers.length && partNumbers.some((part) => sku === part || normalizedHaystack.includes(normalizeSearchText(part)))) return true;
+      if (partNumbers.length && partNumbers.some((part) => sku === part)) return true;
       if (partNumbers.length) return false;
       if (requestedPartType && !requestedPartType.test(haystack)) return false;
       if (!sourceTerms.length) return false;
@@ -2055,7 +2059,7 @@ function externalLookupCustomerAnswer(
   if (lookup.status === "confirmed") {
     const intro = `Confirmed compatible: Based on ${sourceLabel}, ${summary}.${partText}`;
     if (lines.length) return `${intro}\n\nI found the matching EMRN product${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}\n\nWould you like me to add one to cart or prepare a quote?`;
-    const item = lookup.exactProductName || lookup.manufacturerPartNumbers.join(", ") || "the exact item";
+    const item = cleanExternalLookupItemName(lookup.exactProductName) || lookup.manufacturerPartNumbers.join(", ") || "the exact item";
     return `${intro}\n\nI do not see an exact matching EMRN catalog item after checking by part number and product terms. I can send this to EMRN to source/check **${item}**. Please send your name, email, quantity, and any deadline.`;
   }
 
@@ -2063,13 +2067,24 @@ function externalLookupCustomerAnswer(
     return `Not compatible: Based on ${sourceLabel}, ${summary}.${partText}${lines.length ? `\n\nRelated EMRN option${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : ""}\n\nWould you like me to send this to support to double-check?`;
   }
 
-  const item = lookup.exactProductName || lookup.manufacturerPartNumbers.join(", ") || "this item";
+  const item = cleanExternalLookupItemName(lookup.exactProductName) || lookup.manufacturerPartNumbers.join(", ") || "this item";
   return `Can’t confirm: I can’t confirm this from available product/manufacturer info.${partText}\n\nI checked EMRN by the available part number/product terms${products.length ? ` and found related EMRN option${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " and did not find an exact EMRN match"}.\n\nReply yes and I’ll send this to support for **${item}**.`;
+}
+
+function cleanExternalLookupItemName(value: string) {
+  const cleaned = String(value || "")
+    .replace(/\b(?:Confirmed compatible|Not compatible|Can.t confirm):?\b/gi, "")
+    .replace(/^[\s:;.,*-]+|[\s:;.,*-]+$/g, "")
+    .trim();
+  return cleaned.length >= 3 ? cleaned : "";
 }
 
 function externalLookupFromAnswerText(text: string, query: string): ExternalKnowledgeLookup | null {
   const textWithoutUrls = text.replace(/https?:\/\/\S+/g, " ");
-  const partNumbers = Array.from(new Set(textWithoutUrls.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/gi) || [])).slice(0, 8);
+  const partNumbers = Array.from(new Set([
+    ...(textWithoutUrls.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/gi) || []),
+    ...(textWithoutUrls.match(/\b(?:CR|DL|BR|M|FR|AED)?\d{2,5}[A-Z]{0,4}\b/gi) || []),
+  ])).filter((value) => !/^\d+$/.test(value)).slice(0, 8);
   if (!partNumbers.length) return null;
   const status = /^Not compatible:/i.test(text) || /\*\*Not compatible:?\*\*/i.test(text)
     ? "not_compatible"
@@ -2077,7 +2092,7 @@ function externalLookupFromAnswerText(text: string, query: string): ExternalKnow
       ? "cant_confirm"
       : "confirmed";
   const exactProductName =
-    text.match(/\*\*([^*\n]{4,160})\*\*/)?.[1]?.replace(/\b(?:Confirmed compatible|Not compatible|Can.t confirm):?\b/gi, "").trim() ||
+    cleanExternalLookupItemName(text.match(/\*\*([^*\n]{4,160})\*\*/)?.[1] || "") ||
     query;
   const summary = textWithoutUrls
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
@@ -2131,6 +2146,14 @@ function requestedProductTypePattern(text: string) {
   if (/\b(pads?|electrodes?|électrodes?)\b/i.test(text)) return /\b(pads?|electrodes?|électrodes?)\b/i;
   if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return /\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i;
   return null;
+}
+
+function requestedProductTypeKey(text: string) {
+  if (/\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(text)) return "airway";
+  if (/\b(lungs?)\b/i.test(text)) return "lung";
+  if (/\b(pads?|padz|electrodes?|électrodes?)\b/i.test(text)) return "pad";
+  if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return "battery";
+  return "";
 }
 
 function productFamilyForPartsSearch(product: CatalogProduct) {
@@ -3001,7 +3024,7 @@ async function handleAssistantPost(req: NextRequest) {
     : [];
   const preSearchSkuMs = Date.now() - preSearchSkuStartedAt;
   const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
-    ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language)
+    ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language, latest)
     : "";
   if (earlyApprovedRuleAnswer) {
     const totalMs = Date.now() - requestStartedAt;
@@ -3429,7 +3452,7 @@ async function handleAssistantPost(req: NextRequest) {
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
     const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
-    const ruleAnswer = approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language);
+    const ruleAnswer = approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language, latest);
     if (ruleAnswer) {
       await logPerformance("approved_knowledge", { answerPreview: ruleAnswer });
       return new Response(textStream(ruleAnswer), {
