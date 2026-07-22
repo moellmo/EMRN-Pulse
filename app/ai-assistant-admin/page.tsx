@@ -6,6 +6,8 @@ import { AssistantAdminTabs } from "@/components/assistant/AssistantAdminTabs";
 import { AssistantConfigAdmin } from "@/components/assistant/AssistantConfigAdmin";
 import { AnswerCacheClearButton } from "@/components/assistant/AnswerCacheClearButton";
 import { AnswerCacheDeleteButton } from "@/components/assistant/AnswerCacheDeleteButton";
+import { AnswerCacheRefreshButton } from "@/components/assistant/AnswerCacheRefreshButton";
+import { CacheExpiryText } from "@/components/assistant/CacheExpiryText";
 import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmin";
 import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
@@ -289,6 +291,7 @@ function PerformancePanel({
 }) {
   const sortedRows = sortRowsByTime(rows);
   const visibleCount = compact ? 12 : 25;
+  const slowRepeatCounts = slowQuestionRepeatCounts(rows);
   const toggleHref = `/ai-assistant-admin?${new URLSearchParams({
     ...(token ? { token } : {}),
     ...(fullHistory ? {} : { history: "full" }),
@@ -308,7 +311,16 @@ function PerformancePanel({
       </div>
       <div className="max-h-[620px] overflow-y-auto">
         {sortedRows.length ? (
-          sortedRows.slice(0, visibleCount).map((row, index) => <PerformanceCard key={`${row.createdAt}-${index}`} row={row} compact={compact} token={token} fullHistory={fullHistory} />)
+          sortedRows.slice(0, visibleCount).map((row, index) => (
+            <PerformanceCard
+              key={`${row.createdAt}-${index}`}
+              row={row}
+              compact={compact}
+              token={token}
+              fullHistory={fullHistory}
+              slowRepeatCount={slowRepeatCounts.get(normalizeAdminQuestion(rowQuery(row))) || 0}
+            />
+          ))
         ) : (
           <div className="p-4 text-sm text-slate-500">{emptyText}</div>
         )}
@@ -423,7 +435,19 @@ function SuggestedLiveTestsPanel({ token }: { token: string }) {
   );
 }
 
-function PerformanceCard({ row, compact, token, fullHistory }: { row: PerformanceRow; compact: boolean; token: string; fullHistory: boolean }) {
+function PerformanceCard({
+  row,
+  compact,
+  token,
+  fullHistory,
+  slowRepeatCount = 0,
+}: {
+  row: PerformanceRow;
+  compact: boolean;
+  token: string;
+  fullHistory: boolean;
+  slowRepeatCount?: number;
+}) {
   const perf = row.performance || {};
   const totalMs = Number(perf.totalMs || 0);
   const searchMs = Number(perf.searchMs || 0);
@@ -436,7 +460,7 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
   const answerPreview = cleanAdminAnswerPreview(String(perf.answerPreview || ""));
   const review = performanceReviewHint(row, answerPreview);
   const reasons = qaReasonsForRow(row, answerPreview);
-  const teaching = teachingSuggestionForRow(row, answerPreview);
+  const teaching = teachingSuggestionForRow(row, answerPreview, slowRepeatCount);
   const deployVersion = String(perf.deployVersion || "");
   const rating = totalMs >= 5000 ? "Very slow" : totalMs >= 2500 ? "Slow" : totalMs >= 1200 ? "Okay" : "Fast";
   const ratingClass =
@@ -674,18 +698,25 @@ function AnswerCachePanel({ rows, metrics, token, fullHistory }: { rows: CachedA
                 >
                   Retest
                 </a>
+                <AnswerCacheRefreshButton token={token} cacheKey={row.key} query={row.query} />
                 <AnswerCacheDeleteButton token={token} cacheKey={row.key} />
               </div>
             </div>
             <div className="mt-1 text-xs text-slate-500">
               Created {formatDate(new Date(row.createdAt).toISOString())}
               {row.lastHitAt ? ` · last used ${formatDate(new Date(row.lastHitAt).toISOString())}` : ""}
+              {" · "}
+              <CacheExpiryText expiresAt={row.expiresAt} />
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <HumanMetric label="Cache hits" value={String(row.hits || 0)} />
               <HumanMetric label="Original answer route" value={humanAnswerPath(row.sourceAnswerPath || row.answerPath)} />
               <HumanMetric label="Search used" value={String(row.searchQuery || row.query).slice(0, 80)} />
               <HumanMetric label="Products/SKUs" value={(row.productSkus.length ? row.productSkus.join(", ") : row.productIds.join(", ")) || "not logged"} />
+              <div className="rounded bg-slate-50 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Expires</div>
+                <div className="mt-1 text-sm font-semibold text-slate-950"><CacheExpiryText expiresAt={row.expiresAt} /></div>
+              </div>
             </div>
             <details className="mt-3">
               <summary className="cursor-pointer text-xs font-semibold text-slate-500">Cached answer preview</summary>
@@ -855,7 +886,7 @@ function qaReasonsForRow(row: PerformanceRow, answerPreview: string) {
   return reasons.slice(0, 5);
 }
 
-function teachingSuggestionForRow(row: PerformanceRow, answerPreview: string) {
+function teachingSuggestionForRow(row: PerformanceRow, answerPreview: string, slowRepeatCount = 0) {
   const perf = row.performance || {};
   const query = rowQuery(row);
   const answerPath = String(perf.answerPath || "");
@@ -879,6 +910,13 @@ function teachingSuggestionForRow(row: PerformanceRow, answerPreview: string) {
       typeLabel: "No teaching needed",
       reason: "This is just the customer pressing a starter button.",
       fields: ["Mark Reviewed after checking the follow-up question."],
+    };
+  }
+  if (slowRepeatCount >= 3) {
+    return {
+      typeLabel: "Alias or preferred product",
+      reason: `This question has been slow ${slowRepeatCount} times. Teach it as an alias/preferred product so Meri can answer from EMRN faster.`,
+      fields: [`Query: ${query}`, sourceSku ? `SKU/part: ${sourceSku}` : "Add preferred SKU if known", searchTerms ? `Search terms: ${searchTerms}` : ""].filter(Boolean),
     };
   }
   if (/can.t confirm|could not confirm|i do not see|item-sourcing/i.test(answerPreview)) {
@@ -907,6 +945,26 @@ function teachingSuggestionForRow(row: PerformanceRow, answerPreview: string) {
     reason: "Teach only if you know the answer is wrong, missing a better EMRN product, or needs cleaner wording.",
     fields: [`Query: ${query}`, searchTerms ? `Search terms: ${searchTerms}` : ""].filter(Boolean),
   };
+}
+
+function slowQuestionRepeatCounts(rows: PerformanceRow[]) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = normalizeAdminQuestion(rowQuery(row));
+    if (!key || !row.performance?.slow) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+function normalizeAdminQuestion(question: string) {
+  return question
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}+.-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function firstUsefulSku(values: string[]) {

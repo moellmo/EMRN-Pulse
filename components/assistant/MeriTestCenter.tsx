@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { AssistantMessage } from "@/lib/assistant/types";
 
@@ -155,6 +155,7 @@ export function MeriTestCenter() {
   const [results, setResults] = useState<TestResult[]>([]);
   const [customMessages, setCustomMessages] = useState(() => searchParams.get("q") || "Check order status");
   const [customOutput, setCustomOutput] = useState("");
+  const autoRunStarted = useRef(false);
   const safeTests = useMemo(() => tests.filter((test) => !test.unsafe), []);
 
   async function runTest(test: TestCase): Promise<TestResult> {
@@ -220,6 +221,13 @@ export function MeriTestCenter() {
       setRunning("");
     }
   }
+
+  useEffect(() => {
+    if (autoRunStarted.current || searchParams.get("autorun") !== "1") return;
+    autoRunStarted.current = true;
+    void runCustom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   return (
     <main className="min-h-screen bg-slate-50 p-6 text-slate-950">
