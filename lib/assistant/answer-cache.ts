@@ -2,6 +2,7 @@ import type { AssistantLanguage } from "./types";
 import {
   readSupabaseAnswerCacheItem,
   readSupabaseAnswerCacheRows,
+  clearSupabaseAnswerCache,
   deleteSupabaseAnswerCacheItem,
   saveSupabaseAnswerCacheItem,
   supabaseAdminConfigured,
@@ -186,6 +187,20 @@ export async function deleteCachedAnswer(key: string) {
   cache.delete(normalizedKey);
   try {
     const durableDeleted = await deleteSupabaseAnswerCacheItem(normalizedKey);
+    return { deleted: true, durableDeleted };
+  } catch (error) {
+    return {
+      deleted: true,
+      durableDeleted: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function clearAnswerCache() {
+  cache.clear();
+  try {
+    const durableDeleted = await clearSupabaseAnswerCache();
     return { deleted: true, durableDeleted };
   } catch (error) {
     return {

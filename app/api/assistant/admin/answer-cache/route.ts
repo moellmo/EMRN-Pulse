@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteCachedAnswer } from "@/lib/assistant/answer-cache";
+import { clearAnswerCache, deleteCachedAnswer } from "@/lib/assistant/answer-cache";
 
 export const runtime = "nodejs";
 
@@ -15,6 +15,14 @@ export async function DELETE(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => null);
+  if (body?.all === true) {
+    const result = await clearAnswerCache();
+    if (result.error) {
+      return NextResponse.json({ ok: false, ...result }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, ...result });
+  }
+
   const key = String(body?.key || "").trim();
   if (!key) {
     return NextResponse.json({ error: "Missing cache key." }, { status: 400 });

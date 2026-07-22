@@ -4,6 +4,7 @@ import { readKnowledgeMemory } from "@/lib/assistant/knowledge-memory";
 import { readSkuConfigSync } from "@/lib/assistant/sku-config";
 import { AssistantAdminTabs } from "@/components/assistant/AssistantAdminTabs";
 import { AssistantConfigAdmin } from "@/components/assistant/AssistantConfigAdmin";
+import { AnswerCacheClearButton } from "@/components/assistant/AnswerCacheClearButton";
 import { AnswerCacheDeleteButton } from "@/components/assistant/AnswerCacheDeleteButton";
 import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmin";
 import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
@@ -632,17 +633,20 @@ function AnswerCachePanel({ rows, metrics, token, fullHistory }: { rows: CachedA
             Durable rows: {durableRows} · memory rows on this server: {memoryRows} · Supabase cache: {supabaseConfigured ? "configured" : "not configured"} · showing {visibleRows.length} of {rows.length}
           </p>
         </div>
-        {!fullHistory && rows.length >= 30 ? (
-          <a
-            href={`/ai-assistant-admin?${new URLSearchParams({
-              ...(token ? { token } : {}),
-              history: "full",
-            }).toString()}`}
-            className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            View all
-          </a>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {!fullHistory && rows.length >= 30 ? (
+            <a
+              href={`/ai-assistant-admin?${new URLSearchParams({
+                ...(token ? { token } : {}),
+                history: "full",
+              }).toString()}`}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              View all
+            </a>
+          ) : null}
+          {rows.length ? <AnswerCacheClearButton token={token} /> : null}
+        </div>
       </div>
       {readError || writeError ? (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -660,7 +664,18 @@ function AnswerCachePanel({ rows, metrics, token, fullHistory }: { rows: CachedA
                 <div className="font-semibold text-slate-950">{row.query}</div>
                 <div className="mt-1 text-xs text-slate-500 break-all">Key: {row.key}</div>
               </div>
-              <AnswerCacheDeleteButton token={token} cacheKey={row.key} />
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href={`/ai-assistant-test?${new URLSearchParams({
+                    ...(token ? { token } : {}),
+                    q: row.query,
+                  }).toString()}`}
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Retest
+                </a>
+                <AnswerCacheDeleteButton token={token} cacheKey={row.key} />
+              </div>
             </div>
             <div className="mt-1 text-xs text-slate-500">
               Created {formatDate(new Date(row.createdAt).toISOString())}

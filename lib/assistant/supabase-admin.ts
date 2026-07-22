@@ -229,6 +229,12 @@ export async function deleteSupabaseAnswerCacheItem(key: string) {
   return true;
 }
 
+export async function clearSupabaseAnswerCache() {
+  if (!supabaseAdminConfigured()) return false;
+  await supabaseRequest("assistant_answer_cache?key=not.is.null", { method: "DELETE" });
+  return true;
+}
+
 export async function readSupabaseAdminData(limit = 200): Promise<SupabaseAdminData | null> {
   if (!supabaseAdminConfigured()) return null;
   const safeLimit = Math.max(25, Math.min(1000, Math.round(limit)));
