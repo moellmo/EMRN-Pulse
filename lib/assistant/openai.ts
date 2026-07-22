@@ -153,7 +153,7 @@ function detailAnswerInstructions(language: AssistantLanguage, showExternalSourc
     "- Show supplied EMRN catalog products first only when they are exact matches for the customer's need. If they are merely related, training-only, different model, or accessories for a different use, label them as related EMRN options after the verified answer and still offer an item-sourcing or quote request for the exact item.",
     "- For compatibility questions, start with one of these labels exactly: \"Confirmed compatible:\", \"Not compatible:\", or \"Can’t confirm:\". Use Confirmed compatible only when EMRN/manufacturer/source text clearly supports the fit. Use Not compatible only when source text clearly says it does not fit or is for a different model. Use Can’t confirm when the source does not prove it.",
     "- If the best source is a marketplace, distributor, or supplier rather than EMRN/manufacturer, do not include the competitor URL or name. Say \"I found supporting product info, but not on EMRN or the manufacturer page\" and answer only if the match is exact.",
-    "- If sources are ambiguous, missing, or only suggest a possibility, use this exact answer once and include the EMRN product URL when a product URL is supplied: \"Can’t confirm: I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: [URL]. Reply yes and I’ll send this to support.\"",
+    "- If sources are ambiguous, missing, or only suggest a possibility, use this exact answer once and include the EMRN product URL when a product URL is supplied: \"Can’t confirm: I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: [URL]\\n\\nReply yes and I’ll send this to support.\" Keep punctuation outside product URLs and markdown links.",
     "- If part of the answer is confirmed and part is not, state the confirmed part briefly, include the EMRN product URL when supplied, then use the exact support handoff sentence once.",
     "- Do not ask the customer to provide more details instead of using that exact support handoff when the current EMRN product context is ambiguous.",
     "- Never infer fit from similar names alone. Model numbers, SKUs, exact names, or official compatibility lists must support the answer.",
@@ -360,6 +360,7 @@ function isEmrnUrl(value: string) {
 
 function sanitizeExternalSourceLinks(text: string) {
   return text
+    .replace(/\]\((https?:\/\/[^)\s]+)[).,;]+\)/gi, (_match, url: string) => `](${url.replace(/[).,;]+$/g, "")})`)
     .replace(/\s*\(\[([^\]]+)\]\((https?:\/\/[^)]+)\)\)/gi, (match, label: string, url: string) =>
       isEmrnUrl(url) ? match : label.toLowerCase().includes("emrn") ? ` (${label})` : ""
     )
