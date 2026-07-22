@@ -30,6 +30,11 @@ export type CacheSaveResult = {
   durableError?: string;
 };
 
+export type AnswerCacheEligibility = {
+  eligible: boolean;
+  reason?: string;
+};
+
 const cache = new Map<string, CachedAnswer>();
 const MAX_CACHE_ROWS = 250;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
@@ -108,11 +113,25 @@ export async function saveCachedAnswer(input: {
 }
 
 export function shouldUseAnswerCache(input: { query: string; messageCount: number; hasPageSku?: boolean }) {
+  return answerCacheEligibility(input).eligible;
+}
+
+export function answerCacheEligibility(input: { query: string; messageCount: number; hasPageSku?: boolean }): AnswerCacheEligibility {
   const query = input.query.trim();
-  if (!query || input.hasPageSku) return false;
-  if (input.messageCount > 3 && !isStandaloneProductQuestion(query)) return false;
-  if (/\b(cart|panier|quote|devis|order|commande|invoice|receipt|facture|tracking|support|email|courriel|availability|available|stock|disponible|disponibilit[eé])\b/i.test(query)) return false;
-  return isStandaloneProductQuestion(query);
+  if (!query) return { eligible: false, reason: "empty question" };
+  if (input.hasPageSku && isContextDependentProductQuestion(query)) {
+    return { eligible: false, reason: "question depends on current product page context" };
+  }
+  if (input.messageCount > 3 && !isStandaloneProductQuestion(query)) {
+    return { eligible: false, reason: "later chat follow-up, not a standalone product question" };
+  }
+  if (/\b(cart|panier|quote|devis|order|commande|invoice|receipt|facture|tracking|support|email|courriel|availability|available|stock|disponible|disponibilit[eé])\b/i.test(query)) {
+    return { eligible: false, reason: "cart, quote, order, invoice, support, or availability flow" };
+  }
+  if (!isStandaloneProductQuestion(query)) {
+    return { eligible: false, reason: "not a reusable product question" };
+  }
+  return { eligible: true };
 }
 
 function cacheSkipReason(answerPath: string, answer: string) {
@@ -163,6 +182,12 @@ export async function readAnswerCacheSnapshot(limit = 100) {
 function isStandaloneProductQuestion(query: string) {
   if (/^(?:yes|no|ok|okay|thanks|merci|oui|non)$/i.test(query.trim())) return false;
   return /\b(sku|part|model|compatible|compatibility|fit|fits|work|works|replacement|replace|pads?|electrodes?|airways?|lungs?|batter(?:y|ies)|manikins?|mannequins?|aed|defib|zoll|philips|laerdal|little|frx|g3)\b/i.test(query);
+}
+
+function isContextDependentProductQuestion(query: string) {
+  return /\b(this|that|these|those|it|them|ceci|cela|celui|celle|ces|ça|ca)\b/i.test(query) &&
+    /\b(fit|fits|work|works|compatible|compatibility|replacement|replace|part|pads?|airways?|lungs?|battery|batteries)\b/i.test(query) &&
+    !/\b(sku|model|philips|laerdal|zoll|frx|aed|g3|little|m5070a|m5071a|m5072a|989803139261|183210|183211|8900-0800-01|8900-0810-01)\b/i.test(query);
 }
 
 function normalizeCacheQuery(query: string) {

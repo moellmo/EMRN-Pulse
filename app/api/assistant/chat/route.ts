@@ -10,7 +10,7 @@ import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistan
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
 import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
 import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
-import { getCachedAnswer, saveCachedAnswer, shouldUseAnswerCache, type CacheSaveResult } from "@/lib/assistant/answer-cache";
+import { answerCacheEligibility, getCachedAnswer, saveCachedAnswer, type AnswerCacheEligibility, type CacheSaveResult } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
 import type { ExternalKnowledgeLookup } from "@/lib/assistant/openai";
@@ -57,9 +57,9 @@ function cacheSaveStatus(result: CacheSaveResult) {
   return result.durableSaved ? "saved durable" : "saved memory only";
 }
 
-function cacheStatusWithoutSave(answerCacheEnabled: boolean, canUseAnswerCache: boolean, hasAnswerPreview: boolean) {
+function cacheStatusWithoutSave(answerCacheEnabled: boolean, cacheEligibility: AnswerCacheEligibility, hasAnswerPreview: boolean) {
   if (!answerCacheEnabled) return "off";
-  if (!canUseAnswerCache) return "not eligible";
+  if (!cacheEligibility.eligible) return "not eligible";
   if (!hasAnswerPreview) return "no answer preview";
   return "not attempted";
 }
@@ -3024,11 +3024,12 @@ async function handleAssistantPost(req: NextRequest) {
         ? missingProductFollowUpQuery(messages, latest)
       : searchQueryForLatest(messages, latest, []);
   const answerCacheEnabled = await assistantFeatureEnabledAsync("answerCacheEnabled");
-  const canUseAnswerCache = answerCacheEnabled && shouldUseAnswerCache({
+  const cacheEligibility = answerCacheEligibility({
     query: latest,
     messageCount: messages.length,
     hasPageSku: Boolean(pageContext.sku),
   });
+  const canUseAnswerCache = answerCacheEnabled && cacheEligibility.eligible;
   if (canUseAnswerCache) {
     const cachedAnswer = await getCachedAnswer(latest, language);
     if (cachedAnswer) {
@@ -3118,8 +3119,8 @@ async function handleAssistantPost(req: NextRequest) {
         answerCacheEligible: canUseAnswerCache,
         answerCacheHit: false,
         answerCacheKey: cacheSave?.key,
-        answerCacheSaveStatus: cacheSave ? cacheSaveStatus(cacheSave) : cacheStatusWithoutSave(answerCacheEnabled, canUseAnswerCache, true),
-        answerCacheSkipReason: cacheSave?.skipReason,
+        answerCacheSaveStatus: cacheSave ? cacheSaveStatus(cacheSave) : cacheStatusWithoutSave(answerCacheEnabled, cacheEligibility, true),
+        answerCacheSkipReason: cacheSave?.skipReason || cacheEligibility.reason,
         answerCacheError: cacheSave?.durableError,
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500,
@@ -3288,8 +3289,8 @@ async function handleAssistantPost(req: NextRequest) {
         answerCacheEligible: canUseAnswerCache,
         answerCacheHit: false,
         answerCacheKey: cacheSave?.key,
-        answerCacheSaveStatus: cacheSave ? cacheSaveStatus(cacheSave) : cacheStatusWithoutSave(answerCacheEnabled, canUseAnswerCache, Boolean(answerText)),
-        answerCacheSkipReason: cacheSave?.skipReason,
+        answerCacheSaveStatus: cacheSave ? cacheSaveStatus(cacheSave) : cacheStatusWithoutSave(answerCacheEnabled, cacheEligibility, Boolean(answerText)),
+        answerCacheSkipReason: cacheSave?.skipReason || cacheEligibility.reason,
         answerCacheError: cacheSave?.durableError,
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
