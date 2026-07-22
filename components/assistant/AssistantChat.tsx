@@ -138,6 +138,8 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const [lastPrompt, setLastPrompt] = useState("");
   const [hasError, setHasError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const lastAssistantScrollKeyRef = useRef("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledExternalRequestsRef = useRef<Set<string>>(new Set());
   const [pendingExternalPrompt, setPendingExternalPrompt] = useState("");
@@ -154,6 +156,18 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   });
 
   useEffect(() => {
+    const latestIndex = messages.length - 1;
+    const latestMessage = messages[latestIndex];
+
+    if (latestMessage?.role === "assistant" && latestMessage.content.trim()) {
+      const scrollKey = `${latestIndex}:${latestMessage.createdAt || ""}`;
+      if (lastAssistantScrollKeyRef.current !== scrollKey) {
+        lastAssistantScrollKeyRef.current = scrollKey;
+        messageRefs.current.get(latestIndex)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
+
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, busy]);
 
@@ -416,7 +430,15 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
       <div className="emrn-pulse-body flex-1 overflow-y-auto bg-white px-4 py-5 sm:px-5" aria-live="polite">
         <div className="space-y-4">
           {messages.map((message, index) => (
-            <MessageBubble key={`${message.role}-${index}`} message={message} />
+            <div
+              key={`${message.role}-${index}`}
+              ref={(element) => {
+                if (element) messageRefs.current.set(index, element);
+                else messageRefs.current.delete(index);
+              }}
+            >
+              <MessageBubble message={message} />
+            </div>
           ))}
           {busy ? (
             <div className="flex items-center gap-2 pl-[52px] text-xs font-medium" style={{ color: "#7a7371" }}>
