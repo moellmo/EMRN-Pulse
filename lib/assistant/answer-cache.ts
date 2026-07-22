@@ -2,6 +2,7 @@ import type { AssistantLanguage } from "./types";
 import {
   readSupabaseAnswerCacheItem,
   readSupabaseAnswerCacheRows,
+  deleteSupabaseAnswerCacheItem,
   saveSupabaseAnswerCacheItem,
   supabaseAdminConfigured,
 } from "./supabase-admin";
@@ -177,6 +178,22 @@ export async function readAnswerCacheSnapshot(limit = 100) {
       answerCacheDurableWriteError: lastDurableWriteError,
     },
   };
+}
+
+export async function deleteCachedAnswer(key: string) {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey) return { deleted: false, error: "Missing cache key." };
+  cache.delete(normalizedKey);
+  try {
+    const durableDeleted = await deleteSupabaseAnswerCacheItem(normalizedKey);
+    return { deleted: true, durableDeleted };
+  } catch (error) {
+    return {
+      deleted: true,
+      durableDeleted: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function isStandaloneProductQuestion(query: string) {

@@ -223,6 +223,12 @@ export async function saveSupabaseAnswerCacheItem(item: CachedAnswer) {
   return rows[0]?.payload || item;
 }
 
+export async function deleteSupabaseAnswerCacheItem(key: string) {
+  if (!supabaseAdminConfigured()) return false;
+  await supabaseRequest(`assistant_answer_cache?key=eq.${encodeURIComponent(key)}`, { method: "DELETE" });
+  return true;
+}
+
 export async function readSupabaseAdminData(limit = 200): Promise<SupabaseAdminData | null> {
   if (!supabaseAdminConfigured()) return null;
   const safeLimit = Math.max(25, Math.min(1000, Math.round(limit)));

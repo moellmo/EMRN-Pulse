@@ -324,7 +324,7 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
     readJsonl<AssistantAiUsageEvent>("ai-usage.jsonl"),
     readGoogleSheetsAdminRows(rowLimit),
     readSupabaseAdminData(rowLimit),
-    readAnswerCacheSnapshot(100),
+    readAnswerCacheSnapshot(options.full ? 1000 : 100),
   ]);
   const analytics = dedupeRows([...localAnalytics, ...(sheets?.analytics || []), ...(supabase?.analytics || [])]) as AssistantAnalyticsEvent[];
   const quotes = dedupeRows([...localQuotes, ...(sheets?.quotes || []), ...(supabase?.quotes || [])]) as Array<QuoteRequest & { createdAt: string }>;

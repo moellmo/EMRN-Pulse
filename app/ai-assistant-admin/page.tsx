@@ -4,6 +4,7 @@ import { readKnowledgeMemory } from "@/lib/assistant/knowledge-memory";
 import { readSkuConfigSync } from "@/lib/assistant/sku-config";
 import { AssistantAdminTabs } from "@/components/assistant/AssistantAdminTabs";
 import { AssistantConfigAdmin } from "@/components/assistant/AssistantConfigAdmin";
+import { AnswerCacheDeleteButton } from "@/components/assistant/AnswerCacheDeleteButton";
 import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmin";
 import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
@@ -188,7 +189,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
                   <PerformancePanel title="Recent Timings" rows={data.performance || []} emptyText="No timing records yet." compact token={adminToken} fullHistory={fullHistory} />
-                  <AnswerCachePanel rows={data.answerCache || []} metrics={data.metrics} />
+                  <AnswerCachePanel rows={data.answerCache || []} metrics={data.metrics} token={adminToken} fullHistory={fullHistory} />
                   <ExternalSourcesPanel rows={data.externalKnowledgeSources || []} />
                   <AiUsagePanel rows={data.aiUsage} />
                   <KnowledgeShadowPanel rows={data.knowledgeShadow || []} />
@@ -615,19 +616,33 @@ function AiUsagePanel({ rows }: { rows: AssistantAiUsageEvent[] }) {
   );
 }
 
-function AnswerCachePanel({ rows, metrics }: { rows: CachedAnswer[]; metrics: Record<string, unknown> }) {
+function AnswerCachePanel({ rows, metrics, token, fullHistory }: { rows: CachedAnswer[]; metrics: Record<string, unknown>; token: string; fullHistory: boolean }) {
   const readError = String(metrics.answerCacheDurableReadError || "");
   const writeError = String(metrics.answerCacheDurableWriteError || "");
   const durableRows = Number(metrics.answerCacheDurableRows || 0);
   const memoryRows = Number(metrics.answerCacheMemoryRows || 0);
   const supabaseConfigured = Boolean(metrics.answerCacheSupabaseConfigured);
+  const visibleRows = fullHistory ? rows : rows.slice(0, 30);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <h2 className="text-lg font-semibold">Answer Cache</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Durable rows: {durableRows} · memory rows on this server: {memoryRows} · Supabase cache: {supabaseConfigured ? "configured" : "not configured"}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div>
+          <h2 className="text-lg font-semibold">Answer Cache</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Durable rows: {durableRows} · memory rows on this server: {memoryRows} · Supabase cache: {supabaseConfigured ? "configured" : "not configured"} · showing {visibleRows.length} of {rows.length}
+          </p>
+        </div>
+        {!fullHistory && rows.length >= 30 ? (
+          <a
+            href={`/ai-assistant-admin?${new URLSearchParams({
+              ...(token ? { token } : {}),
+              history: "full",
+            }).toString()}`}
+            className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            View all
+          </a>
+        ) : null}
       </div>
       {readError || writeError ? (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -638,9 +653,15 @@ function AnswerCachePanel({ rows, metrics }: { rows: CachedAnswer[]; metrics: Re
         </div>
       ) : null}
       <div className="max-h-[520px] overflow-y-auto">
-        {rows.length ? rows.slice(0, 30).map((row) => (
+        {visibleRows.length ? visibleRows.map((row) => (
           <article key={row.key} className="border-b border-slate-100 p-4">
-            <div className="font-semibold text-slate-950">{row.query}</div>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold text-slate-950">{row.query}</div>
+                <div className="mt-1 text-xs text-slate-500 break-all">Key: {row.key}</div>
+              </div>
+              <AnswerCacheDeleteButton token={token} cacheKey={row.key} />
+            </div>
             <div className="mt-1 text-xs text-slate-500">
               Created {formatDate(new Date(row.createdAt).toISOString())}
               {row.lastHitAt ? ` · last used ${formatDate(new Date(row.lastHitAt).toISOString())}` : ""}
