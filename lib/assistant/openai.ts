@@ -3,6 +3,16 @@ import { assistantFeatureEnabledAsync } from "./admin-config";
 import { buildSystemPrompt, faqContext, productContext } from "./prompt";
 import type { AssistantLanguage, AssistantMessage, CatalogProduct } from "./types";
 
+export type ExternalKnowledgeLookup = {
+  status: "confirmed" | "not_compatible" | "cant_confirm";
+  summary: string;
+  exactProductName: string;
+  manufacturerPartNumbers: string[];
+  searchTerms: string[];
+  sourceType: "manufacturer" | "supplier_catalog" | "emrn" | "mixed" | "unknown";
+  sourceUrls: string[];
+};
+
 const trustedProductSourceDomains = [
   "emrn.ca",
   "laerdal.com",
@@ -160,6 +170,208 @@ function detailAnswerInstructions(language: AssistantLanguage, showExternalSourc
     "- Do not ask the customer to provide more details instead of using that exact support handoff when the current EMRN product context is ambiguous.",
     "- Never infer fit from similar names alone. Model numbers, SKUs, exact names, or official compatibility lists must support the answer.",
   ].join("\n");
+}
+
+function externalLookupInstructions() {
+  return [
+    "You are an EMRN product research assistant.",
+    "Use web search only on trusted manufacturer, official catalog, manual, EMRN, and major medical supplier sources.",
+    "Return structured JSON only.",
+    "Find whether the customer's compatibility, replacement-part, accessory, dimension, or product-identification question can be confirmed.",
+    "Prefer manufacturer pages, manuals, official product pages, and EMRN pages over supplier or marketplace pages.",
+    "If confirmed, identify exact manufacturer part numbers, model numbers, catalog SKUs, and clean EMRN search terms.",
+    "Put only bare part/model/catalog numbers in manufacturerPartNumbers, without descriptions or dashes.",
+    "Do not include prices from external websites.",
+    "Use confirmed only when source text clearly supports the exact model/family/use. Use not_compatible only when the source clearly shows a different model or incompatibility. Otherwise use cant_confirm.",
+    "Keep the summary short and customer-safe.",
+  ].join("\n");
+}
+
+function outputTextFromResponse(value: unknown) {
+  const record = value as { output_text?: unknown; output?: unknown };
+  if (typeof record.output_text === "string") return record.output_text;
+  const chunks: string[] = [];
+  const seen = new Set<string>();
+
+  const visit = (item: unknown) => {
+    if (!item) return;
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    if (typeof item !== "object") return;
+    const current = item as Record<string, unknown>;
+    for (const key of ["text", "content"]) {
+      const text = current[key];
+      if (typeof text === "string" && !seen.has(text)) {
+        seen.add(text);
+        chunks.push(text);
+      }
+    }
+    Object.values(current).forEach(visit);
+  };
+
+  visit(value);
+  return chunks.join("\n").trim();
+}
+
+function cleanLookupArray(value: unknown, max = 8) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .slice(0, max)
+    : [];
+}
+
+function parseExternalLookup(value: unknown): ExternalKnowledgeLookup | null {
+  const rawText = outputTextFromResponse(value).replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const text = rawText.match(/\{[\s\S]*\}/)?.[0] || rawText;
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const status = String(parsed.status || "").trim();
+    if (!["confirmed", "not_compatible", "cant_confirm"].includes(status)) return null;
+    return {
+      status: status as ExternalKnowledgeLookup["status"],
+      summary: String(parsed.summary || "").trim().slice(0, 700),
+      exactProductName: String(parsed.exactProductName || "").trim().slice(0, 220),
+      manufacturerPartNumbers: cleanLookupArray(parsed.manufacturerPartNumbers),
+      searchTerms: cleanLookupArray(parsed.searchTerms),
+      sourceType: ["manufacturer", "supplier_catalog", "emrn", "mixed", "unknown"].includes(String(parsed.sourceType || ""))
+        ? parsed.sourceType as ExternalKnowledgeLookup["sourceType"]
+        : "unknown",
+      sourceUrls: cleanLookupArray(parsed.sourceUrls, 12),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function lookupExternalKnowledge({
+  messages,
+  products,
+  language,
+  sessionId,
+  query,
+}: {
+  messages: AssistantMessage[];
+  products: CatalogProduct[];
+  language: AssistantLanguage;
+  sessionId?: string;
+  query?: string;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  const model = process.env.OPENAI_WEB_SEARCH_MODEL || "gpt-4.1-mini";
+  const webSearchToolType = process.env.OPENAI_WEB_SEARCH_TOOL || "web_search";
+  const requestBody = {
+    model,
+    stream: false,
+    instructions: externalLookupInstructions(),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "external_knowledge_lookup",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            status: { type: "string", enum: ["confirmed", "not_compatible", "cant_confirm"] },
+            summary: { type: "string" },
+            exactProductName: { type: "string" },
+            manufacturerPartNumbers: { type: "array", items: { type: "string" } },
+            searchTerms: { type: "array", items: { type: "string" } },
+            sourceType: { type: "string", enum: ["manufacturer", "supplier_catalog", "emrn", "mixed", "unknown"] },
+            sourceUrls: { type: "array", items: { type: "string" } },
+          },
+          required: [
+            "status",
+            "summary",
+            "exactProductName",
+            "manufacturerPartNumbers",
+            "searchTerms",
+            "sourceType",
+            "sourceUrls",
+          ],
+        },
+      },
+    },
+    tools: [
+      {
+        type: webSearchToolType,
+        search_context_size: "low",
+        ...(webSearchToolType === "web_search"
+          ? {
+              filters: {
+                allowed_domains: trustedDomainsForProducts(products),
+              },
+            }
+          : {}),
+      },
+    ],
+    tool_choice: "required",
+    input: [
+      "EMRN catalog context:",
+      productContext(products),
+      "",
+      "Conversation:",
+      ...messages.slice(-8).map((message) => `${message.role.toUpperCase()}: ${message.content}`),
+      "",
+      "Return JSON with these fields:",
+      "{",
+      "  \"status\": \"confirmed | not_compatible | cant_confirm\",",
+      "  \"summary\": \"short reason based on source info\",",
+      "  \"exactProductName\": \"exact item name if found\",",
+      "  \"manufacturerPartNumbers\": [\"part/model/catalog numbers\"],",
+      "  \"searchTerms\": [\"clean EMRN product searches, no sentences\"],",
+      "  \"sourceType\": \"manufacturer | supplier_catalog | emrn | mixed | unknown\",",
+      "  \"sourceUrls\": [\"source URLs used\"]",
+      "}",
+    ].join("\n"),
+    max_output_tokens: 900,
+  };
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    console.error("[EMRN Pulse] OpenAI external lookup failed", response.status, await response.text());
+    return null;
+  }
+
+  const json = await response.json();
+  const lookup = parseExternalLookup(json);
+  const usage = (json as { usage?: Record<string, unknown> }).usage;
+  await logAiUsage({
+    feature: "trusted_web_search",
+    model,
+    inputTokens: Number(usage?.input_tokens || 0),
+    outputTokens: Number(usage?.output_tokens || 0),
+    sessionId,
+    language,
+    query,
+    status: lookup ? "called" : "error",
+  });
+  await logAnalyticsEvent({
+    type: "external_knowledge_sources",
+    sessionId: sessionId || "unknown",
+    language,
+    query,
+    externalSources: lookup?.sourceUrls.map((url) => ({ url, domain: domainFromUrl(url) })) || extractResponseSources(json),
+    createdAt: new Date().toISOString(),
+  });
+
+  return lookup;
 }
 
 export async function streamAssistantResponse({

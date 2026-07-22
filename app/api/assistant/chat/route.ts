@@ -6,11 +6,13 @@ import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSu
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
-import { streamAssistantResponse } from "@/lib/assistant/openai";
+import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistant/openai";
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
 import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
 import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
+import { normalizeSearchText } from "@/lib/search-language";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
+import type { ExternalKnowledgeLookup } from "@/lib/assistant/openai";
 
 export const runtime = "nodejs";
 
@@ -38,6 +40,10 @@ function textStream(text: string) {
       controller.close();
     },
   });
+}
+
+async function streamToText(stream: ReadableStream<Uint8Array>) {
+  return new Response(stream).text();
 }
 
 function quoteMissingText(missing: string[], language: "en" | "fr" | "unknown") {
@@ -1900,6 +1906,178 @@ function approvedKnowledgeProductSearchQuery(rules: Awaited<ReturnType<typeof ma
   return rule.correctSearchTerms || rule.query || "";
 }
 
+function dedupeCatalogProductsBySku(products: CatalogProduct[]) {
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = `${product.productId}:${product.variantId}:${product.sku}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function externalLookupSearchTerms(lookup: ExternalKnowledgeLookup) {
+  return Array.from(
+    new Set([
+      ...externalLookupPartNumbers(lookup),
+      lookup.exactProductName,
+      ...lookup.searchTerms,
+    ].map((item) => item.trim()).filter(Boolean))
+  ).slice(0, 10);
+}
+
+function externalLookupPartNumbers(lookup: ExternalKnowledgeLookup) {
+  return Array.from(
+    new Set(
+      lookup.manufacturerPartNumbers.flatMap((value) => {
+        const raw = String(value || "").trim();
+        const extracted = raw.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/gi) || [];
+        return [raw, ...extracted].filter(Boolean);
+      })
+    )
+  ).slice(0, 12);
+}
+
+function externalLookupProductMatches(lookup: ExternalKnowledgeLookup, products: CatalogProduct[]) {
+  const partNumbers = externalLookupPartNumbers(lookup).map((value) => normalizeSku(value)).filter(Boolean);
+  const requestedPartType = requestedProductTypePattern([
+    lookup.exactProductName,
+    lookup.summary,
+    ...lookup.searchTerms,
+  ].join(" "));
+  const sourceText = normalizeSearchText([
+    lookup.exactProductName,
+    ...lookup.searchTerms,
+  ].join(" "));
+  const sourceTerms = sourceText
+    .split(/\s+/)
+    .filter((term) => term.length >= 3)
+    .filter((term) => !/^(the|and|for|with|this|that|product|item|part|parts|replacement|compatible|compatibility|work|works|fit|fits|pour|avec)$/.test(term));
+
+  return dedupeCatalogProductsBySku(products)
+    .filter((product) => {
+      const haystack = `${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer} ${product.categories.join(" ")} ${product.description}`;
+      const normalizedHaystack = normalizeSearchText(haystack);
+      const sku = normalizeSku(product.sku);
+      if (partNumbers.length && partNumbers.some((part) => sku === part || normalizedHaystack.includes(normalizeSearchText(part)))) return true;
+      if (partNumbers.length) return false;
+      if (requestedPartType && !requestedPartType.test(haystack)) return false;
+      if (!sourceTerms.length) return false;
+      const matches = sourceTerms.filter((term) => normalizedHaystack.includes(term));
+      return matches.length >= Math.min(4, sourceTerms.length);
+    })
+    .slice(0, 5);
+}
+
+async function findEmrnProductsForExternalLookup(lookup: ExternalKnowledgeLookup, language: "en" | "fr" | "unknown") {
+  const terms = externalLookupSearchTerms(lookup);
+  const skuProducts = (
+    await Promise.all(externalLookupPartNumbers(lookup).map((sku) => searchBySKU(sku)))
+  ).flat();
+  const searchProductsResults = (
+    await Promise.all(terms.map((term) => searchProducts({ query: term, language, limit: 8 })))
+  ).flatMap((result) => result.products);
+  return externalLookupProductMatches(lookup, [...skuProducts, ...searchProductsResults]);
+}
+
+function externalLookupCustomerAnswer(
+  lookup: ExternalKnowledgeLookup,
+  products: CatalogProduct[],
+  language: "en" | "fr" | "unknown"
+) {
+  const sourceLabel = lookup.sourceType === "manufacturer"
+    ? "manufacturer information"
+    : lookup.sourceType === "supplier_catalog"
+      ? "supplier catalog information"
+      : lookup.sourceType === "emrn"
+        ? "EMRN information"
+        : "approved product information";
+  const partText = lookup.manufacturerPartNumbers.length
+    ? ` Part number${lookup.manufacturerPartNumbers.length > 1 ? "s" : ""}: ${lookup.manufacturerPartNumbers.join(", ")}.`
+    : "";
+  const summary = sentenceFragment(lookup.summary || lookup.exactProductName || "the product information I found")
+    .replace(/^[\s:;.,-]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "the product information I found";
+  const lines = products.map((product) => {
+    const price = product.price > 0 ? `, $${product.price.toFixed(2)}` : "";
+    const availability = sentenceFragment(displayAvailability(product, language));
+    return `- **${product.name}** — SKU **${product.sku || "N/A"}**${price}.${availability ? ` ${availability}.` : ""}\n  ${product.url}`;
+  });
+
+  if (lookup.status === "confirmed") {
+    const intro = `Confirmed compatible: Based on ${sourceLabel}, ${summary}.${partText}`;
+    if (lines.length) return `${intro}\n\nI found the matching EMRN product${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}\n\nWould you like me to add one to cart or prepare a quote?`;
+    const item = lookup.exactProductName || lookup.manufacturerPartNumbers.join(", ") || "the exact item";
+    return `${intro}\n\nI do not see an exact matching EMRN catalog item after checking by part number and product terms. I can send this to EMRN to source/check **${item}**. Please send your name, email, quantity, and any deadline.`;
+  }
+
+  if (lookup.status === "not_compatible") {
+    return `Not compatible: Based on ${sourceLabel}, ${summary}.${partText}${lines.length ? `\n\nRelated EMRN option${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : ""}\n\nWould you like me to send this to support to double-check?`;
+  }
+
+  const item = lookup.exactProductName || lookup.manufacturerPartNumbers.join(", ") || "this item";
+  return `Can’t confirm: I can’t confirm this from available product/manufacturer info.${partText}\n\nI checked EMRN by the available part number/product terms${products.length ? ` and found related EMRN option${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " and did not find an exact EMRN match"}.\n\nReply yes and I’ll send this to support for **${item}**.`;
+}
+
+function externalLookupFromAnswerText(text: string, query: string): ExternalKnowledgeLookup | null {
+  const textWithoutUrls = text.replace(/https?:\/\/\S+/g, " ");
+  const partNumbers = Array.from(new Set(textWithoutUrls.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/gi) || [])).slice(0, 8);
+  if (!partNumbers.length) return null;
+  const status = /^Not compatible:/i.test(text) || /\*\*Not compatible:?\*\*/i.test(text)
+    ? "not_compatible"
+    : /^Can.t confirm:/i.test(text) || /\*\*Can.t confirm:?\*\*/i.test(text)
+      ? "cant_confirm"
+      : "confirmed";
+  const exactProductName =
+    text.match(/\*\*([^*\n]{4,160})\*\*/)?.[1]?.replace(/\b(?:Confirmed compatible|Not compatible|Can.t confirm):?\b/gi, "").trim() ||
+    query;
+  const summary = textWithoutUrls
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_#>`]/g, "")
+    .replace(/\b(?:Confirmed compatible|Not compatible|Can.t confirm):?\b/gi, "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 20 && !/^[-•]/.test(line))
+    ?.slice(0, 500) || query;
+  return {
+    status,
+    summary,
+    exactProductName,
+    manufacturerPartNumbers: partNumbers,
+    searchTerms: [query, exactProductName, ...partNumbers],
+    sourceType: /manufacturer information/i.test(text) ? "manufacturer" : "mixed",
+    sourceUrls: [],
+  };
+}
+
+function colorFromSkuSuffix(sku: string) {
+  const normalized = normalizeSku(sku);
+  const suffix = normalized.match(/([A-Z]{2})\+?$/)?.[1] || "";
+  return ({
+    OR: "orange",
+    RE: "red",
+    RD: "red",
+    BU: "blue",
+    BL: "blue",
+    BK: "black",
+    GR: "green",
+    GN: "green",
+    YE: "yellow",
+    YL: "yellow",
+    WH: "white",
+    GY: "gray",
+    PU: "purple",
+    PK: "pink",
+  } as Record<string, string>)[suffix] || "";
+}
+
+function familySearchForMissingColorSku(sku: string) {
+  const normalized = normalizeSku(sku);
+  if (/^G35004[A-Z]{2}\+?$/.test(normalized)) return "G3+ Load N Go Medic Backpack Blue Red Tactical Black";
+  return "";
+}
+
 function requestedProductTypePattern(text: string) {
   if (/\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(text)) return /\b(airways?|voies?\s+a[eé]riennes?)\b/i;
   if (/\b(lungs?)\b/i.test(text)) return /\b(lungs?)\b/i;
@@ -2738,7 +2916,7 @@ async function handleAssistantPost(req: NextRequest) {
     isQuoteIntent(latest) ||
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
-    isProductDetailIntent(latest) ||
+    (isProductDetailIntent(latest) && isContextProductSelectionReply(latest)) ||
     shouldCompareRememberedProducts ||
     shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
@@ -3105,6 +3283,40 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (!products.length) {
+    const missingColorSku = skuCandidates.find((sku) => colorFromSkuSuffix(sku) && familySearchForMissingColorSku(sku));
+    if (missingColorSku) {
+      const familyProducts = (await searchProducts({ query: familySearchForMissingColorSku(missingColorSku), language, limit: 8 })).products;
+      if (familyProducts.length) {
+        await logPerformance("color_fallback");
+        return new Response(textStream(colorFallbackText(familyProducts, colorFromSkuSuffix(missingColorSku), language, latest)), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
+    const fallbackKnowledgeMatches = preSearchKnowledgeMatches.length
+      ? preSearchKnowledgeMatches
+      : await matchingApprovedKnowledgeForQuery(latest);
+    const colorKnowledge = fallbackKnowledgeMatches.find((item) => item.type === "color_option" && item.correctSearchTerms);
+    if (colorKnowledge?.correctSearchTerms) {
+      const colorProducts = (await searchProducts({ query: colorKnowledge.correctSearchTerms, language, limit: 8 })).products;
+      const availableColorProducts = colorProducts.length ? colorProducts : products;
+      const requestedColor =
+        latest.match(/\b(orange|red|blue|green|yellow|black|white|purple|pink|grey|gray|brown|tan|navy)\b/i)?.[1]?.toLowerCase() ||
+        colorKnowledge.query.match(/\b(orange|red|blue|green|yellow|black|white|purple|pink|grey|gray|brown|tan|navy)\b/i)?.[1]?.toLowerCase() ||
+        "requested";
+      if (availableColorProducts.length) {
+        await logPerformance("color_fallback");
+        return new Response(textStream(colorFallbackText(availableColorProducts, requestedColor, language, latest)), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
     await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
     await logPerformance("no_products");
     const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
@@ -3237,6 +3449,31 @@ async function handleAssistantPost(req: NextRequest) {
     }
 
     const openAiStartedAt = Date.now();
+    const externalLookup = await lookupExternalKnowledge({
+      messages,
+      products: detailProducts,
+      language,
+      sessionId,
+      query: latest,
+    });
+    if (externalLookup) {
+      const emrnLookupProducts = await findEmrnProductsForExternalLookup(externalLookup, language);
+      await logPerformance("external_knowledge_structured", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
+      await logAnalyticsEvent({
+        type: "conversation_completed",
+        sessionId,
+        language,
+        messageCount: messages.length,
+        createdAt: new Date().toISOString(),
+      });
+      return new Response(textStream(externalLookupCustomerAnswer(externalLookup, emrnLookupProducts, language)), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     const stream = await streamAssistantResponse({
       messages,
       products: detailProducts,
@@ -3245,6 +3482,25 @@ async function handleAssistantPost(req: NextRequest) {
       query: searchQuery,
       trustedWebSearch: true,
     });
+    const fallbackText = await streamToText(stream);
+    const extractedLookup = externalLookupFromAnswerText(fallbackText, latest);
+    if (extractedLookup) {
+      const emrnLookupProducts = await findEmrnProductsForExternalLookup(extractedLookup, language);
+      await logPerformance("external_knowledge_extracted", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
+      await logAnalyticsEvent({
+        type: "conversation_completed",
+        sessionId,
+        language,
+        messageCount: messages.length,
+        createdAt: new Date().toISOString(),
+      });
+      return new Response(textStream(externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language)), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
     await logPerformance("external_knowledge", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
     await logAnalyticsEvent({
       type: "conversation_completed",
@@ -3254,7 +3510,7 @@ async function handleAssistantPost(req: NextRequest) {
       createdAt: new Date().toISOString(),
     });
 
-    return new Response(stream, {
+    return new Response(textStream(fallbackText), {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-store",
