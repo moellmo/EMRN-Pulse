@@ -180,6 +180,7 @@ export type AssistantAnalyticsEvent =
         productCount?: number;
         searchQuery?: string;
         answerPath?: string;
+        answerPreview?: string;
         deployVersion?: string;
         slow?: boolean;
         openAiUsed?: boolean;

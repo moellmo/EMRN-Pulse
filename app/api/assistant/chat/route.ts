@@ -42,6 +42,15 @@ function textStream(text: string) {
   });
 }
 
+function answerPreviewText(text: string) {
+  return String(text || "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 900);
+}
+
 async function streamToText(stream: ReadableStream<Uint8Array>) {
   return new Response(stream).text();
 }
@@ -2990,6 +2999,7 @@ async function handleAssistantPost(req: NextRequest) {
         productCount: 0,
         searchQuery,
         answerPath: "approved_knowledge",
+        answerPreview: answerPreviewText(earlyApprovedRuleAnswer),
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500,
         openAiUsed: false,
@@ -3105,7 +3115,7 @@ async function handleAssistantPost(req: NextRequest) {
   }
   knowledgeMs = Date.now() - knowledgeStartedAt;
 
-  const logPerformance = async (answerPath: string, extra?: { openAiMs?: number; openAiUsed?: boolean }) => {
+  const logPerformance = async (answerPath: string, extra?: { openAiMs?: number; openAiUsed?: boolean; answerPreview?: string }) => {
     const totalMs = Date.now() - requestStartedAt;
     await logAnalyticsEvent({
       type: "assistant_performance",
@@ -3122,6 +3132,7 @@ async function handleAssistantPost(req: NextRequest) {
         productCount: products.length,
         searchQuery,
         answerPath,
+        answerPreview: answerPreviewText(extra?.answerPreview || ""),
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
         openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0),
@@ -3132,14 +3143,13 @@ async function handleAssistantPost(req: NextRequest) {
   };
 
   if (isAccountIntent(latest)) {
-    await logPerformance("account_help");
+    const accountAnswer = language === "fr"
+      ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
+      : "You can create or use an EMRN account from the account area of the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question.";
+    await logPerformance("account_help", { answerPreview: accountAnswer });
     await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
     return new Response(
-      textStream(
-        language === "fr"
-          ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
-          : "You can create or use an EMRN account from the account area on the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question."
-      ),
+      textStream(accountAnswer),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
   }
@@ -3147,7 +3157,7 @@ async function handleAssistantPost(req: NextRequest) {
   if (shouldCompareRememberedProducts && products.length) {
     const comparison = compareProductsText(products, language, latest);
     if (comparison) {
-      await logPerformance("compare_products");
+      await logPerformance("compare_products", { answerPreview: comparison });
       return new Response(textStream(comparison), {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -3157,8 +3167,9 @@ async function handleAssistantPost(req: NextRequest) {
   if (shouldFilterRememberedProducts && products.length) {
     const filteredProducts = filterProductsFromText(products, latest);
     if (filteredProducts.length) {
-      await logPerformance("filter_results");
-      return new Response(textStream(productResultsText(filteredProducts, language, searchQuery)), {
+      const filteredAnswer = productResultsText(filteredProducts, language, searchQuery);
+      await logPerformance("filter_results", { answerPreview: filteredAnswer });
+      return new Response(textStream(filteredAnswer), {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
@@ -3299,19 +3310,16 @@ async function handleAssistantPost(req: NextRequest) {
         sendQuoteRequestEmail(draft.request),
         logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
       ]);
-      await logPerformance("quote_request_sent");
-      return new Response(
-        textStream(
-          language === "fr"
-            ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
-            : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly."
-        ),
-        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-      );
+      const quoteSentAnswer = language === "fr"
+        ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
+        : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly.";
+      await logPerformance("quote_request_sent", { answerPreview: quoteSentAnswer });
+      return new Response(textStream(quoteSentAnswer), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
     }
 
-    await logPerformance("quote_missing_fields");
-    return new Response(textStream(quoteMissingText(draft.missing, language)), {
+    const quoteMissingAnswer = quoteMissingText(draft.missing, language);
+    await logPerformance("quote_missing_fields", { answerPreview: quoteMissingAnswer });
+    return new Response(textStream(quoteMissingAnswer), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
@@ -3321,8 +3329,9 @@ async function handleAssistantPost(req: NextRequest) {
     if (missingColorSku) {
       const familyProducts = (await searchProducts({ query: familySearchForMissingColorSku(missingColorSku), language, limit: 8 })).products;
       if (familyProducts.length) {
-        await logPerformance("color_fallback");
-        return new Response(textStream(colorFallbackText(familyProducts, colorFromSkuSuffix(missingColorSku), language, latest)), {
+        const colorAnswer = colorFallbackText(familyProducts, colorFromSkuSuffix(missingColorSku), language, latest);
+        await logPerformance("color_fallback", { answerPreview: colorAnswer });
+        return new Response(textStream(colorAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
@@ -3342,8 +3351,9 @@ async function handleAssistantPost(req: NextRequest) {
         colorKnowledge.query.match(/\b(orange|red|blue|green|yellow|black|white|purple|pink|grey|gray|brown|tan|navy)\b/i)?.[1]?.toLowerCase() ||
         "requested";
       if (availableColorProducts.length) {
-        await logPerformance("color_fallback");
-        return new Response(textStream(colorFallbackText(availableColorProducts, requestedColor, language, latest)), {
+        const colorAnswer = colorFallbackText(availableColorProducts, requestedColor, language, latest);
+        await logPerformance("color_fallback", { answerPreview: colorAnswer });
+        return new Response(textStream(colorAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
@@ -3352,15 +3362,14 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
     await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
-    await logPerformance("no_products");
     const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
     const skuText = skuCandidates.length ? ` SKU/part number ${skuCandidates.join(", ")}` : "";
+    const noProductsAnswer = language === "fr"
+      ? `Je n’ai pas pu confirmer${skuText ? ` le${skuText}` : " ce produit"} dans Pulse. Pouvez-vous envoyer une photo, la marque, le modèle, le numéro de pièce, ou une description de l’usage?\n\nVous pouvez aussi essayer la [recherche manuelle](${fallbackSearchUrl}).\n\nJe peux envoyer cette demande au support pour vérifier l’article ou préparer une demande de devis.`
+      : `I could not confirm${skuText ? ` the${skuText}` : " this item"} in Pulse. Can you send a photo, brand, model number, part number, or what it is used for?\n\nYou can also try the [manual search](${fallbackSearchUrl}).\n\nI can send this to support to check the item or prepare a quote request.`;
+    await logPerformance("no_products", { answerPreview: noProductsAnswer });
     return new Response(
-      textStream(
-        language === "fr"
-          ? `Je n’ai pas pu confirmer${skuText ? ` le${skuText}` : " ce produit"} dans Pulse. Pouvez-vous envoyer une photo, la marque, le modèle, le numéro de pièce, ou une description de l’usage?\n\nVous pouvez aussi essayer la [recherche manuelle](${fallbackSearchUrl}).\n\nJe peux envoyer cette demande au support pour vérifier l’article ou préparer une demande de devis.`
-          : `I could not confirm${skuText ? ` the${skuText}` : " this item"} in Pulse. Can you send a photo, brand, model number, part number, or what it is used for?\n\nYou can also try the [manual search](${fallbackSearchUrl}).\n\nI can send this to support to check the item or prepare a quote request.`
-      ),
+      textStream(noProductsAnswer),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
   }
@@ -3382,7 +3391,7 @@ async function handleAssistantPost(req: NextRequest) {
     const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
     const ruleAnswer = approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language);
     if (ruleAnswer) {
-      await logPerformance("approved_knowledge");
+      await logPerformance("approved_knowledge", { answerPreview: ruleAnswer });
       return new Response(textStream(ruleAnswer), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
@@ -3407,7 +3416,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
 
     if (localCompatibilityAnswer) {
-      await logPerformance("emrn_compatibility");
+      await logPerformance("emrn_compatibility", { answerPreview: localCompatibilityAnswer });
       return new Response(textStream(localCompatibilityAnswer), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
@@ -3419,7 +3428,7 @@ async function handleAssistantPost(req: NextRequest) {
     if (isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
       const compatibilityAnswer = catalogCompatibilityAnswer(selectedDetailProducts[0], latest, language);
       if (compatibilityAnswer && !/^Can’t confirm:|^Can.t confirm:|^Je ne peux pas confirmer/i.test(compatibilityAnswer)) {
-        await logPerformance("catalog_compatibility");
+        await logPerformance("catalog_compatibility", { answerPreview: compatibilityAnswer });
         return new Response(textStream(compatibilityAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
@@ -3449,8 +3458,9 @@ async function handleAssistantPost(req: NextRequest) {
         const intro = language === "fr"
           ? `Voici les pièces/accessoires EMRN que j’ai trouvés pour **${baseProduct.name}** (SKU: ${baseProduct.sku}):`
           : `Here are EMRN parts/accessories I found for **${baseProduct.name}** (SKU: ${baseProduct.sku}):`;
-        await logPerformance("related_parts");
-        return new Response(textStream(`${intro}\n\n${productResultsText(relatedParts.slice(0, 6), language, partsQueries[0]).replace(/^Here are the products I found for .+?:\n\n/i, "").replace(/\n\nIf you tell me[\s\S]*$/i, "")}`), {
+        const relatedAnswer = `${intro}\n\n${productResultsText(relatedParts.slice(0, 6), language, partsQueries[0]).replace(/^Here are the products I found for .+?:\n\n/i, "").replace(/\n\nIf you tell me[\s\S]*$/i, "")}`;
+        await logPerformance("related_parts", { answerPreview: relatedAnswer });
+        return new Response(textStream(relatedAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
@@ -3462,7 +3472,7 @@ async function handleAssistantPost(req: NextRequest) {
     if (selectedDetailProducts.length === 1) {
       const catalogAnswer = productDetailFromCatalog(selectedDetailProducts[0], latest, language);
       if (catalogAnswer) {
-        await logPerformance("catalog_detail");
+        await logPerformance("catalog_detail", { answerPreview: catalogAnswer });
         return new Response(textStream(catalogAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
@@ -3474,8 +3484,9 @@ async function handleAssistantPost(req: NextRequest) {
 
     const externalKnowledgeEnabled = await assistantFeatureEnabledAsync("externalKnowledgeEnabled");
     if (!externalKnowledgeEnabled) {
-      await logPerformance("external_knowledge_off");
-      return new Response(textStream(externalKnowledgeDisabledText(detailProducts, language)), {
+      const externalOffAnswer = externalKnowledgeDisabledText(detailProducts, language);
+      await logPerformance("external_knowledge_off", { answerPreview: externalOffAnswer });
+      return new Response(textStream(externalOffAnswer), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-store",
@@ -3493,7 +3504,8 @@ async function handleAssistantPost(req: NextRequest) {
     });
     if (externalLookup) {
       const emrnLookupProducts = await findEmrnProductsForExternalLookup(externalLookup, language);
-      await logPerformance("external_knowledge_structured", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
+      const externalAnswer = externalLookupCustomerAnswer(externalLookup, emrnLookupProducts, language);
+      await logPerformance("external_knowledge_structured", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true, answerPreview: externalAnswer });
       await logAnalyticsEvent({
         type: "conversation_completed",
         sessionId,
@@ -3501,7 +3513,7 @@ async function handleAssistantPost(req: NextRequest) {
         messageCount: messages.length,
         createdAt: new Date().toISOString(),
       });
-      return new Response(textStream(externalLookupCustomerAnswer(externalLookup, emrnLookupProducts, language)), {
+      return new Response(textStream(externalAnswer), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-store",
@@ -3521,7 +3533,8 @@ async function handleAssistantPost(req: NextRequest) {
     const extractedLookup = externalLookupFromAnswerText(fallbackText, latest);
     if (extractedLookup) {
       const emrnLookupProducts = await findEmrnProductsForExternalLookup(extractedLookup, language);
-      await logPerformance("external_knowledge_extracted", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
+      const extractedAnswer = externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language);
+      await logPerformance("external_knowledge_extracted", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true, answerPreview: extractedAnswer });
       await logAnalyticsEvent({
         type: "conversation_completed",
         sessionId,
@@ -3529,14 +3542,14 @@ async function handleAssistantPost(req: NextRequest) {
         messageCount: messages.length,
         createdAt: new Date().toISOString(),
       });
-      return new Response(textStream(externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language)), {
+      return new Response(textStream(extractedAnswer), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-store",
         },
       });
     }
-    await logPerformance("external_knowledge", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
+    await logPerformance("external_knowledge", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true, answerPreview: fallbackText });
     await logAnalyticsEvent({
       type: "conversation_completed",
       sessionId,
@@ -3556,14 +3569,16 @@ async function handleAssistantPost(req: NextRequest) {
   if (products.length === 1) {
     const exactProduct = products[0];
     const substitutes = await closeInStockSubstitutes(exactProduct, language);
-    await logPerformance("single_product");
-    return new Response(textStream(`${exactProductFoundText(exactProduct, language, skuCandidates[0] || searchQuery)}${substitutesText(substitutes, language)}`), {
+    const singleProductAnswer = `${exactProductFoundText(exactProduct, language, skuCandidates[0] || searchQuery)}${substitutesText(substitutes, language)}`;
+    await logPerformance("single_product", { answerPreview: singleProductAnswer });
+    return new Response(textStream(singleProductAnswer), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
 
-  await logPerformance("product_results");
-  return new Response(textStream(productResultsText(products, language, searchQuery)), {
+  const resultsAnswer = productResultsText(products, language, searchQuery);
+  await logPerformance("product_results", { answerPreview: resultsAnswer });
+  return new Response(textStream(resultsAnswer), {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 }

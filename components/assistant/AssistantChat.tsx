@@ -30,6 +30,11 @@ const brand = "#c34d50";
 const SESSION_KEY = "emrn-pulse-session-id";
 const STORAGE_PREFIX = "emrn-pulse-chat";
 const NUDGE_DISMISSED_KEY = "emrn-pulse-nudge-dismissed";
+const MIN_VISIBLE_THINKING_MS = 1100;
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function storedLanguage() {
   if (typeof window === "undefined") return "en";
@@ -289,6 +294,8 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     setMessages([...nextMessages, { role: "assistant", content: "", createdAt: new Date().toISOString() }]);
     setInput("");
     setBusy(true);
+    const startedAt = Date.now();
+    let showedFirstAnswerChunk = false;
 
     try {
       const response = await fetch("/api/assistant/chat", {
@@ -307,6 +314,11 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
         const { done, value } = await reader.read();
         if (done) break;
         answer += decoder.decode(value, { stream: true });
+        if (!showedFirstAnswerChunk) {
+          showedFirstAnswerChunk = true;
+          const remainingThinkingMs = MIN_VISIBLE_THINKING_MS - (Date.now() - startedAt);
+          if (remainingThinkingMs > 0) await wait(remainingThinkingMs);
+        }
         setMessages([...nextMessages, { role: "assistant", content: stripCartItemsToken(answer), createdAt: new Date().toISOString() }]);
       }
 

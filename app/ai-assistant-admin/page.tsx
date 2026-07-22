@@ -27,6 +27,7 @@ type PerformanceRow = AdminRow & {
     productCount?: number;
     searchQuery?: string;
     answerPath?: string;
+    answerPreview?: string;
     deployVersion?: string;
     slow?: boolean;
     openAiUsed?: boolean;
@@ -290,6 +291,9 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
   const supabaseMs = Number(perf.supabaseMs || 0);
   const knowledgeMs = Number(perf.knowledgeMs || 0);
   const route = String(perf.answerPath || "unknown");
+  const question = rowQuery(row) || "Unknown question";
+  const answerPreview = cleanAdminAnswerPreview(String(perf.answerPreview || ""));
+  const review = performanceReviewHint(row, answerPreview);
   const deployVersion = String(perf.deployVersion || "");
   const rating = totalMs >= 5000 ? "Very slow" : totalMs >= 2500 ? "Slow" : totalMs >= 1200 ? "Okay" : "Fast";
   const ratingClass =
@@ -307,7 +311,7 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
     <article className="border-b border-slate-100 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="font-semibold text-slate-950">{rowQuery(row) || "Unknown question"}</div>
+          <div className="font-semibold text-slate-950">{question}</div>
           <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · {row.language || "unknown"} · session {shortId("sessionId" in row ? row.sessionId : undefined)}</div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -315,6 +319,24 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
             Teach this
           </a>
           <span className={`rounded px-2 py-1 text-xs font-semibold ${ratingClass}`}>{rating}</span>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-md border border-slate-200 bg-white">
+        <div className="grid gap-px bg-slate-200 sm:grid-cols-2">
+          <div className="bg-slate-50 p-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer asked</div>
+            <div className="mt-1 text-sm font-semibold text-slate-950">{question}</div>
+          </div>
+          <div className="bg-slate-50 p-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Meri answered</div>
+            <div className={`${compact ? "line-clamp-3" : ""} mt-1 text-sm text-slate-800`}>
+              {answerPreview || "Answer was not logged yet for this older row. New rows will show Meri's reply here."}
+            </div>
+          </div>
+        </div>
+        <div className={`border-t border-slate-200 p-3 text-sm ${review.needsTeaching ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-900"}`}>
+          <span className="font-semibold">{review.label}:</span> {review.reason}
         </div>
       </div>
 
@@ -469,6 +491,75 @@ function rowTitle(row: AdminRow) {
 
 function rowQuery(row: AdminRow) {
   return "query" in row ? row.query || "" : "";
+}
+
+function cleanAdminAnswerPreview(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function performanceReviewHint(row: PerformanceRow, answerPreview: string) {
+  const perf = row.performance || {};
+  const route = String(perf.answerPath || "");
+  const totalMs = Number(perf.totalMs || 0);
+  const openAiUsed = Boolean(perf.openAiUsed);
+  const productCount = Number(perf.productCount || 0);
+  const answer = answerPreview.toLowerCase();
+  const question = rowQuery(row).toLowerCase();
+
+  if (!answerPreview) {
+    return {
+      needsTeaching: true,
+      label: "Review needed",
+      reason: "This is an older row without the answer text. Retest the same question, then teach it if Meri is wrong or unsure.",
+    };
+  }
+  if (/\b(can.t confirm|could not confirm|i do not see|not logged|send this to support|source request|item-sourcing)\b/i.test(answerPreview)) {
+    return {
+      needsTeaching: true,
+      label: "Likely teach",
+      reason: "Meri sounded unsure or offered support. Teach this if EMRN has the item, SKU, compatibility, replacement part, or preferred answer.",
+    };
+  }
+  if (/\b(not compatible|does not fit|should not be treated as compatible)\b/i.test(answerPreview)) {
+    return {
+      needsTeaching: false,
+      label: "Check if correct",
+      reason: "This is a compatibility rejection. Teach only if that rejection is wrong or needs the correct replacement SKU.",
+    };
+  }
+  if (route.includes("no_products") || productCount === 0) {
+    return {
+      needsTeaching: true,
+      label: "Likely teach",
+      reason: "No EMRN products were found. Add aliases/search terms if EMRN carries this product.",
+    };
+  }
+  if (openAiUsed && totalMs >= 2500) {
+    return {
+      needsTeaching: true,
+      label: "Teach to speed up",
+      reason: "OpenAI was used and the answer was slow. If this question repeats, teach the answer so Meri can reply faster from EMRN knowledge.",
+    };
+  }
+  if (/\b(compatible|fit|fits|work with|works with|replacement|pads?|airways?|lungs?|batter)/i.test(question) && !/\b(sku|confirmed|compatible|not compatible|replacement|view product)\b/i.test(answer)) {
+    return {
+      needsTeaching: true,
+      label: "Check answer",
+      reason: "The question asked for a specific product or compatibility answer, but the reply may not include a clear SKU/result.",
+    };
+  }
+  if (totalMs >= 2500) {
+    return {
+      needsTeaching: false,
+      label: "Slow but answered",
+      reason: "The answer looks usable, but repeated slow questions may be worth teaching or adding better search terms.",
+    };
+  }
+  return {
+    needsTeaching: false,
+    label: "Looks okay",
+    reason: "No obvious issue detected. Teach only if you know the answer is wrong, missing a better EMRN item, or needs cleaner wording.",
+  };
 }
 
 function searchParamValue(value?: string | string[]) {
