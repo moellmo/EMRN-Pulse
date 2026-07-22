@@ -309,8 +309,12 @@ function QaQueuePanel({ rows, token, fullHistory }: { rows: PerformanceRow[]; to
   const groups = [
     {
       title: "Needs Teaching",
-      help: "Wrong, unsure, missing product, or no answer text. These are the best rows to teach first.",
-      rows: sortedRows.filter((row) => performanceReviewHint(row, cleanAdminAnswerPreview(String(row.performance?.answerPreview || ""))).needsTeaching).slice(0, 20),
+      help: "Real product questions that look wrong, unsure, missing, or worth training.",
+      rows: sortedRows.filter((row) => {
+        const question = rowQuery(row);
+        if (!isRealProductQaQuestion(question)) return false;
+        return performanceReviewHint(row, cleanAdminAnswerPreview(String(row.performance?.answerPreview || ""))).needsTeaching;
+      }).slice(0, 20),
     },
     {
       title: "Can’t Confirm",
@@ -386,6 +390,7 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
           : "bg-emerald-50 text-emerald-700";
   const bottleneck = biggestBottleneck({ searchMs, openAiMs, supabaseMs, knowledgeMs });
   const teachHref = teachLinkForRow(row, token, fullHistory);
+  const retestHref = retestLinkForRow(row, token);
 
   return (
     <article className="border-b border-slate-100 p-4">
@@ -397,6 +402,9 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
         <div className="flex flex-wrap items-center gap-2">
           <a href={teachHref} className="rounded bg-slate-950 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800">
             Teach this
+          </a>
+          <a href={retestHref} className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+            Retest
           </a>
           <PerformanceReviewedButton token={token} reviewedPerformanceKey={performanceReviewKey(row)} query={question} />
           <span className={`rounded px-2 py-1 text-xs font-semibold ${ratingClass}`}>{rating}</span>
@@ -609,6 +617,7 @@ function cleanAdminAnswerPreview(value: string) {
 }
 
 function quickActionQuestionLabel(question: string) {
+  if (isShortFollowUp(question)) return "Customer follow-up";
   if (/^I have a product question about compatibility, parts, or which item fits$/i.test(question)) return "Customer clicked quick button";
   if (/^Find a product$/i.test(question)) return "Customer clicked quick button";
   if (/^I need a quote$/i.test(question)) return "Customer clicked quick button";
@@ -619,6 +628,22 @@ function quickActionQuestionLabel(question: string) {
   if (/^Check order status$/i.test(question)) return "Customer clicked quick button";
   if (/^Contact support$/i.test(question)) return "Customer clicked quick button";
   return "Customer asked";
+}
+
+function isShortFollowUp(question: string) {
+  return /^(?:no|nope|nah|yes|yeah|yep|ok|okay|k|thanks|thank you|thx|merci|non|oui|d'accord|daccord|sure)$/i.test(question.trim());
+}
+
+function isRealProductQaQuestion(question: string) {
+  const clean = question.trim();
+  if (!clean || isShortFollowUp(clean)) return false;
+  if (quickActionQuestionLabel(clean) === "Customer clicked quick button") return false;
+  if (clean.split(/\s+/).length <= 2 && !extractLooksLikeSku(clean)) return false;
+  return /\b(sku|part|model|compatible|compatibility|fit|fits|work|works|replacement|replace|pads?|padz|electrodes?|airways?|lungs?|batter(?:y|ies)|manikins?|mannequins?|aed|defib|zoll|philips|laerdal|little|frx|g3|price|cheap|cost|stock|available|availability|couleur|color|devis|quote)\b/i.test(clean);
+}
+
+function extractLooksLikeSku(value: string) {
+  return /\b(?=[A-Z0-9+.-]*\d)[A-Z0-9]{2,}(?:[-+.][A-Z0-9]{1,})*\b/i.test(value.trim());
 }
 
 function humanProofSource(value: string) {
@@ -728,6 +753,14 @@ function teachLinkForRow(row: PerformanceRow, token: string, fullHistory: boolea
     teachNote: note,
   });
   return `/ai-assistant-admin?${params.toString()}#teach`;
+}
+
+function retestLinkForRow(row: PerformanceRow, token: string) {
+  const params = new URLSearchParams({
+    ...(token ? { token } : {}),
+    q: rowQuery(row),
+  });
+  return `/ai-assistant-test?${params.toString()}`;
 }
 
 function knowledgeTypeForPerformanceRow(query: string, answerPath: string): KnowledgeMemoryType {

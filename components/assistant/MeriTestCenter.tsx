@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { AssistantMessage } from "@/lib/assistant/types";
 
 type TestCase = {
@@ -149,9 +150,10 @@ function testSessionId(name: string) {
 }
 
 export function MeriTestCenter() {
+  const searchParams = useSearchParams();
   const [running, setRunning] = useState("");
   const [results, setResults] = useState<TestResult[]>([]);
-  const [customMessages, setCustomMessages] = useState("Check order status");
+  const [customMessages, setCustomMessages] = useState(() => searchParams.get("q") || "Check order status");
   const [customOutput, setCustomOutput] = useState("");
   const safeTests = useMemo(() => tests.filter((test) => !test.unsafe), []);
 
