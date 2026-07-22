@@ -34,12 +34,15 @@ type PerformanceRow = AdminRow & {
 };
 
 type AdminPageProps = {
-  searchParams: Promise<{ token?: string | string[] }>;
+  searchParams: Promise<{ token?: string | string[]; history?: string | string[] }>;
 };
 
 export default async function AssistantAdminPage({ searchParams }: AdminPageProps) {
   const token = process.env.EMRN_ASSISTANT_ADMIN_TOKEN;
-  const providedToken = (await searchParams).token;
+  const params = await searchParams;
+  const providedToken = params.token;
+  const historyMode = Array.isArray(params.history) ? params.history[0] : params.history;
+  const fullHistory = historyMode === "full";
   const isAuthorized =
     !token ||
     (Array.isArray(providedToken) ? providedToken.includes(token) : providedToken === token);
@@ -55,7 +58,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
     );
   }
 
-  const data = await readAssistantAdminData().catch((error) => {
+  const data = await readAssistantAdminData({ full: fullHistory, limit: 100 }).catch((error) => {
     console.error("[EMRN Pulse] admin page data unavailable", error);
     return null;
   });
@@ -72,6 +75,18 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
         {data ? (
           <p className="mt-2 text-sm text-slate-500">
             Data source: <span className="font-semibold">{String(data.metrics.dataSource || "local").replace(/_/g, " ")}</span>
+            <span className="ml-2">
+              Mode: <span className="font-semibold">{fullHistory ? "full history" : "recent only"}</span>
+            </span>
+            <a
+              className="ml-2 font-semibold text-slate-700 underline underline-offset-2"
+              href={`/ai-assistant-admin?${new URLSearchParams({
+                ...(adminToken ? { token: adminToken } : {}),
+                ...(fullHistory ? {} : { history: "full" }),
+              }).toString()}`}
+            >
+              {fullHistory ? "Recent only" : "View more"}
+            </a>
             <span className="ml-2">
               Supabase: {data.metrics.supabaseConfigured ? `configured, ${data.metrics.supabaseRows || 0} rows read` : "not configured"}
             </span>

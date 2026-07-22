@@ -184,14 +184,15 @@ export async function deleteSupabaseKnowledgeMemoryItem(id: string) {
   return true;
 }
 
-export async function readSupabaseAdminData(): Promise<SupabaseAdminData | null> {
+export async function readSupabaseAdminData(limit = 200): Promise<SupabaseAdminData | null> {
   if (!supabaseAdminConfigured()) return null;
+  const safeLimit = Math.max(25, Math.min(1000, Math.round(limit)));
   try {
     const [analyticsRows, quoteRows, supportRows, aiUsageRows] = await Promise.all([
-      supabaseRequest<Array<{ payload: AssistantAnalyticsEvent }>>("assistant_analytics?select=payload&order=created_at.desc&limit=1000"),
-      supabaseRequest<Array<{ payload: QuoteRequest & { createdAt: string } }>>("assistant_quotes?select=payload&order=created_at.desc&limit=1000"),
-      supabaseRequest<Array<{ payload: SupportRequest & { createdAt: string } }>>("assistant_support?select=payload&order=created_at.desc&limit=1000"),
-      supabaseRequest<Array<{ payload: AssistantAiUsageEvent }>>("assistant_ai_usage?select=payload&order=created_at.desc&limit=1000"),
+      supabaseRequest<Array<{ payload: AssistantAnalyticsEvent }>>(`assistant_analytics?select=payload&order=created_at.desc&limit=${safeLimit}`),
+      supabaseRequest<Array<{ payload: QuoteRequest & { createdAt: string } }>>(`assistant_quotes?select=payload&order=created_at.desc&limit=${safeLimit}`),
+      supabaseRequest<Array<{ payload: SupportRequest & { createdAt: string } }>>(`assistant_support?select=payload&order=created_at.desc&limit=${safeLimit}`),
+      supabaseRequest<Array<{ payload: AssistantAiUsageEvent }>>(`assistant_ai_usage?select=payload&order=created_at.desc&limit=${safeLimit}`),
     ]);
     return {
       analytics: payloadFromRows(analyticsRows),

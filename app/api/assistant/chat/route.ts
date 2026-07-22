@@ -1919,6 +1919,7 @@ function knowledgeRuleSkus(rule: Awaited<ReturnType<typeof matchingApprovedKnowl
 function approvedKnowledgeProductSearchQuery(rules: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>) {
   const rule = rules.find((item) => item.answer && ["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type));
   if (!rule) return "";
+  if (rule.answer === "not_compatible" || rule.answer === "cant_confirm") return "";
   return rule.correctSearchTerms || rule.query || "";
 }
 

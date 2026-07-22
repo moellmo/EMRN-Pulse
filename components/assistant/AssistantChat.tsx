@@ -408,7 +408,11 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
           ))}
           {busy ? (
             <div className="flex items-center gap-2 pl-[52px] text-xs font-medium" style={{ color: "#7a7371" }}>
-              <span className="emrn-typing-dot" />
+              <span className="emrn-typing-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
               {text.typing}
             </div>
           ) : null}

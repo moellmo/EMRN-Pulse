@@ -132,14 +132,14 @@ async function mirrorToGoogleSheets(payload: SheetLogPayload): Promise<SheetMirr
   }
 }
 
-async function readGoogleSheetsAdminRows(): Promise<Omit<SheetsAdminData, "source"> | null> {
+async function readGoogleSheetsAdminRows(limit = 200): Promise<Omit<SheetsAdminData, "source"> | null> {
   const baseUrl = googleSheetsWebhookUrl();
   if (!baseUrl) return null;
 
   try {
     const url = new URL(baseUrl);
     url.searchParams.set("action", "read");
-    url.searchParams.set("limit", process.env.EMRN_GOOGLE_SHEETS_READ_LIMIT || "1000");
+    url.searchParams.set("limit", String(limit));
 
     const response = await fetch(url.toString(), {
       method: "GET",
@@ -313,14 +313,15 @@ export async function logAiUsage(event: Omit<AssistantAiUsageEvent, "createdAt" 
   await mirrorToGoogleSheets({ kind: "ai_usage", row });
 }
 
-export async function readAssistantAdminData() {
+export async function readAssistantAdminData(options: { limit?: number; full?: boolean } = {}) {
+  const rowLimit = options.full ? 1000 : Math.max(25, Math.min(250, options.limit || 100));
   const [localAnalytics, localQuotes, localSupport, localAiUsage, sheets, supabase] = await Promise.all([
     readJsonl<AssistantAnalyticsEvent>("analytics.jsonl"),
     readJsonl<QuoteRequest & { createdAt: string }>("quotes.jsonl"),
     readJsonl<SupportRequest & { createdAt: string }>("support.jsonl"),
     readJsonl<AssistantAiUsageEvent>("ai-usage.jsonl"),
-    readGoogleSheetsAdminRows(),
-    readSupabaseAdminData(),
+    readGoogleSheetsAdminRows(rowLimit),
+    readSupabaseAdminData(rowLimit),
   ]);
   const analytics = dedupeRows([...localAnalytics, ...(sheets?.analytics || []), ...(supabase?.analytics || [])]) as AssistantAnalyticsEvent[];
   const quotes = dedupeRows([...localQuotes, ...(sheets?.quotes || []), ...(supabase?.quotes || [])]) as Array<QuoteRequest & { createdAt: string }>;
@@ -379,6 +380,8 @@ export async function readAssistantAdminData() {
       dataSource: source,
       supabaseConfigured: supabaseAdminConfigured(),
       supabaseUrl: supabaseAdminUrlHint(),
+      adminHistoryMode: options.full ? "full" : "recent",
+      adminRowLimit: rowLimit,
       supabaseRows: (supabase?.analytics.length || 0) + (supabase?.quotes.length || 0) + (supabase?.support.length || 0) + (supabase?.aiUsage.length || 0),
       supabaseReadError: supabase?.readError || "",
       sheetsConfigured: Boolean(sheets),
