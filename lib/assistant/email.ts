@@ -36,6 +36,10 @@ async function sendEmail(input: EmailInput) {
   console.warn("[EMRN Assistant] Email provider not configured. Message logged only.", input);
 }
 
+export async function sendAdminNotificationEmail(input: EmailInput) {
+  await sendEmail(input);
+}
+
 export async function sendQuoteRequestEmail(request: QuoteRequest) {
   await sendEmail({
     to: quoteEmail,

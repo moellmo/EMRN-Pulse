@@ -173,8 +173,10 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                   </section>
                 </div>
 
-                <QaQueuePanel rows={data.performance || []} token={adminToken} fullHistory={fullHistory} />
-                <SuggestedLiveTestsPanel token={adminToken} />
+                <div>
+                  <QaQueuePanel rows={data.performance || []} token={adminToken} fullHistory={fullHistory} />
+                  <SuggestedLiveTestsPanel token={adminToken} />
+                </div>
 
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />

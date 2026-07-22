@@ -11,6 +11,7 @@ export type AssistantRuntimeConfig = {
   externalKnowledgeEnabled: boolean;
   showExternalSources: boolean;
   knowledgeShadowMode: boolean;
+  qaDailyReminderEnabled: boolean;
   updatedAt?: string;
 };
 
@@ -32,6 +33,7 @@ function defaultConfig(): AssistantRuntimeConfig {
     externalKnowledgeEnabled: envFlag("EMRN_EXTERNAL_KNOWLEDGE_ENABLED", false),
     showExternalSources: envFlag("EMRN_SHOW_EXTERNAL_SOURCES", false),
     knowledgeShadowMode: envFlag("EMRN_KNOWLEDGE_SHADOW_MODE", true),
+    qaDailyReminderEnabled: envFlag("EMRN_QA_DAILY_REMINDER_ENABLED", true),
   };
 }
 
@@ -53,6 +55,7 @@ export function readAssistantConfigSync(): AssistantRuntimeConfig {
     externalKnowledgeEnabled: booleanValue(saved.externalKnowledgeEnabled, defaults.externalKnowledgeEnabled),
     showExternalSources: booleanValue(saved.showExternalSources, defaults.showExternalSources),
     knowledgeShadowMode: booleanValue(saved.knowledgeShadowMode, defaults.knowledgeShadowMode),
+    qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, defaults.qaDailyReminderEnabled),
     updatedAt: saved.updatedAt,
   };
 }
@@ -70,6 +73,7 @@ export async function readAssistantConfig(): Promise<AssistantRuntimeConfig> {
       externalKnowledgeEnabled: booleanValue(saved.externalKnowledgeEnabled, localConfig.externalKnowledgeEnabled),
       showExternalSources: booleanValue(saved.showExternalSources, localConfig.showExternalSources),
       knowledgeShadowMode: booleanValue(saved.knowledgeShadowMode, localConfig.knowledgeShadowMode),
+      qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, localConfig.qaDailyReminderEnabled),
       updatedAt: saved.updatedAt,
     };
   } catch (error) {
@@ -86,6 +90,7 @@ export async function saveAssistantConfig(input: Partial<AssistantRuntimeConfig>
     externalKnowledgeEnabled: booleanValue(input.externalKnowledgeEnabled, current.externalKnowledgeEnabled),
     showExternalSources: booleanValue(input.showExternalSources, current.showExternalSources),
     knowledgeShadowMode: booleanValue(input.knowledgeShadowMode, current.knowledgeShadowMode),
+    qaDailyReminderEnabled: booleanValue(input.qaDailyReminderEnabled, current.qaDailyReminderEnabled),
     updatedAt: new Date().toISOString(),
   };
 

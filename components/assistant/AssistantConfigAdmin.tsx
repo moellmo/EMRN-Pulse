@@ -34,6 +34,11 @@ const labels: Array<[keyof Omit<AssistantRuntimeConfig, "updatedAt">, string, st
     "Shadow Mode",
     "ON means Pulse logs what the knowledge checker thinks without forcing it into the answer. Safest while testing.",
   ],
+  [
+    "qaDailyReminderEnabled",
+    "Daily QA Reminder Email",
+    "ON sends one daily email to the admin reminder address only when the QA Queue has questions to review. Turn off anytime if you do not want reminders.",
+  ],
 ];
 
 export function AssistantConfigAdmin({ token, config }: AssistantConfigAdminProps) {
