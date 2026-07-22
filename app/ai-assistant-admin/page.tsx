@@ -36,6 +36,12 @@ type PerformanceRow = AdminRow & {
     proofSearchTerms?: string[];
     emrnMatchCount?: number;
     emrnMatchedSkus?: string[];
+    answerCacheEligible?: boolean;
+    answerCacheHit?: boolean;
+    answerCacheKey?: string;
+    answerCacheSaveStatus?: string;
+    answerCacheSkipReason?: string;
+    answerCacheError?: string;
     deployVersion?: string;
     slow?: boolean;
     openAiUsed?: boolean;
@@ -504,6 +510,8 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
         <HumanMetric label="Products found" value={String(perf.productCount ?? 0)} />
         <HumanMetric label="Search used" value={String(perf.searchQuery || rowQuery(row) || "none").slice(0, 80)} />
         <HumanMetric label="Deploy" value={deployVersion ? shortId(deployVersion) : "not logged"} />
+        {perf.answerCacheSaveStatus ? <HumanMetric label="Answer cache" value={humanCacheStatus(perf)} /> : null}
+        {perf.answerCacheKey ? <HumanMetric label="Cache key" value={String(perf.answerCacheKey).slice(0, 80)} /> : null}
         {perf.proofSourceType ? <HumanMetric label="Proof source" value={humanProofSource(String(perf.proofSourceType))} /> : null}
         {typeof perf.emrnMatchCount === "number" ? <HumanMetric label="EMRN match" value={`${perf.emrnMatchCount} found${perf.emrnMatchedSkus?.length ? `: ${perf.emrnMatchedSkus.join(", ")}` : ""}`} /> : null}
       </div>
@@ -774,6 +782,22 @@ function humanProofSource(value: string) {
     unknown: "Unknown",
   };
   return labels[value] || value.replace(/_/g, " ");
+}
+
+function humanCacheStatus(perf: NonNullable<PerformanceRow["performance"]>) {
+  const status = String(perf.answerCacheSaveStatus || "");
+  const labels: Record<string, string> = {
+    hit: "Used cached answer",
+    "saved durable": "Saved to Supabase cache",
+    "saved memory only": "Saved only in server memory",
+    skipped: "Skipped",
+    off: "Cache off",
+    "not eligible": "Not cacheable",
+    "no answer preview": "No answer text logged",
+    "not attempted": "Not attempted",
+  };
+  const detail = perf.answerCacheError || perf.answerCacheSkipReason || "";
+  return `${labels[status] || status}${detail ? `: ${detail}` : ""}`;
 }
 
 function qaReasonsForRow(row: PerformanceRow, answerPreview: string) {

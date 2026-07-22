@@ -189,6 +189,12 @@ export type AssistantAnalyticsEvent =
         proofSearchTerms?: string[];
         emrnMatchCount?: number;
         emrnMatchedSkus?: string[];
+        answerCacheEligible?: boolean;
+        answerCacheHit?: boolean;
+        answerCacheKey?: string;
+        answerCacheSaveStatus?: string;
+        answerCacheSkipReason?: string;
+        answerCacheError?: string;
         deployVersion?: string;
         slow?: boolean;
         openAiUsed?: boolean;

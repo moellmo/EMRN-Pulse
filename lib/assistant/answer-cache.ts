@@ -22,6 +22,14 @@ export type CachedAnswer = {
   hits: number;
 };
 
+export type CacheSaveResult = {
+  cached: boolean;
+  key: string;
+  durableSaved: boolean;
+  skipReason?: string;
+  durableError?: string;
+};
+
 const cache = new Map<string, CachedAnswer>();
 const MAX_CACHE_ROWS = 250;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
@@ -61,10 +69,13 @@ export async function saveCachedAnswer(input: {
   searchQuery?: string;
   productIds?: number[];
   productSkus?: string[];
-}) {
-  if (!shouldCacheAnswer(input.answerPath, input.answer)) return null;
-
+}): Promise<CacheSaveResult> {
   const key = answerCacheKey(input.query, input.language);
+  const skipReason = cacheSkipReason(input.answerPath, input.answer);
+  if (skipReason) {
+    return { cached: false, key, durableSaved: false, skipReason };
+  }
+
   const now = Date.now();
   const entry: CachedAnswer = {
     key,
@@ -87,8 +98,13 @@ export async function saveCachedAnswer(input: {
     if (!oldestKey) break;
     cache.delete(oldestKey);
   }
-  await writeDurableCacheItem(entry);
-  return entry;
+  const durable = await writeDurableCacheItem(entry);
+  return {
+    cached: true,
+    key,
+    durableSaved: durable.saved,
+    durableError: durable.error,
+  };
 }
 
 export function shouldUseAnswerCache(input: { query: string; messageCount: number; hasPageSku?: boolean }) {
@@ -99,8 +115,8 @@ export function shouldUseAnswerCache(input: { query: string; messageCount: numbe
   return isStandaloneProductQuestion(query);
 }
 
-function shouldCacheAnswer(answerPath: string, answer: string) {
-  if (!answer || answer.length < 40) return false;
+function cacheSkipReason(answerPath: string, answer: string) {
+  if (!answer || answer.length < 40) return "answer too short";
   if (![
     "approved_knowledge",
     "emrn_compatibility",
@@ -112,9 +128,10 @@ function shouldCacheAnswer(answerPath: string, answer: string) {
     "external_knowledge",
     "single_product",
     "product_results",
-  ].includes(answerPath)) return false;
-  if (/\b(can.t confirm|could not confirm|i do not see|i don.t see|do not see an exact|don.t see an exact|reply yes|send this to support|send this to emrn|request a quote|support team|manual search|source\/check|sourcing)\b/i.test(answer)) return false;
-  return /\b(confirmed compatible|not compatible|sku|view product|products? i found|replacement|compatible|fits?|works?)\b/i.test(answer);
+  ].includes(answerPath)) return `route not cacheable: ${answerPath}`;
+  if (/\b(can.t confirm|could not confirm|i do not see|i don.t see|do not see an exact|don.t see an exact|reply yes|send this to support|send this to emrn|request a quote|support team|manual search|source\/check|sourcing)\b/i.test(answer)) return "answer asks for support/source/check or cannot confirm";
+  if (!/\b(confirmed compatible|not compatible|sku|view product|products? i found|replacement|compatible|fits?|works?)\b/i.test(answer)) return "answer does not look like a reusable product answer";
+  return "";
 }
 
 export async function readAnswerCacheSnapshot(limit = 100) {
@@ -180,12 +197,17 @@ async function readDurableCacheRows(limit: number) {
   }
 }
 
-async function writeDurableCacheItem(item: CachedAnswer) {
+async function writeDurableCacheItem(item: CachedAnswer): Promise<{ saved: boolean; error?: string }> {
+  if (!supabaseAdminConfigured()) {
+    return { saved: false, error: "Supabase admin cache is not configured" };
+  }
   try {
     await saveSupabaseAnswerCacheItem(item);
     lastDurableWriteError = "";
+    return { saved: true };
   } catch (error) {
     lastDurableWriteError = error instanceof Error ? error.message : String(error);
     console.warn("[EMRN Pulse] Supabase answer cache write skipped", error);
+    return { saved: false, error: lastDurableWriteError };
   }
 }

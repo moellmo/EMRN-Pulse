@@ -10,7 +10,7 @@ import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistan
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
 import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
 import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
-import { getCachedAnswer, saveCachedAnswer, shouldUseAnswerCache } from "@/lib/assistant/answer-cache";
+import { getCachedAnswer, saveCachedAnswer, shouldUseAnswerCache, type CacheSaveResult } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
 import type { ExternalKnowledgeLookup } from "@/lib/assistant/openai";
@@ -50,6 +50,18 @@ function answerPreviewText(text: string) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 900);
+}
+
+function cacheSaveStatus(result: CacheSaveResult) {
+  if (!result.cached) return "skipped";
+  return result.durableSaved ? "saved durable" : "saved memory only";
+}
+
+function cacheStatusWithoutSave(answerCacheEnabled: boolean, canUseAnswerCache: boolean, hasAnswerPreview: boolean) {
+  if (!answerCacheEnabled) return "off";
+  if (!canUseAnswerCache) return "not eligible";
+  if (!hasAnswerPreview) return "no answer preview";
+  return "not attempted";
 }
 
 async function streamToText(stream: ReadableStream<Uint8Array>) {
@@ -3039,6 +3051,10 @@ async function handleAssistantPost(req: NextRequest) {
           answerPreview: answerPreviewText(cachedAnswer.answer),
           proofSearchTerms: [cachedAnswer.query, cachedAnswer.searchQuery || ""].filter(Boolean),
           emrnMatchedSkus: cachedAnswer.productSkus,
+          answerCacheEligible: true,
+          answerCacheHit: true,
+          answerCacheKey: cachedAnswer.key,
+          answerCacheSaveStatus: "hit",
           deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
           slow: false,
           openAiUsed: false,
@@ -3072,6 +3088,17 @@ async function handleAssistantPost(req: NextRequest) {
     : "";
   if (earlyApprovedRuleAnswer) {
     const totalMs = Date.now() - requestStartedAt;
+    const cacheSave = canUseAnswerCache
+      ? await saveCachedAnswer({
+          query: latest,
+          language,
+          answer: earlyApprovedRuleAnswer,
+          answerPath: "approved_knowledge",
+          searchQuery,
+          productIds: [],
+          productSkus: [],
+        })
+      : null;
     await logAnalyticsEvent({
       type: "assistant_performance",
       sessionId,
@@ -3088,6 +3115,12 @@ async function handleAssistantPost(req: NextRequest) {
         searchQuery,
         answerPath: "approved_knowledge",
         answerPreview: answerPreviewText(earlyApprovedRuleAnswer),
+        answerCacheEligible: canUseAnswerCache,
+        answerCacheHit: false,
+        answerCacheKey: cacheSave?.key,
+        answerCacheSaveStatus: cacheSave ? cacheSaveStatus(cacheSave) : cacheStatusWithoutSave(answerCacheEnabled, canUseAnswerCache, true),
+        answerCacheSkipReason: cacheSave?.skipReason,
+        answerCacheError: cacheSave?.durableError,
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500,
         openAiUsed: false,
@@ -3095,17 +3128,6 @@ async function handleAssistantPost(req: NextRequest) {
       },
       createdAt: new Date().toISOString(),
     });
-    if (canUseAnswerCache) {
-      await saveCachedAnswer({
-        query: latest,
-        language,
-        answer: earlyApprovedRuleAnswer,
-        answerPath: "approved_knowledge",
-        searchQuery,
-        productIds: [],
-        productSkus: [],
-      });
-    }
     return new Response(textStream(earlyApprovedRuleAnswer), {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
@@ -3229,6 +3251,18 @@ async function handleAssistantPost(req: NextRequest) {
     }
   ) => {
     const totalMs = Date.now() - requestStartedAt;
+    const answerText = extra?.answerPreview || "";
+    const cacheSave = canUseAnswerCache && answerText
+      ? await saveCachedAnswer({
+          query: latest,
+          language,
+          answer: answerText,
+          answerPath,
+          searchQuery,
+          productIds: products.slice(0, 8).map((product) => product.productId),
+          productSkus: products.slice(0, 8).map((product) => product.sku).filter(Boolean),
+        })
+      : null;
     await logAnalyticsEvent({
       type: "assistant_performance",
       sessionId,
@@ -3244,13 +3278,19 @@ async function handleAssistantPost(req: NextRequest) {
         productCount: products.length,
         searchQuery,
         answerPath,
-        answerPreview: answerPreviewText(extra?.answerPreview || ""),
+        answerPreview: answerPreviewText(answerText),
         proofSourceType: extra?.proofSourceType,
         proofSourceUrls: extra?.proofSourceUrls?.slice(0, 8),
         proofPartNumbers: extra?.proofPartNumbers?.slice(0, 12),
         proofSearchTerms: extra?.proofSearchTerms?.slice(0, 12),
         emrnMatchCount: extra?.emrnMatchCount,
         emrnMatchedSkus: extra?.emrnMatchedSkus?.slice(0, 12),
+        answerCacheEligible: canUseAnswerCache,
+        answerCacheHit: false,
+        answerCacheKey: cacheSave?.key,
+        answerCacheSaveStatus: cacheSave ? cacheSaveStatus(cacheSave) : cacheStatusWithoutSave(answerCacheEnabled, canUseAnswerCache, Boolean(answerText)),
+        answerCacheSkipReason: cacheSave?.skipReason,
+        answerCacheError: cacheSave?.durableError,
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
         openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0),
@@ -3258,17 +3298,6 @@ async function handleAssistantPost(req: NextRequest) {
       },
       createdAt: new Date().toISOString(),
     });
-    if (canUseAnswerCache && extra?.answerPreview) {
-      await saveCachedAnswer({
-        query: latest,
-        language,
-        answer: extra.answerPreview,
-        answerPath,
-        searchQuery,
-        productIds: products.slice(0, 8).map((product) => product.productId),
-        productSkus: products.slice(0, 8).map((product) => product.sku).filter(Boolean),
-      });
-    }
   };
 
   if (isAccountIntent(latest)) {
