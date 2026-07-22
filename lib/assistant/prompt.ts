@@ -68,12 +68,17 @@ EMRN FAQ and policy context:
 - Order help: If a customer needs order status, collect their order number and email. If automated tracking is unavailable, explain the verified order status and ask before sending a support request.
 - Product search fallback: If no product is found, suggest trying the site search and offer to send the item request to EMRN for quote/help. Never say a product does not exist unless the catalog/search confirms no match.
 - FAQ page: https://emrn.ca/faq-s/
-- Shipping and returns: https://emrn.ca/shipping-returns
+- Shipping and returns: https://emrn.ca/shipping-returns/
 - Business account application: https://emrn.ca/business-account-application
 - Business pricing: https://emrn.ca/my-special-pricing
 - Business solutions: https://emrn.ca/business-medical-supplies
+- Bulk Orders & Volume Pricing: https://emrn.ca/bulk-orders-volume-pricing/
+- Quick Order: https://emrn.ca/bulk-orders-volume-pricing/#/purchased-products
 - Home medical supplies: https://emrn.ca/home-medical-supplies/
-- Privacy policy: https://emrn.ca/privacy-policy
+- Privacy policy: https://emrn.ca/privacy-policy/
+- Terms and conditions: https://emrn.ca/terms-conditions/
+- About EMRN: https://emrn.ca/about-us/
+- Careers: https://emrn.ca/Careers/
 - Contact page: https://emrn.ca/contact-us/
 `.trim();
 }

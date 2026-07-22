@@ -606,9 +606,25 @@ function FormattedMessage({ content, isUser }: { content: string; isUser: boolea
 }
 
 function renderInlineMessage(text: string, isUser: boolean) {
-  const parts = text.replace(/\*\*(.*?)\*\*/g, "$1").split(/(https?:\/\/[^\s)]+)/g);
+  const parts = text.replace(/\*\*(.*?)\*\*/g, "$1").split(/(\[[^\]]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s)]+)/g);
 
   return parts.map((part, index) => {
+    const markdownLink = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+    if (markdownLink) {
+      const normalizedPart = normalizeDisplayedUrl(markdownLink[2]);
+      return (
+        <a
+          key={`${part}-${index}`}
+          href={normalizedPart}
+          target="_blank"
+          rel="noreferrer"
+          className={isUser ? "underline decoration-white/70 underline-offset-2" : "emrn-pulse-message-link"}
+        >
+          {markdownLink[1]}
+        </a>
+      );
+    }
+
     if (/^https?:\/\//.test(part)) {
       const normalizedPart = normalizeDisplayedUrl(part);
       const label = /loadInCheckout|isFromQuote=Y/i.test(normalizedPart)
@@ -617,7 +633,7 @@ function renderInlineMessage(text: string, isUser: boolean) {
         ? "Checkout"
         : /\/cart(?:\.php)?(?:[?#]|$)/i.test(normalizedPart)
           ? "Cart"
-          : "View product";
+          : linkLabelForUrl(normalizedPart);
       return (
         <a
           key={`${part}-${index}`}
@@ -633,6 +649,37 @@ function renderInlineMessage(text: string, isUser: boolean) {
 
     return <span key={`${part}-${index}`}>{part}</span>;
   });
+}
+
+function linkLabelForUrl(url: string) {
+  const path = (() => {
+    try {
+      return new URL(url).pathname.toLowerCase().replace(/\/+$/, "");
+    } catch {
+      return "";
+    }
+  })();
+
+  const labels: Record<string, string> = {
+    "/business-account-application": "Business account application",
+    "/business-medical-supplies": "Business medical supplies",
+    "/bulk-orders": "Bulk order information",
+    "/bulk-orders-volume-pricing": "Bulk Orders & Volume Pricing",
+    "/quick-order": "Quick order",
+    "/home-medical-supplies": "Home medical supplies",
+    "/faq-s": "Help Center",
+    "/shipping-returns": "Shipping and returns",
+    "/privacy-policy": "Privacy policy",
+    "/terms-conditions": "Terms and conditions",
+    "/about-us": "About EMRN",
+    "/careers": "Careers",
+    "/contact-us": "Contact EMRN",
+    "/login.php": "Sign in or register",
+    "/my-special-pricing": "My Special Pricing",
+    "/search.php": "Search EMRN",
+  };
+
+  return labels[path] || "View product";
 }
 
 function stripCartItemsToken(value: string) {
