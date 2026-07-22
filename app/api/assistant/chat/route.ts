@@ -7,6 +7,9 @@ import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildS
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { streamAssistantResponse } from "@/lib/assistant/openai";
+import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
+import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
+import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
 
 export const runtime = "nodejs";
@@ -1008,6 +1011,7 @@ function displayAvailability(product: CatalogProduct, language: "en" | "fr" | "u
     .replace(/\bLow stock\b/gi, "Stock faible")
     .replace(/\bAvailable to order\b/gi, "Disponible sur commande")
     .replace(/\bExtended lead time\b/gi, "Délai prolongé")
+    .replace(/\bOrder soon\b/gi, "Commandez bientôt")
     .replace(/\bTypically ships within 1-3 business days\b/gi, "Expédié généralement sous 1 à 3 jours ouvrables")
     .replace(/\btypically 5-9 business days\b/gi, "généralement 5 à 9 jours ouvrables")
     .replace(/\bavailable\b/gi, "disponible");
@@ -1126,6 +1130,169 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
       : "If you tell me the size, brand, use, or quantity you need, I can narrow this down or help add the right item to your cart.";
 
   return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
+}
+
+const colorTerms = [
+  "black",
+  "blue",
+  "brown",
+  "clear",
+  "gray",
+  "green",
+  "grey",
+  "orange",
+  "pink",
+  "purple",
+  "red",
+  "silver",
+  "tan",
+  "white",
+  "yellow",
+  "bleu",
+  "noir",
+  "noire",
+  "orange",
+  "rouge",
+  "vert",
+  "verte",
+  "jaune",
+  "gris",
+  "grise",
+  "blanc",
+  "blanche",
+];
+
+function requestedColorFromText(text: string) {
+  const normalized = String(text || "").toLowerCase();
+  return colorTerms.find((color) => new RegExp(`\\b${escapeRegExp(color)}\\b`, "i").test(normalized)) || "";
+}
+
+function stripColorFromQuery(text: string, color: string) {
+  return String(text || "")
+    .replace(new RegExp(`\\b${escapeRegExp(color)}\\b`, "gi"), " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function colorAliases(color: string) {
+  const normalized = color.toLowerCase();
+  const aliases: Record<string, string[]> = {
+    bleu: ["bleu", "blue"],
+    noir: ["noir", "black"],
+    noire: ["noire", "black"],
+    rouge: ["rouge", "red"],
+    vert: ["vert", "green"],
+    verte: ["verte", "green"],
+    jaune: ["jaune", "yellow"],
+    gris: ["gris", "gray", "grey"],
+    grise: ["grise", "gray", "grey"],
+    blanc: ["blanc", "white"],
+    blanche: ["blanche", "white"],
+    blue: ["blue", "bleu"],
+    black: ["black", "noir", "noire"],
+    red: ["red", "rouge"],
+    green: ["green", "vert", "verte"],
+    yellow: ["yellow", "jaune"],
+    gray: ["gray", "grey", "gris", "grise"],
+    grey: ["grey", "gray", "gris", "grise"],
+    white: ["white", "blanc", "blanche"],
+  };
+  return aliases[normalized] || [normalized];
+}
+
+function productMentionsColor(product: CatalogProduct, color: string) {
+  if (!color) return false;
+  const text = `${product.name} ${product.description} ${product.sku}`;
+  return colorAliases(color).some((alias) => new RegExp(`\\b${escapeRegExp(alias)}\\b`, "i").test(text));
+}
+
+function meaningfulColorFallbackTokens(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 3)
+    .filter((token) => !/^(and|for|the|with|need|want|show|find|product|item|color|colour|couleur)$/.test(token));
+}
+
+function looksRelevantToColorFallback(product: CatalogProduct, strippedQuery: string) {
+  const tokens = meaningfulColorFallbackTokens(strippedQuery);
+  if (!tokens.length) return false;
+  const haystack = `${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer}`.toLowerCase();
+  const matched = tokens.filter((token) => haystack.includes(token));
+  return matched.length >= Math.min(2, tokens.length);
+}
+
+async function colorFallbackSearch({
+  latest,
+  searchQuery,
+  products,
+  language,
+}: {
+  latest: string;
+  searchQuery: string;
+  products: CatalogProduct[];
+  language: "en" | "fr" | "unknown";
+}) {
+  const requestedColor = requestedColorFromText(`${latest} ${searchQuery}`);
+  if (!requestedColor) return null;
+
+  const baseQuery = new RegExp(`\\b${escapeRegExp(requestedColor)}\\b`, "i").test(searchQuery) ? searchQuery : latest;
+  const strippedQuery = stripColorFromQuery(baseQuery || latest, requestedColor);
+  if (!strippedQuery || strippedQuery === baseQuery) return null;
+  if (products.some((product) => productMentionsColor(product, requestedColor) && looksRelevantToColorFallback(product, strippedQuery))) {
+    return null;
+  }
+
+  const fallback = await searchProducts({ query: strippedQuery, language, limit: 8 });
+  const fallbackProducts = fallback.products.filter((product) => looksRelevantToColorFallback(product, strippedQuery));
+  if (!fallbackProducts.length) return null;
+
+  return {
+    requestedColor,
+    strippedQuery,
+    products: fallbackProducts,
+  };
+}
+
+function rankRequestedColorProducts(products: CatalogProduct[], text: string) {
+  const requestedColor = requestedColorFromText(text);
+  if (!requestedColor) return products;
+
+  return [...products].sort((a, b) => {
+    const aMatch = productMentionsColor(a, requestedColor) ? 1 : 0;
+    const bMatch = productMentionsColor(b, requestedColor) ? 1 : 0;
+    return bMatch - aMatch;
+  });
+}
+
+function missingRequestedColorProducts(products: CatalogProduct[], text: string) {
+  const requestedColor = requestedColorFromText(text);
+  if (!requestedColor) return null;
+  const strippedQuery = stripColorFromQuery(text, requestedColor);
+  const relevantProducts = products.filter((product) => looksRelevantToColorFallback(product, strippedQuery));
+  if (!relevantProducts.length) return null;
+  if (relevantProducts.some((product) => productMentionsColor(product, requestedColor))) return null;
+  return {
+    requestedColor,
+    strippedQuery,
+    products: relevantProducts,
+  };
+}
+
+function colorFallbackText(products: CatalogProduct[], requestedColor: string, language: "en" | "fr" | "unknown", query: string) {
+  const lines = products.slice(0, 5).map((product, index) => {
+    const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
+    const availability = displayAvailability(product, language);
+    const link = language === "fr" ? "Voir le produit" : "View product";
+    return `${index + 1}. **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. [${link}](${product.url})`;
+  });
+
+  const article = /^[aeiou]/i.test(requestedColor) ? "an" : "a";
+
+  return language === "fr"
+    ? `Je ne vois pas l’option ${requestedColor} pour « ${query} » dans les produits EMRN récupérés. Voici les options proches disponibles:\n\n${lines.join("\n")}\n\nJe peux aussi envoyer une demande à l’équipe EMRN pour vérifier si cette couleur peut être obtenue.`
+    : `I do not see ${article} ${requestedColor} option for “${query}” in the EMRN products I found. Available close options:\n\n${lines.join("\n")}\n\nI can also send a request to EMRN to check whether that color can be sourced.`;
 }
 
 function packageInfo(product: CatalogProduct) {
@@ -1586,6 +1753,88 @@ function catalogCompatibilityAnswer(product: CatalogProduct, question: string, l
     : `Can’t confirm: I can’t confirm this compatibility from EMRN product details alone.\n\nEMRN product page: ${product.url}\n\nI’ll check manufacturer info if available.`;
 }
 
+function catalogCompatibilityAnswerFromProducts(products: CatalogProduct[], question: string, language: "en" | "fr" | "unknown", trustedSkus: string[]) {
+  if (!isCompatibilityQuestion(question)) return "";
+  const trustedSkuSet = new Set(trustedSkus.map((sku) => sku.toUpperCase()).filter(Boolean));
+  if (!trustedSkuSet.size) return "";
+
+  const matchesRequestedProductType = (product: CatalogProduct) => {
+    const questionText = question.toLowerCase();
+    const productText = `${product.name} ${product.parentName} ${product.categories.join(" ")}`.toLowerCase();
+    if (/\b(pads?|electrodes?|électrodes?|electrodes?)\b/i.test(questionText)) {
+      return /\b(pads?|electrodes?|électrodes?|smart\s*pads?)\b/i.test(productText);
+    }
+    if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(questionText)) {
+      return /\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(productText);
+    }
+    if (/\b(lungs?|airways?|voies?\s+a[eé]riennes?)\b/i.test(questionText)) {
+      return /\b(lungs?|airways?|voies?\s+a[eé]riennes?)\b/i.test(productText);
+    }
+    return true;
+  };
+
+  const uniqueBySku = (items: CatalogProduct[]) => {
+    const seen = new Set<string>();
+    return items.filter((product) => {
+      const key = product.sku || product.url || String(product.productId);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const confirmedProducts = products
+    .slice(0, 10)
+    .filter((product) => trustedSkuSet.has(product.sku.toUpperCase()))
+    .filter(matchesRequestedProductType)
+    .filter((product) => /^Confirmed compatible:/i.test(catalogCompatibilityAnswer(product, question, language)));
+  const negativeProducts = products
+    .slice(0, 6)
+    .filter((product) => trustedSkuSet.has(product.sku.toUpperCase()))
+    .filter(matchesRequestedProductType)
+    .filter((product) => /^Not compatible:/i.test(catalogCompatibilityAnswer(product, question, language)));
+
+  if (!confirmedProducts.length && !negativeProducts.length) return "";
+
+  const line = (product: CatalogProduct) => {
+    const trainingOnly = /\b(training|trainer)\b/i.test(`${product.name} ${product.parentName}`)
+      ? language === "fr"
+        ? " Formation seulement."
+        : " Training only."
+      : "";
+    const price = product.price > 0 ? `, $${product.price.toFixed(2)}` : "";
+    const availability = displayAvailability(product, language).replace(/[.。\s]+$/g, "");
+    return `- **${product.name}** — SKU **${product.sku}**${price}.${trainingOnly}${availability ? ` ${availability}.` : ""}\n  ${product.url}`;
+  };
+
+  if (confirmedProducts.length) {
+    const exact = uniqueBySku(confirmedProducts).slice(0, 5);
+    const intro = language === "fr"
+      ? "Confirmed compatible: D’après les produits EMRN correspondants, voici les options compatibles que j’ai trouvées:"
+      : "Confirmed compatible: Based on matching EMRN products, these are the compatible options I found:";
+    const clinical = exact.filter((product) => !/\b(training|trainer)\b/i.test(`${product.name} ${product.parentName}`));
+    const training = exact.filter((product) => /\b(training|trainer)\b/i.test(`${product.name} ${product.parentName}`));
+    const parts = [
+      ...clinical.map(line),
+      ...(training.length
+        ? [
+            language === "fr" ? "\nFormation seulement:" : "\nTraining only:",
+            ...training.map(line),
+          ]
+        : []),
+    ];
+    const close = language === "fr"
+      ? "Voulez-vous que je l’ajoute au panier ou que je prépare un devis?"
+      : "Would you like me to add one to cart or prepare a quote?";
+    return `${intro}\n\n${parts.join("\n")}\n\n${close}`;
+  }
+
+  const intro = language === "fr"
+    ? "Not compatible: Les produits EMRN correspondants indiquent que ce n’est pas compatible:"
+    : "Not compatible: The matching EMRN products indicate this is not compatible:";
+  return `${intro}\n\n${uniqueBySku(negativeProducts).slice(0, 3).map(line).join("\n")}`;
+}
+
 function productFamilyForPartsSearch(product: CatalogProduct) {
   return (product.parentName || product.name)
     .replace(/\b(?:4[-\s]?pack|single|dark skin|light skin)\b/gi, " ")
@@ -1628,6 +1877,18 @@ function contactHelpText(language: "en" | "fr" | "unknown") {
   return language === "fr"
     ? "Bien sûr. Je peux envoyer un message à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question. Vous pouvez aussi utiliser la page Contactez-nous: https://emrn.ca/contact-us/"
     : "Of course. I can send a message to our team. Please send your name, email, and question. You can also use the Contact Us page: https://emrn.ca/contact-us/";
+}
+
+function externalKnowledgeDisabledText(products: CatalogProduct[], language: "en" | "fr" | "unknown") {
+  const product = products.find((item) => item.url);
+  if (language === "fr") {
+    return product
+      ? `Can’t confirm: Je ne peux pas confirmer cette réponse à partir des renseignements EMRN seuls. Voici la page produit EMRN: ${product.url}\n\nJe peux envoyer cette question à notre équipe pour vérifier auprès du fabricant ou préparer une demande de devis.`
+      : "Can’t confirm: Je ne peux pas confirmer cette réponse à partir des renseignements EMRN seuls. Je peux envoyer cette question à notre équipe pour vérifier auprès du fabricant ou préparer une demande de devis.";
+  }
+  return product
+    ? `Can’t confirm: I can’t confirm this from EMRN information alone. Here’s the EMRN product page: ${product.url}\n\nI can send this to our team to verify with the manufacturer or prepare an item-sourcing/quote request.`
+    : "Can’t confirm: I can’t confirm this from EMRN information alone. I can send this to our team to verify with the manufacturer or prepare an item-sourcing/quote request.";
 }
 
 function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
@@ -1839,6 +2100,7 @@ export async function POST(req: NextRequest) {
 }
 
 async function handleAssistantPost(req: NextRequest) {
+  const requestStartedAt = Date.now();
   const body = await req.json().catch(() => null);
   const messages = (body?.messages || []) as AssistantMessage[];
   const sessionId = String(body?.sessionId || crypto.randomUUID());
@@ -1846,6 +2108,14 @@ async function handleAssistantPost(req: NextRequest) {
   const pageContext = (body?.pageContext || {}) as ProductPageContext;
   const latest = messages.at(-1)?.content || "";
   const createdAt = new Date().toISOString();
+  let searchTiming: {
+    totalMs?: number;
+    supabaseMs?: number;
+    openAiMs?: number;
+    typesenseMs?: number;
+    fallbackMs?: number;
+  } = {};
+  let knowledgeMs = 0;
 
   if (!messages.length || !latest.trim()) {
     return NextResponse.json({ error: "messages are required" }, { status: 400 });
@@ -2416,7 +2686,19 @@ async function handleAssistantPost(req: NextRequest) {
       : shouldContinueMissingProductFlow
         ? missingProductFollowUpQuery(messages, latest)
       : searchQueryForLatest(messages, latest, []);
-  let searchResult: { products: CatalogProduct[]; found: number; searchQuery?: string; language?: string };
+  let searchResult: {
+    products: CatalogProduct[];
+    found: number;
+    searchQuery?: string;
+    language?: string;
+    timings?: {
+      totalMs?: number;
+      supabaseMs?: number;
+      openAiMs?: number;
+      typesenseMs?: number;
+      fallbackMs?: number;
+    };
+  };
   if (pageProductsForCart.length) {
     searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
   } else if (skuCandidates.length) {
@@ -2441,7 +2723,15 @@ async function handleAssistantPost(req: NextRequest) {
   } else {
     searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
   }
-  const products = searchResult.products;
+  searchTiming = searchResult.timings || {};
+  let products = searchResult.products;
+  const colorFallback = await colorFallbackSearch({ latest, searchQuery, products, language });
+  if (colorFallback) {
+    products = colorFallback.products;
+  } else {
+    products = rankRequestedColorProducts(products, `${latest} ${searchQuery}`);
+  }
+  const missingColorFallback = colorFallback || missingRequestedColorProducts(products, latest);
 
   await logAnalyticsEvent({
     type: products.length ? "product_search" : "no_result_search",
@@ -2452,7 +2742,56 @@ async function handleAssistantPost(req: NextRequest) {
     createdAt,
   });
 
+  if (missingColorFallback) {
+    return new Response(textStream(colorFallbackText(missingColorFallback.products, missingColorFallback.requestedColor, language, missingColorFallback.strippedQuery)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  const knowledgeStartedAt = Date.now();
+  if ((await knowledgeShadowEnabled()) && shouldCheckKnowledgeEvidence(latest)) {
+    const knowledge = await buildKnowledgeEvidence(latest, products, language);
+    if (knowledge.kind !== "none") {
+      await logAnalyticsEvent({
+        type: "knowledge_shadow",
+        sessionId,
+        language,
+        query: latest,
+        productIds: products.slice(0, 5).map((product) => product.productId),
+        knowledge,
+        createdAt,
+      });
+    }
+  }
+  knowledgeMs = Date.now() - knowledgeStartedAt;
+
+  const logPerformance = async (answerPath: string, extra?: { openAiMs?: number; openAiUsed?: boolean }) => {
+    const totalMs = Date.now() - requestStartedAt;
+    await logAnalyticsEvent({
+      type: "assistant_performance",
+      sessionId,
+      language,
+      query: latest,
+      productIds: products.slice(0, 8).map((product) => product.productId),
+      performance: {
+        totalMs,
+        searchMs: searchTiming.totalMs || 0,
+        supabaseMs: searchTiming.supabaseMs || 0,
+        openAiMs: (searchTiming.openAiMs || 0) + (extra?.openAiMs || 0),
+        knowledgeMs,
+        productCount: products.length,
+        searchQuery,
+        answerPath,
+        slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
+        openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0),
+        supabaseUsed: Boolean((searchTiming.supabaseMs || 0) > 0),
+      },
+      createdAt: new Date().toISOString(),
+    });
+  };
+
   if (isAccountIntent(latest)) {
+    await logPerformance("account_help");
     await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
     return new Response(
       textStream(
@@ -2467,6 +2806,7 @@ async function handleAssistantPost(req: NextRequest) {
   if (shouldCompareRememberedProducts && products.length) {
     const comparison = compareProductsText(products, language, latest);
     if (comparison) {
+      await logPerformance("compare_products");
       return new Response(textStream(comparison), {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -2476,6 +2816,7 @@ async function handleAssistantPost(req: NextRequest) {
   if (shouldFilterRememberedProducts && products.length) {
     const filteredProducts = filterProductsFromText(products, latest);
     if (filteredProducts.length) {
+      await logPerformance("filter_results");
       return new Response(textStream(productResultsText(filteredProducts, language, searchQuery)), {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -2617,6 +2958,7 @@ async function handleAssistantPost(req: NextRequest) {
         sendQuoteRequestEmail(draft.request),
         logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
       ]);
+      await logPerformance("quote_request_sent");
       return new Response(
         textStream(
           language === "fr"
@@ -2627,6 +2969,7 @@ async function handleAssistantPost(req: NextRequest) {
       );
     }
 
+    await logPerformance("quote_missing_fields");
     return new Response(textStream(quoteMissingText(draft.missing, language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
@@ -2634,6 +2977,7 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (!products.length) {
     await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
+    await logPerformance("no_products");
     const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
     const skuText = skuCandidates.length ? ` SKU/part number ${skuCandidates.join(", ")}` : "";
     return new Response(
@@ -2660,10 +3004,35 @@ async function handleAssistantPost(req: NextRequest) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
+    const trustedCompatibilitySkus = Array.from(
+      new Set([
+        ...skuCandidates,
+        ...(await matchingApprovedKnowledgeForQuery(latest))
+          .map((item) => item.correctSku || "")
+          .filter(Boolean),
+      ].map((sku) => sku.toUpperCase()))
+    );
+    const localCompatibilityAnswer = catalogCompatibilityAnswerFromProducts(
+      selectedDetailProducts.length ? selectedDetailProducts : detailProducts,
+      latest,
+      language,
+      trustedCompatibilitySkus
+    );
+
+    if (localCompatibilityAnswer) {
+      await logPerformance("emrn_compatibility");
+      return new Response(textStream(localCompatibilityAnswer), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
 
     if (isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
       const compatibilityAnswer = catalogCompatibilityAnswer(selectedDetailProducts[0], latest, language);
       if (compatibilityAnswer && !/^Can’t confirm:|^Can.t confirm:|^Je ne peux pas confirmer/i.test(compatibilityAnswer)) {
+        await logPerformance("catalog_compatibility");
         return new Response(textStream(compatibilityAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
@@ -2693,6 +3062,7 @@ async function handleAssistantPost(req: NextRequest) {
         const intro = language === "fr"
           ? `Voici les pièces/accessoires EMRN que j’ai trouvés pour **${baseProduct.name}** (SKU: ${baseProduct.sku}):`
           : `Here are EMRN parts/accessories I found for **${baseProduct.name}** (SKU: ${baseProduct.sku}):`;
+        await logPerformance("related_parts");
         return new Response(textStream(`${intro}\n\n${productResultsText(relatedParts.slice(0, 6), language, partsQueries[0]).replace(/^Here are the products I found for .+?:\n\n/i, "").replace(/\n\nIf you tell me[\s\S]*$/i, "")}`), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
@@ -2705,6 +3075,7 @@ async function handleAssistantPost(req: NextRequest) {
     if (selectedDetailProducts.length === 1) {
       const catalogAnswer = productDetailFromCatalog(selectedDetailProducts[0], latest, language);
       if (catalogAnswer) {
+        await logPerformance("catalog_detail");
         return new Response(textStream(catalogAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
@@ -2714,6 +3085,18 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
 
+    const externalKnowledgeEnabled = await assistantFeatureEnabledAsync("externalKnowledgeEnabled");
+    if (!externalKnowledgeEnabled) {
+      await logPerformance("external_knowledge_off");
+      return new Response(textStream(externalKnowledgeDisabledText(detailProducts, language)), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    const openAiStartedAt = Date.now();
     const stream = await streamAssistantResponse({
       messages,
       products: detailProducts,
@@ -2722,6 +3105,7 @@ async function handleAssistantPost(req: NextRequest) {
       query: searchQuery,
       trustedWebSearch: true,
     });
+    await logPerformance("external_knowledge", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true });
     await logAnalyticsEvent({
       type: "conversation_completed",
       sessionId,
@@ -2741,11 +3125,13 @@ async function handleAssistantPost(req: NextRequest) {
   if (products.length === 1) {
     const exactProduct = products[0];
     const substitutes = await closeInStockSubstitutes(exactProduct, language);
+    await logPerformance("single_product");
     return new Response(textStream(`${exactProductFoundText(exactProduct, language, skuCandidates[0] || searchQuery)}${substitutesText(substitutes, language)}`), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
 
+  await logPerformance("product_results");
   return new Response(textStream(productResultsText(products, language, searchQuery)), {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });

@@ -151,6 +151,9 @@ export type AssistantAnalyticsEvent =
         | "search_failure"
         | "no_result_search"
         | "product_recommended"
+        | "knowledge_shadow"
+        | "assistant_performance"
+        | "external_knowledge_sources"
         | "quote_request"
         | "quote_lookup"
         | "support_escalation"
@@ -159,6 +162,33 @@ export type AssistantAnalyticsEvent =
       language: AssistantLanguage;
       query?: string;
       productIds?: number[];
+      knowledge?: {
+        kind: "compatibility" | "product_detail" | "none";
+        status: "confirmed" | "not_compatible" | "cant_confirm" | "not_applicable";
+        confidence: "high" | "medium" | "low" | "none";
+        productSkus: string[];
+        relatedTerms: string[];
+        evidence: string[];
+        internalSourceUrls: string[];
+      };
+      performance?: {
+        totalMs: number;
+        searchMs?: number;
+        supabaseMs?: number;
+        openAiMs?: number;
+        knowledgeMs?: number;
+        productCount?: number;
+        searchQuery?: string;
+        answerPath?: string;
+        slow?: boolean;
+        openAiUsed?: boolean;
+        supabaseUsed?: boolean;
+      };
+      externalSources?: Array<{
+        title?: string;
+        url: string;
+        domain?: string;
+      }>;
       createdAt: string;
     };
 

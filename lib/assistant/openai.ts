@@ -1,4 +1,5 @@
-import { logAiUsage } from "./analytics";
+import { logAiUsage, logAnalyticsEvent } from "./analytics";
+import { assistantFeatureEnabledAsync } from "./admin-config";
 import { buildSystemPrompt, faqContext, productContext } from "./prompt";
 import type { AssistantLanguage, AssistantMessage, CatalogProduct } from "./types";
 
@@ -23,8 +24,28 @@ const trustedProductSourceDomains = [
   "meretusa.com",
   "sol-m.com",
   "mckesson.com",
+  "mms.mckesson.com",
   "henryschein.com",
   "boundtree.com",
+  "cardinalhealth.com",
+  "owens-minor.com",
+  "concordancehealthcare.com",
+  "vwr.com",
+  "fishersci.com",
+  "dotmed.com",
+  "mfimedical.com",
+  "cascadehealthcaresolutions.com",
+  "tigermedical.com",
+  "integrisequipment.com",
+  "alimed.com",
+  "performancehealth.com",
+  "enovis.com",
+  "hollister.com",
+  "convatec.com",
+  "smith-nephew.com",
+  "molnlycke.com",
+  "baxter.com",
+  "cardiachealth.ca",
   "quadmed.com",
   "rescue-essentials.com",
   "schoolhealth.com",
@@ -32,6 +53,20 @@ const trustedProductSourceDomains = [
   "grainger.com",
   "amazon.ca",
   "amazon.com",
+  "aedsuperstore.com",
+  "aedbrands.com",
+  "aed.us",
+  "aed.com",
+  "healthproductsforyou.com",
+  "activeforever.com",
+  "rehabmart.com",
+  "graylinemedical.com",
+  "medicaleshop.com",
+  "schoolhealth.com",
+  "redcross.ca",
+  "redcross.org",
+  "manualslib.com",
+  "manuals.plus",
 ];
 
 function trustedDomainsForProducts(products: CatalogProduct[]) {
@@ -78,7 +113,27 @@ function trustedDomainsForProducts(products: CatalogProduct[]) {
   return Array.from(domains).slice(0, 40);
 }
 
-function detailAnswerInstructions(language: AssistantLanguage) {
+async function shouldShowExternalSources() {
+  return assistantFeatureEnabledAsync("showExternalSources");
+}
+
+function sourceVisibilityInstructions(showExternalSources: boolean) {
+  if (showExternalSources) {
+    return "- If an exact EMRN or manufacturer source confirms compatibility or specifications, answer confidently, include the source URL, and use wording like \"Based on the product/manufacturer info I found...\".";
+  }
+
+  return [
+    "- If an exact EMRN or manufacturer source confirms compatibility or specifications, answer confidently and use wording like \"Based on EMRN/manufacturer product information I found...\".",
+    "- Do not include external source URLs, external domains, competitor links, marketplace links, citation links, or markdown links to non-EMRN websites in the customer reply.",
+    "- When external product information supports the answer, mention the source type only, such as \"manufacturer information\" or \"supplier catalog information\".",
+    "- Include EMRN product URLs when supplied. If no EMRN product URL is supplied, do not replace it with an external URL.",
+    "- Only show prices from supplied EMRN catalog/product context. Never show competitor, manufacturer, marketplace, or supplier prices.",
+    "- If external sources identify the right item but no matching EMRN catalog product is supplied, do not send the customer away. Say EMRN can help source/check the item and ask for their name, email, quantity, and any needed deadline so the request can be sent to the EMRN quote team.",
+    "- If the supplied EMRN catalog products are related but not the exact verified item, show them only after clearly labeling the difference, then offer to send an EMRN item-sourcing or quote request for the exact verified item.",
+  ].join("\n");
+}
+
+function detailAnswerInstructions(language: AssistantLanguage, showExternalSources: boolean) {
   return [
     buildSystemPrompt(language),
     "",
@@ -86,11 +141,16 @@ function detailAnswerInstructions(language: AssistantLanguage) {
     "- First use the supplied EMRN catalog/product context.",
     "- If the EMRN context clearly answers the compatibility, dimension, accessory, replacement-part, or specification question, answer from EMRN context and do not rely on general memory.",
     "- If EMRN context is unclear and web search is available, search only trusted EMRN/manufacturer/large medical supplier domains supplied by the tool filter.",
+    "- Search the exact brand/manufacturer page first when a brand or model is mentioned. If the manufacturer page is not enough, use large medical supplier catalogs or product catalog pages only as support.",
     "- For EMRN catalog lookup, treat the supplied EMRN SKU as exact. For manufacturer/web lookup, remember EMRN SKUs may add store-specific prefixes or suffixes, such as DY for Dynarex or trailing internal letters for Nasco. Search and match by manufacturer name, manufacturer model/part number embedded in the SKU or product title, exact product title, dimensions, and option labels too.",
     "- Do not reject a manufacturer source just because its part number omits an EMRN prefix/suffix, but do require the product title/model/dimensions/options to clearly match the EMRN product.",
     "- Prefer manufacturer pages, manuals, PDFs, official product pages, or EMRN pages as proof.",
-    "- Large medical suppliers and marketplaces such as Medline, McKesson, Henry Schein, Bound Tree, Grainger, or Amazon may support specifications or model matching, but do not treat marketplace text as stronger than a manufacturer compatibility list/manual.",
-    "- If an exact EMRN or manufacturer source confirms compatibility or specifications, answer confidently, include the source URL, and use wording like \"Based on the product/manufacturer info I found...\".",
+    "- Large medical suppliers and marketplaces such as Medline, McKesson, Henry Schein, Bound Tree, Cardinal Health, Owens & Minor, Concordance, VWR, Fisher Scientific, Grainger, School Health, or Amazon may support specifications or model matching, but do not treat marketplace text as stronger than a manufacturer compatibility list/manual.",
+    "- Answer only when the source match is exact enough: same brand, model/family, option, size, SKU/part number when available, and same intended use. If there is any doubt, say Can’t confirm and offer EMRN support/item-sourcing.",
+    sourceVisibilityInstructions(showExternalSources),
+    "- Never show external supplier prices. If the supplied EMRN catalog context does not include a price, say the price is unavailable or that a quote is required.",
+    "- If the verified answer points to a product not found in the supplied EMRN catalog context, offer to send an item-sourcing or quote request to EMRN instead of linking to an external store.",
+    "- Show supplied EMRN catalog products first only when they are exact matches for the customer's need. If they are merely related, training-only, different model, or accessories for a different use, label them as related EMRN options after the verified answer and still offer an item-sourcing or quote request for the exact item.",
     "- For compatibility questions, start with one of these labels exactly: \"Confirmed compatible:\", \"Not compatible:\", or \"Can’t confirm:\". Use Confirmed compatible only when EMRN/manufacturer/source text clearly supports the fit. Use Not compatible only when source text clearly says it does not fit or is for a different model. Use Can’t confirm when the source does not prove it.",
     "- If the best source is a marketplace, distributor, or supplier rather than EMRN/manufacturer, do not include the competitor URL or name. Say \"I found supporting product info, but not on EMRN or the manufacturer page\" and answer only if the match is exact.",
     "- If sources are ambiguous, missing, or only suggest a possibility, use this exact answer once and include the EMRN product URL when a product URL is supplied: \"Can’t confirm: I can’t confirm from available product/manufacturer info. Here’s the EMRN product page: [URL]. Reply yes and I’ll send this to support.\"",
@@ -139,10 +199,11 @@ export async function streamAssistantResponse({
         },
       ]
     : undefined;
+  const showExternalSources = await shouldShowExternalSources();
   const requestBody = {
     model,
     stream: true,
-    instructions: trustedWebSearch ? detailAnswerInstructions(language) : buildSystemPrompt(language),
+    instructions: trustedWebSearch ? detailAnswerInstructions(language, showExternalSources) : buildSystemPrompt(language),
     ...(webSearchTool ? { tools: webSearchTool, tool_choice: "required" } : {}),
     input: [
       faqContext(),
@@ -157,7 +218,7 @@ export async function streamAssistantResponse({
     ].join("\n"),
     max_output_tokens: 650,
   };
-  let response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -169,22 +230,13 @@ export async function streamAssistantResponse({
   if (!response.ok || !response.body) {
     if (trustedWebSearch) {
       console.error("[EMRN Pulse] OpenAI trusted web detail response failed", response.status, await response.text());
-      response = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ...requestBody, tools: undefined, tool_choice: undefined }),
-      });
-      if (response.ok && response.body) {
-        return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query, feature: "assistant_response" }));
-      }
     }
     return fallbackStream(language, trustedWebSearch ? products : []);
   }
 
-  return response.body.pipeThrough(parseOpenAiSse({ model, sessionId, language, query, feature: trustedWebSearch ? "trusted_web_search" : "assistant_response" }));
+  return response.body
+    .pipeThrough(parseOpenAiSse({ model, sessionId, language, query, feature: trustedWebSearch ? "trusted_web_search" : "assistant_response" }))
+    .pipeThrough(stripExternalSourceLinksIfNeeded(trustedWebSearch, showExternalSources));
 }
 
 function parseOpenAiSse({
@@ -233,11 +285,111 @@ function parseOpenAiSse({
               query,
               status: "called",
             });
+            if (feature === "trusted_web_search") {
+              const externalSources = extractResponseSources(event.response);
+              if (externalSources.length) {
+                void logAnalyticsEvent({
+                  type: "external_knowledge_sources",
+                  sessionId: sessionId || "unknown",
+                  language,
+                  query,
+                  externalSources,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+            }
           }
         } catch {
           continue;
         }
       }
+    },
+  });
+}
+
+function extractResponseSources(response: unknown) {
+  const sources: Array<{ title?: string; url: string; domain?: string }> = [];
+  const seen = new Set<string>();
+
+  const visit = (value: unknown) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== "object") return;
+
+    const record = value as Record<string, unknown>;
+    const url = typeof record.url === "string" ? record.url : "";
+    const type = typeof record.type === "string" ? record.type : "";
+    if (url && (type.includes("citation") || type.includes("url") || "title" in record)) {
+      const cleanUrl = url.replace(/[),.;]+$/g, "");
+      if (!seen.has(cleanUrl)) {
+        seen.add(cleanUrl);
+        sources.push({
+          title: typeof record.title === "string" ? record.title : undefined,
+          url: cleanUrl,
+          domain: domainFromUrl(cleanUrl),
+        });
+      }
+    }
+
+    Object.values(record).forEach(visit);
+  };
+
+  visit(response);
+  return sources.slice(0, 12);
+}
+
+function domainFromUrl(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function isEmrnUrl(value: string) {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+    return host === "emrn.ca" || host.endsWith(".emrn.ca");
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeExternalSourceLinks(text: string) {
+  return text
+    .replace(/\s*\(\[([^\]]+)\]\((https?:\/\/[^)]+)\)\)/gi, (match, label: string, url: string) =>
+      isEmrnUrl(url) ? match : label.toLowerCase().includes("emrn") ? ` (${label})` : ""
+    )
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, (_match, label: string, url: string) =>
+      isEmrnUrl(url) ? `[${label}](${url})` : label.toLowerCase().includes("emrn") ? label : "manufacturer information"
+    )
+    .replace(/https?:\/\/[^\s)]+/gi, (rawUrl: string) => {
+      const trailing = rawUrl.match(/[),.;]+$/)?.[0] || "";
+      const url = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl;
+      return `${isEmrnUrl(url) ? url : ""}${isEmrnUrl(url) ? trailing : ""}`;
+    })
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function stripExternalSourceLinksIfNeeded(trustedWebSearch: boolean | undefined, showExternalSources: boolean) {
+  if (!trustedWebSearch || showExternalSources) return new TransformStream<Uint8Array, Uint8Array>();
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let text = "";
+
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk) {
+      text += decoder.decode(chunk, { stream: true });
+    },
+    flush(controller) {
+      text += decoder.decode();
+      controller.enqueue(encoder.encode(sanitizeExternalSourceLinks(text)));
     },
   });
 }

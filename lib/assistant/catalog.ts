@@ -3,6 +3,7 @@ import { absoluteStoreUrl, normalizeCommerceUrl } from "../store-url";
 import { buildSmartSearchQuery } from "../smart-search-translator";
 import type { SmartQueryResult } from "../smart-search-translator";
 import { normalizeSearchText } from "../search-language";
+import { knowledgeSearchHintsForQueryAsync } from "./knowledge-memory";
 import { withBackorderAvailability } from "./availability";
 import { mcpCreateCart, mcpRemoveCartItem, mcpSearchProducts, mcpUpdateCartItem } from "./bigcommerce-mcp";
 import { readSkuConfigSync } from "./sku-config";
@@ -425,6 +426,10 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
     add("medical bag", "medical bags", "trauma bag", "ems bag", "first aid bag", "rescue bag", "medical backpack");
   }
 
+  if (includesAny(query, ["g3 load n go", "load n go", "load-n-go", "loadngo"])) {
+    add("G3 Load N Go Medic Backpack", "G35004", "G35004BU", "G35004RE", "G35004TK");
+  }
+
   if (
     includesAny(query, [
       "laerdal qcpr",
@@ -459,6 +464,13 @@ function supplementalRecallQueries(originalQuery: string, translatedQuery: strin
     !includesAny(query, ["part", "parts", "accessory", "accessories", "replacement"])
   ) {
     add("laerdal qcpr", "little baby qcpr", "little junior qcpr", "little anne qcpr", "little family qcpr", "resusci baby qcpr", "resusci junior qcpr");
+  }
+
+  if (
+    includesAny(query, ["philips frx", "heartstart frx", "frx aed", "frx"]) &&
+    includesAny(query, ["pad", "pads", "electrode", "electrodes", "electrode pads", "electrodes pads"])
+  ) {
+    add("989803139261", "Philips FRx SMART Pads II", "Philips HeartStart FRx SMART Pads II", "Philips FRx pads");
   }
 
   return recalls.slice(0, 8);
@@ -537,6 +549,24 @@ function rankMedicalBagHits(hits: SearchHit[], originalQuery: string, translated
     if (namedWeakContainer && !namedCoreBag && !inMedicalBagsCategory) value -= 220;
     if (includesAny(name, demoteTerms)) value -= 420;
 
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+function rankKnownProductFamilyHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  if (!includesAny(query, ["g3 load n go", "load n go", "load-n-go", "loadngo", "g35004"])) return hits;
+
+  const score = (hit: SearchHit) => {
+    const doc = hit.document || {};
+    const name = documentNameText(hit);
+    const sku = normalizeSku(String(doc.sku || ""));
+    let value = 0;
+    if (name.includes("load n go")) value += 6000;
+    if (name.includes("g3+")) value += 1200;
+    if (sku.startsWith("G35004")) value += 5000;
     return value;
   };
 
@@ -638,6 +668,99 @@ function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translated
   return [...hits].sort((a, b) => score(b) - score(a));
 }
 
+function rankReplacementPartHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  const requestedPartTerms = [
+    "airway",
+    "airways",
+    "lung",
+    "lungs",
+    "pad",
+    "pads",
+    "electrode",
+    "electrodes",
+    "battery",
+    "batteries",
+    "cartridge",
+    "key",
+    "skin",
+    "face",
+    "faces",
+    "clicker",
+    "activator",
+  ].filter((term) => query.includes(term));
+  const asksExplicitPart = includesAny(query, ["replacement", "replacements", "part", "parts", "accessory", "accessories"]);
+  const asksPartForProduct =
+    requestedPartTerms.length > 0 &&
+    /\b(for|fits?|works?\s+with|compatible(?:\s+with)?|goes?\s+with)\b/i.test(query);
+  if (!asksExplicitPart && !asksPartForProduct) return hits;
+
+  const requestedFamilies = [
+    "little anne",
+    "little baby",
+    "little junior",
+    "resusci baby",
+    "resusci anne",
+    "zoll aed 3",
+    "philips frx",
+    "heartstart frx",
+    "onsite",
+  ].filter((family) => query.includes(family));
+
+  const fullProductTerms = [
+    "training manikin",
+    "cpr training manikin",
+    "trainer",
+    "aed trainer",
+    "wheelchair",
+    "defibrillator",
+  ];
+  const accessoryContainerTerms = [
+    "accessories",
+    "accessory",
+    "replacement",
+    "airway",
+    "airways",
+    "lung",
+    "lungs",
+    "pad",
+    "pads",
+    "electrode",
+    "electrodes",
+    "battery",
+    "batteries",
+    "cartridge",
+    "parts",
+    "part",
+  ];
+
+  const score = (hit: SearchHit) => {
+    const name = documentNameText(hit);
+    const categories = documentCategoryText(hit);
+    let value = 0;
+
+    for (const family of requestedFamilies) {
+      if (name.includes(family)) value += 1800;
+      else if (/\blittle (?:anne|baby|junior)\b/.test(family) && /\blittle (?:anne|baby|junior)\b/.test(name)) value -= 1700;
+    }
+    if (requestedFamilies.length && !requestedFamilies.some((family) => name.includes(family))) value -= 3000;
+
+    for (const term of requestedPartTerms) {
+      if (name.includes(term)) value += 1800;
+      if (categories.includes(term)) value += 400;
+    }
+
+    if (includesAny(name, accessoryContainerTerms)) value += 900;
+    if (includesAny(categories, ["parts", "accessories"])) value += 700;
+    if (includesAny(name, fullProductTerms) && !includesAny(name, accessoryContainerTerms)) value -= 1800;
+    if (requestedPartTerms.length && !includesAny(name, requestedPartTerms)) value -= 600;
+
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
 function rankAedHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
   const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
   const isAedQuery = includesAny(query, ["aed", "defibrillator", "defibrillateur", "heartstart", "frx", "zoll"]);
@@ -691,6 +814,7 @@ function rankAedHits(hits: SearchHit[], originalQuery: string, translatedQuery: 
 
     if (asksForAedAccessory) {
       if (includesAny(name, aedAccessoryTerms)) value += 900;
+      if (!query.includes("training") && !query.includes("trainer") && includesAny(name, ["training", "trainer"])) value -= 1500;
       if (includesAny(query, ["pad", "pads", "electrode", "electrodes"]) && includesAny(name, ["pad", "pads", "electrode", "electrodes"])) {
         value += 1200;
       }
@@ -1143,7 +1267,12 @@ async function searchTypesenseProducts(query: string, input: ProductSearchInput)
 }
 
 export async function searchProducts(input: ProductSearchInput) {
+  const searchStartedAt = Date.now();
   const rawQuery = input.query || "*";
+  let smartQueryMs = 0;
+  let supabaseMs = 0;
+  let typesenseMs = 0;
+  let fallbackMs = 0;
   let smartQuery: SmartQueryResult = {
     original_query: rawQuery,
     search_query: rawQuery,
@@ -1154,11 +1283,14 @@ export async function searchProducts(input: ProductSearchInput) {
     translator: "none" as const,
     ai_status: "not_needed" as const,
     fallback_terms: [] as string[],
+    assisted_queries: [] as string[],
   };
 
   if (rawQuery && rawQuery !== "*") {
     try {
+      const smartQueryStartedAt = Date.now();
       smartQuery = await buildSmartSearchQuery(rawQuery);
+      smartQueryMs = Date.now() - smartQueryStartedAt;
     } catch (error) {
       console.error("[EMRN Pulse] search query expansion failed", error);
     }
@@ -1181,18 +1313,33 @@ export async function searchProducts(input: ProductSearchInput) {
   let autocompleteHits: SearchHit[] = [];
 
   try {
-    const recallQueries = supplementalRecallQueries(rawQuery, smartQuery.search_query, smartQuery.fallback_terms);
+    const supabaseStartedAt = Date.now();
+    const knowledgeHints = await knowledgeSearchHintsForQueryAsync(rawQuery);
+    supabaseMs += Date.now() - supabaseStartedAt;
+    const recallQueries = Array.from(
+      new Set(
+        [
+          ...supplementalRecallQueries(rawQuery, smartQuery.search_query, smartQuery.fallback_terms),
+          ...(smartQuery.assisted_queries || []),
+          ...knowledgeHints,
+        ]
+          .map((query) => query.trim())
+          .filter((query) => query && query !== primaryQuery && query !== rawQuery)
+      )
+    ).slice(0, 10);
     const autocompleteQuery =
       rawQuery && rawQuery !== "*" && !input.filters
         ? input.language === "fr" || smartQuery.language === "fr"
           ? primaryQuery
           : normalizeCommonSearchTypos(rawQuery) || rawQuery
         : "";
+    const typesenseStartedAt = Date.now();
     const [autocompleteResult, primaryResult, ...recallResults] = (await Promise.all([
       autocompleteQuery ? searchSmartSearchAutocompleteHits(autocompleteQuery, input.limit || 8) : Promise.resolve([]),
       searchTypesenseProducts(primaryQuery, input),
       ...recallQueries.map((recallQuery) => searchTypesenseProducts(recallQuery, input)),
     ])) as [SearchHit[], TypesenseSearchResult, ...TypesenseSearchResult[]];
+    typesenseMs += Date.now() - typesenseStartedAt;
     autocompleteHits = autocompleteResult;
     result = primaryResult;
     supplementalResults = recallResults;
@@ -1207,7 +1354,9 @@ export async function searchProducts(input: ProductSearchInput) {
   );
   mergedHits = rankExactProductNameHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankMedicalBagHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankKnownProductFamilyHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankCprManikinHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankReplacementPartHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankAedHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankCommonProductTypeHits(mergedHits, rawQuery, smartQuery.search_query);
 
@@ -1215,11 +1364,21 @@ export async function searchProducts(input: ProductSearchInput) {
 
   if (!products.length && rawQuery && rawQuery !== "*" && primaryQuery !== rawQuery) {
     try {
+      const typesenseStartedAt = Date.now();
       result = await searchTypesenseProducts(rawQuery, input);
+      typesenseMs += Date.now() - typesenseStartedAt;
       const exactRankedHits = rankExactProductNameHits(result.hits || [], rawQuery, smartQuery.search_query);
       const rankedHits = rankCommonProductTypeHits(
         rankAedHits(
-          rankCprManikinHits(rankMedicalBagHits(exactRankedHits, rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query),
+          rankReplacementPartHits(
+            rankCprManikinHits(
+              rankKnownProductFamilyHits(rankMedicalBagHits(exactRankedHits, rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query),
+              rawQuery,
+              smartQuery.search_query
+            ),
+            rawQuery,
+            smartQuery.search_query
+          ),
           rawQuery,
           smartQuery.search_query
         ),
@@ -1235,16 +1394,32 @@ export async function searchProducts(input: ProductSearchInput) {
   }
 
   if (!products.length && input.query && input.query !== "*") {
+    const fallbackStartedAt = Date.now();
     products = await searchSmartSearchApiProducts(input.query, input.limit || 8);
+    fallbackMs += Date.now() - fallbackStartedAt;
   }
   if (!products.length && input.query && input.query !== "*" && smartQuery.search_query !== input.query) {
+    const fallbackStartedAt = Date.now();
     products = await searchSmartSearchApiProducts(smartQuery.search_query || input.query, input.limit || 8);
+    fallbackMs += Date.now() - fallbackStartedAt;
+  }
+  if (!products.length && smartQuery.assisted_queries?.length) {
+    for (const assistedQuery of smartQuery.assisted_queries) {
+      const fallbackStartedAt = Date.now();
+      products = await searchSmartSearchApiProducts(assistedQuery, input.limit || 8);
+      fallbackMs += Date.now() - fallbackStartedAt;
+      if (products.length) break;
+    }
   }
   if (!products.length && input.query && input.query !== "*") {
+    const fallbackStartedAt = Date.now();
     products = await searchBigCommerceProducts(smartQuery.search_query || input.query, input.limit || 6);
+    fallbackMs += Date.now() - fallbackStartedAt;
   }
   if (!products.length && input.query && input.query !== "*") {
+    const fallbackStartedAt = Date.now();
     const mcpMatches = await mcpSearchProducts(smartQuery.search_query || input.query);
+    fallbackMs += Date.now() - fallbackStartedAt;
     if (mcpMatches.available && mcpMatches.data?.length) {
       products = await withBackorderAvailability(mcpMatches.data.slice(0, input.limit || 6));
     }
@@ -1255,6 +1430,14 @@ export async function searchProducts(input: ProductSearchInput) {
     found: products.length || Number(result.found || 0),
     searchQuery: smartQuery.search_query || input.query,
     language: smartQuery.language,
+    timings: {
+      totalMs: Date.now() - searchStartedAt,
+      smartQueryMs,
+      supabaseMs,
+      openAiMs: smartQuery.timings?.openAiMs || 0,
+      typesenseMs,
+      fallbackMs,
+    },
   };
 }
 

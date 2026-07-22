@@ -1,5 +1,6 @@
 import { detectQueryLanguage, expandSearchQuery, getFallbackTerms, normalizeSearchText } from "./search-language";
 import { logAiUsage } from "./assistant/analytics";
+import { assistantFeatureEnabledAsync } from "./assistant/admin-config";
 
 export type SmartQueryResult = {
   original_query: string;
@@ -11,6 +12,12 @@ export type SmartQueryResult = {
   translator: "none" | "manual" | "openai" | "manual+openai";
   ai_status: "not_needed" | "missing_key" | "called" | "error";
   fallback_terms: string[];
+  assisted_queries: string[];
+  timings?: {
+    totalMs: number;
+    configMs?: number;
+    openAiMs?: number;
+  };
   redirect_url?: string;
 };
 
@@ -113,6 +120,22 @@ function buildManualQuery(original: string, expansions: string[], language: "en"
   return cleanSearchQuery(parts.filter(Boolean).join(" "));
 }
 
+async function aiSearchHelperEnabled() {
+  return assistantFeatureEnabledAsync("aiSearchHelperEnabled");
+}
+
+function shouldUseAiSearchHelper(original: string, language: "en" | "fr", looksNaturalLanguage: boolean, aiEnabled: boolean) {
+  if (!aiEnabled || language !== "en" || !looksNaturalLanguage) return false;
+  if (/\b[A-Z]{1,8}[-\s]?\d{3,}[A-Z0-9-]*\+?\b/.test(original)) return false;
+  return /\b(what|which|does|do|work|works|fit|fits|compatible|compatibility|replacement|part|accessory|pads?|battery|batteries|for|need|looking|find|show)\b/i.test(original);
+}
+
+function shouldUseFrenchAiSearchHelper(original: string, looksNaturalLanguage: boolean, aiEnabled: boolean) {
+  if (!aiEnabled || !looksNaturalLanguage) return false;
+  const normalized = normalizeSearchText(original);
+  return /\b(frx|zoll|philips|laerdal|prestan|qcpr|aed|dea|electrode|electrodes|pads?|batterie|batteries|pile|piles|compatible|remplacement|piece|pieces|accessoire|accessoires|pour)\b/i.test(normalized);
+}
+
 async function translateWithOpenAI(query: string, language: "en" | "fr") {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return { query: "", alternatives: [] as string[], status: "missing_key" as const };
@@ -122,7 +145,7 @@ async function translateWithOpenAI(query: string, language: "en" | "fr") {
     {
       role: "system",
       content:
-        "You translate healthcare ecommerce search queries into concise English search keywords for a Canadian medical supply website. Return ONLY JSON with keys english_query and alternatives. Preserve brand names, SKU-like strings, model numbers, sizes, quantities, and medical category meaning. Use common terms: manikin not mannequin, AED, CPR, blood pressure cuff, oxygen mask, wound dressing, syringe, catheter, gloves, shower chair.",
+        "You rewrite healthcare ecommerce search queries into concise English search keywords for a Canadian medical supply website. Return ONLY JSON with keys english_query and alternatives. Preserve brand names, SKU-like strings, model numbers, sizes, quantities, and medical category meaning. Include likely manufacturer model names, part numbers, accessory names, and common catalog terms when relevant, but keep each alternative short. Use common terms: manikin not mannequin, AED, CPR, blood pressure cuff, oxygen mask, wound dressing, syringe, catheter, gloves, shower chair.",
     },
     {
       role: "user",
@@ -131,7 +154,7 @@ async function translateWithOpenAI(query: string, language: "en" | "fr") {
   ];
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1400);
+  const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
     const res = await fetch("https://api.openai.com/v1/responses", {
@@ -173,6 +196,7 @@ async function translateWithOpenAI(query: string, language: "en" | "fr") {
 }
 
 export async function buildSmartSearchQuery(query: string): Promise<SmartQueryResult> {
+  const startedAt = Date.now();
   const original = cleanSearchQuery(query || "*");
   const cacheKey = original.toLowerCase();
   const cached = cache.get(cacheKey);
@@ -184,20 +208,31 @@ export async function buildSmartSearchQuery(query: string): Promise<SmartQueryRe
   let translated = buildManualQuery(original, manual.expansions, language);
   let translator: SmartQueryResult["translator"] = translated ? "manual" : "none";
   let aiStatus: SmartQueryResult["ai_status"] = "not_needed";
+  let assistedQueries: string[] = [];
+  let openAiMs = 0;
 
-  const looksNaturalLanguage = /^[a-zA-ZÀ-ÿ\s'-]+$/.test(original) && !/\d/.test(original);
+  const naturalLanguageCandidate = original.replace(/[?!.,"()/:]+/g, " ");
+  const looksNaturalLanguage = /^[a-zA-ZÀ-ÿ0-9\s'-]+$/.test(naturalLanguageCandidate);
+  const configStartedAt = Date.now();
+  const aiEnabled = await aiSearchHelperEnabled();
+  const configMs = Date.now() - configStartedAt;
   const shouldUseAI =
     original !== "*" &&
     original.length >= 3 &&
-    !manual.expansions.length &&
     looksNaturalLanguage &&
-    language === "fr";
+    ((language === "fr" && (!manual.expansions.length || aiEnabled || shouldUseFrenchAiSearchHelper(original, looksNaturalLanguage, aiEnabled))) ||
+      shouldUseAiSearchHelper(original, language, looksNaturalLanguage, aiEnabled));
 
   if (shouldUseAI) {
+    const openAiStartedAt = Date.now();
     const ai = await translateWithOpenAI(original, language);
+    openAiMs = Date.now() - openAiStartedAt;
     aiStatus = ai.status;
     if (ai.query) {
-      translated = cleanSearchQuery([ai.query, translated, ...ai.alternatives.slice(0, 6)].filter(Boolean).join(" "));
+      assistedQueries = Array.from(new Set([ai.query, ...ai.alternatives].map(cleanSearchQuery).filter(Boolean))).slice(0, 8);
+      translated = language === "fr"
+        ? cleanSearchQuery([ai.query, translated, ...ai.alternatives.slice(0, 6)].filter(Boolean).join(" "))
+        : translated;
       translator = translator === "manual" ? "manual+openai" : "openai";
     }
   }
@@ -205,6 +240,7 @@ export async function buildSmartSearchQuery(query: string): Promise<SmartQueryRe
   const fallbackTerms = Array.from(
     new Set([
       ...getFallbackTerms(original),
+      ...assistedQueries,
     ])
   ).slice(0, 8);
 
@@ -218,6 +254,12 @@ export async function buildSmartSearchQuery(query: string): Promise<SmartQueryRe
     translator,
     ai_status: aiStatus,
     fallback_terms: fallbackTerms,
+    assisted_queries: assistedQueries,
+    timings: {
+      totalMs: Date.now() - startedAt,
+      configMs,
+      openAiMs,
+    },
   };
 
   cache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });

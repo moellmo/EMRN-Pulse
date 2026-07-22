@@ -1,6 +1,15 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "./types";
+import {
+  logSupabaseAiUsage,
+  logSupabaseAnalyticsEvent,
+  logSupabaseQuoteRequest,
+  logSupabaseSupportRequest,
+  readSupabaseAdminData,
+  supabaseAdminConfigured,
+  supabaseAdminUrlHint,
+} from "./supabase-admin";
 
 const dataDir = path.join(process.cwd(), ".data", "assistant");
 
@@ -262,6 +271,7 @@ export async function testGoogleSheetsMirror() {
 
 export async function logAnalyticsEvent(event: AssistantAnalyticsEvent) {
   await appendJsonl("analytics.jsonl", event);
+  void logSupabaseAnalyticsEvent(event).catch((error) => console.warn("[EMRN Pulse] Supabase analytics log skipped", error));
   void mirrorToGoogleSheets({ kind: "analytics", row: event });
 }
 
@@ -271,6 +281,7 @@ export async function logQuoteRequest(request: QuoteRequest) {
     createdAt: new Date().toISOString(),
   };
   await appendJsonl("quotes.jsonl", row);
+  void logSupabaseQuoteRequest(row).catch((error) => console.warn("[EMRN Pulse] Supabase quote log skipped", error));
   await mirrorToGoogleSheets({ kind: "quote", row });
 }
 
@@ -280,6 +291,7 @@ export async function logSupportRequest(request: SupportRequest) {
     createdAt: new Date().toISOString(),
   };
   await appendJsonl("support.jsonl", row);
+  void logSupabaseSupportRequest(row).catch((error) => console.warn("[EMRN Pulse] Supabase support log skipped", error));
   await mirrorToGoogleSheets({ kind: "support", row });
 }
 
@@ -297,29 +309,34 @@ export async function logAiUsage(event: Omit<AssistantAiUsageEvent, "createdAt" 
       event.estimatedCostUsd ?? estimateOpenAiCostUsd(event.model, event.inputTokens, event.outputTokens),
   };
   await appendJsonl("ai-usage.jsonl", row);
+  void logSupabaseAiUsage(row).catch((error) => console.warn("[EMRN Pulse] Supabase AI usage log skipped", error));
   await mirrorToGoogleSheets({ kind: "ai_usage", row });
 }
 
 export async function readAssistantAdminData() {
-  const [localAnalytics, localQuotes, localSupport, localAiUsage, sheets] = await Promise.all([
+  const [localAnalytics, localQuotes, localSupport, localAiUsage, sheets, supabase] = await Promise.all([
     readJsonl<AssistantAnalyticsEvent>("analytics.jsonl"),
     readJsonl<QuoteRequest & { createdAt: string }>("quotes.jsonl"),
     readJsonl<SupportRequest & { createdAt: string }>("support.jsonl"),
     readJsonl<AssistantAiUsageEvent>("ai-usage.jsonl"),
     readGoogleSheetsAdminRows(),
+    readSupabaseAdminData(),
   ]);
-  const analytics = dedupeRows([...localAnalytics, ...(sheets?.analytics || [])]) as AssistantAnalyticsEvent[];
-  const quotes = dedupeRows([...localQuotes, ...(sheets?.quotes || [])]) as Array<QuoteRequest & { createdAt: string }>;
-  const support = dedupeRows([...localSupport, ...(sheets?.support || [])]) as Array<SupportRequest & { createdAt: string }>;
-  const aiUsage = dedupeRows([...localAiUsage, ...(sheets?.aiUsage || [])]) as AssistantAiUsageEvent[];
-  const source = sheets && (sheets.analytics.length || sheets.quotes.length || sheets.support.length || sheets.aiUsage.length)
-    ? localAnalytics.length || localQuotes.length || localSupport.length || localAiUsage.length
-      ? "local_and_google_sheets"
-      : "google_sheets"
-    : "local";
+  const analytics = dedupeRows([...localAnalytics, ...(sheets?.analytics || []), ...(supabase?.analytics || [])]) as AssistantAnalyticsEvent[];
+  const quotes = dedupeRows([...localQuotes, ...(sheets?.quotes || []), ...(supabase?.quotes || [])]) as Array<QuoteRequest & { createdAt: string }>;
+  const support = dedupeRows([...localSupport, ...(sheets?.support || []), ...(supabase?.support || [])]) as Array<SupportRequest & { createdAt: string }>;
+  const aiUsage = dedupeRows([...localAiUsage, ...(sheets?.aiUsage || []), ...(supabase?.aiUsage || [])]) as AssistantAiUsageEvent[];
+  const hasLocal = Boolean(localAnalytics.length || localQuotes.length || localSupport.length || localAiUsage.length);
+  const hasSheets = Boolean(sheets && (sheets.analytics.length || sheets.quotes.length || sheets.support.length || sheets.aiUsage.length));
+  const hasSupabase = Boolean(supabase && (supabase.analytics.length || supabase.quotes.length || supabase.support.length || supabase.aiUsage.length));
+  const source = [hasLocal ? "local" : "", hasSupabase ? "supabase" : "", hasSheets ? "google_sheets" : ""].filter(Boolean).join("_and_") || "local";
 
   const searches = analytics.filter((event) => event.type === "product_search");
   const failedSearches = analytics.filter((event) => event.type === "no_result_search" || event.type === "search_failure");
+  const knowledgeShadow = analytics.filter((event) => event.type === "knowledge_shadow");
+  const externalKnowledgeSources = analytics.filter((event) => event.type === "external_knowledge_sources");
+  const performanceEvents = analytics.filter(isPerformanceEvent);
+  const slowPerformanceEvents = performanceEvents.filter((event) => event.performance?.slow);
   const completedConversations = analytics.filter((event) => event.type === "conversation_completed");
   const monthPrefix = new Date().toISOString().slice(0, 7);
   const aiUsageThisMonth = aiUsage.filter((event) => event.createdAt.startsWith(monthPrefix));
@@ -342,6 +359,10 @@ export async function readAssistantAdminData() {
       noResultSearches: failedSearches.length,
       unansweredQuestions: analytics.filter((event) => event.type === "unanswered_question").length,
       productsRecommended: analytics.filter((event) => event.type === "product_recommended").length,
+      knowledgeShadowEvents: knowledgeShadow.length,
+      externalKnowledgeSourceEvents: externalKnowledgeSources.length,
+      assistantPerformanceEvents: performanceEvents.length,
+      slowAssistantResponses: slowPerformanceEvents.length,
       aiCallsThisMonth: aiUsageThisMonth.length,
       webSearchCallsThisMonth: webSearchUsageThisMonth.length,
       aiInputTokensThisMonth: sum(aiUsageThisMonth.map((event) => event.inputTokens)),
@@ -356,12 +377,20 @@ export async function readAssistantAdminData() {
         completedConversations.map((event) => ("messageCount" in event ? event.messageCount || 0 : 0))
       ),
       dataSource: source,
+      supabaseConfigured: supabaseAdminConfigured(),
+      supabaseUrl: supabaseAdminUrlHint(),
+      supabaseRows: (supabase?.analytics.length || 0) + (supabase?.quotes.length || 0) + (supabase?.support.length || 0) + (supabase?.aiUsage.length || 0),
+      supabaseReadError: supabase?.readError || "",
       sheetsConfigured: Boolean(sheets),
       sheetsWebhookUrl: googleSheetsWebhookUrlHint(),
       sheetsRows: (sheets?.analytics.length || 0) + (sheets?.quotes.length || 0) + (sheets?.support.length || 0) + (sheets?.aiUsage.length || 0),
       sheetsReadError: sheets?.readError || "",
     },
     failedSearches: failedSearches.slice(-100).reverse(),
+    knowledgeShadow: knowledgeShadow.slice(-100).reverse(),
+    externalKnowledgeSources: externalKnowledgeSources.slice(-100).reverse(),
+    performance: performanceEvents.slice(-100).reverse(),
+    slowPerformance: slowPerformanceEvents.slice(-100).reverse(),
     quoteLookups: analytics.filter((event) => event.type === "quote_lookup").slice(-100).reverse(),
     quotes: quotes.slice(-100).reverse(),
     support: support.slice(-100).reverse(),
@@ -377,6 +406,12 @@ function dedupeRows<T>(rows: T[]) {
     seen.add(key);
     return true;
   });
+}
+
+function isPerformanceEvent(event: AssistantAnalyticsEvent): event is AssistantAnalyticsEvent & {
+  performance: { slow?: boolean };
+} {
+  return event.type === "assistant_performance" && "performance" in event;
 }
 
 function topCounts(values: string[]) {

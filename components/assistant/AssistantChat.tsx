@@ -20,6 +20,7 @@ type UiText = {
   typing: string;
   retry: string;
   error: string;
+  disclaimer: string;
   proactivePrompt: string;
   proactiveDismiss: string;
   quickActions: Array<{ label: string; prompt: string; icon: "search" | "quote" | "box" | "truck" | "mail" }>;
@@ -74,6 +75,7 @@ const ui: Record<"en" | "fr", UiText> = {
     typing: "Meri is checking EMRN data...",
     retry: "Retry",
     error: "I’m sorry, I could not complete that request. Would you like me to send this to our support team?",
+    disclaimer: "Meri can make mistakes. Please verify compatibility, availability, and safety-critical details before purchase or use.",
     proactivePrompt: "Need help finding a product? I can help.",
     proactiveDismiss: "Dismiss help message",
     quickActions: [
@@ -102,6 +104,7 @@ const ui: Record<"en" | "fr", UiText> = {
     retry: "Réessayer",
     error:
       "Je suis désolée, je n’ai pas pu compléter cette demande. Voulez-vous que je l’envoie à notre équipe de support?",
+    disclaimer: "Meri peut faire des erreurs. Veuillez vérifier la compatibilité, la disponibilité et les détails critiques avant l’achat ou l’utilisation.",
     proactivePrompt: "Besoin d’aide pour trouver un produit? Je peux vous aider.",
     proactiveDismiss: "Masquer le message d’aide",
     quickActions: [
@@ -462,6 +465,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
             <Icon name="send" />
           </button>
         </form>
+        <p className="mt-2 text-center text-[11px] leading-snug text-[#6f7785]">{text.disclaimer}</p>
 
         <div className="emrn-pulse-language mt-3 flex items-center justify-center gap-5 text-sm text-[#171c26]">
           <button
