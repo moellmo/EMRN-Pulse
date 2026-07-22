@@ -13,6 +13,7 @@ export function PerformanceReviewedButton({ token, reviewedPerformanceKey, query
   const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
 
   async function markReviewed(event: MouseEvent<HTMLButtonElement>) {
+    const row = event.currentTarget.closest("article");
     setStatus("saving");
     try {
       const response = await fetch("/api/assistant/admin/performance-review", {
@@ -25,7 +26,7 @@ export function PerformanceReviewedButton({ token, reviewedPerformanceKey, query
       });
       if (!response.ok) throw new Error("Save failed");
       setStatus("done");
-      event.currentTarget.closest("article")?.remove();
+      row?.remove();
     } catch {
       setStatus("error");
     }

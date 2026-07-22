@@ -183,6 +183,12 @@ export type AssistantAnalyticsEvent =
         searchQuery?: string;
         answerPath?: string;
         answerPreview?: string;
+        proofSourceType?: string;
+        proofSourceUrls?: string[];
+        proofPartNumbers?: string[];
+        proofSearchTerms?: string[];
+        emrnMatchCount?: number;
+        emrnMatchedSkus?: string[];
         deployVersion?: string;
         slow?: boolean;
         openAiUsed?: boolean;

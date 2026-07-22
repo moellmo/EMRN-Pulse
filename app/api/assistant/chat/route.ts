@@ -1948,6 +1948,7 @@ function externalLookupSearchTerms(lookup: ExternalKnowledgeLookup) {
       ...externalLookupPartNumbers(lookup),
       lookup.exactProductName,
       ...lookup.searchTerms,
+      ...externalLookupPartNumbers(lookup).map((part) => `${lookup.exactProductName} ${part}`),
     ].map((item) => item.trim()).filter(Boolean))
   ).slice(0, 10);
 }
@@ -1958,7 +1959,7 @@ function externalLookupPartNumbers(lookup: ExternalKnowledgeLookup) {
       lookup.manufacturerPartNumbers.flatMap((value) => {
         const raw = String(value || "").trim();
         const extracted = raw.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/gi) || [];
-        return [raw, ...extracted].filter(Boolean);
+        return [raw, raw.replace(/[-\s]+/g, ""), ...extracted, ...extracted.map((part) => part.replace(/[-\s]+/g, ""))].filter(Boolean);
       })
     )
   ).slice(0, 12);
@@ -1996,14 +1997,34 @@ function externalLookupProductMatches(lookup: ExternalKnowledgeLookup, products:
 }
 
 async function findEmrnProductsForExternalLookup(lookup: ExternalKnowledgeLookup, language: "en" | "fr" | "unknown") {
-  const terms = externalLookupSearchTerms(lookup);
+  const partNumbers = externalLookupPartNumbers(lookup);
+  const terms = Array.from(
+    new Set([
+      ...externalLookupSearchTerms(lookup),
+      ...partNumbers.map((part) => part.replace(/^0+/, "")),
+      ...lookup.searchTerms.flatMap((term) => partNumbers.map((part) => `${term} ${part}`)),
+      ...brandFamilyRecoveryTerms(lookup),
+    ].map((term) => term.trim()).filter(Boolean))
+  ).slice(0, 18);
   const skuProducts = (
-    await Promise.all(externalLookupPartNumbers(lookup).map((sku) => searchBySKU(sku)))
+    await Promise.all(partNumbers.map((sku) => searchBySKU(sku)))
   ).flat();
   const searchProductsResults = (
     await Promise.all(terms.map((term) => searchProducts({ query: term, language, limit: 8 })))
   ).flatMap((result) => result.products);
   return externalLookupProductMatches(lookup, [...skuProducts, ...searchProductsResults]);
+}
+
+function brandFamilyRecoveryTerms(lookup: ExternalKnowledgeLookup) {
+  const text = [lookup.exactProductName, lookup.summary, ...lookup.searchTerms].join(" ");
+  const cleaned = text
+    .replace(/\b(compatible|compatibility|replacement|works?|fits?|pads?|airways?|lungs?|battery|batteries|with|for|the|and|or|item|product|part|parts)\b/gi, " ")
+    .replace(/[^a-z0-9+\-\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return [];
+  const tokens = cleaned.split(/\s+/).filter((token) => token.length >= 3).slice(0, 6);
+  return tokens.length >= 2 ? [tokens.join(" ")] : [];
 }
 
 function externalLookupCustomerAnswer(
@@ -3115,7 +3136,20 @@ async function handleAssistantPost(req: NextRequest) {
   }
   knowledgeMs = Date.now() - knowledgeStartedAt;
 
-  const logPerformance = async (answerPath: string, extra?: { openAiMs?: number; openAiUsed?: boolean; answerPreview?: string }) => {
+  const logPerformance = async (
+    answerPath: string,
+    extra?: {
+      openAiMs?: number;
+      openAiUsed?: boolean;
+      answerPreview?: string;
+      proofSourceType?: string;
+      proofSourceUrls?: string[];
+      proofPartNumbers?: string[];
+      proofSearchTerms?: string[];
+      emrnMatchCount?: number;
+      emrnMatchedSkus?: string[];
+    }
+  ) => {
     const totalMs = Date.now() - requestStartedAt;
     await logAnalyticsEvent({
       type: "assistant_performance",
@@ -3133,6 +3167,12 @@ async function handleAssistantPost(req: NextRequest) {
         searchQuery,
         answerPath,
         answerPreview: answerPreviewText(extra?.answerPreview || ""),
+        proofSourceType: extra?.proofSourceType,
+        proofSourceUrls: extra?.proofSourceUrls?.slice(0, 8),
+        proofPartNumbers: extra?.proofPartNumbers?.slice(0, 12),
+        proofSearchTerms: extra?.proofSearchTerms?.slice(0, 12),
+        emrnMatchCount: extra?.emrnMatchCount,
+        emrnMatchedSkus: extra?.emrnMatchedSkus?.slice(0, 12),
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
         openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0),
@@ -3505,7 +3545,17 @@ async function handleAssistantPost(req: NextRequest) {
     if (externalLookup) {
       const emrnLookupProducts = await findEmrnProductsForExternalLookup(externalLookup, language);
       const externalAnswer = externalLookupCustomerAnswer(externalLookup, emrnLookupProducts, language);
-      await logPerformance("external_knowledge_structured", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true, answerPreview: externalAnswer });
+      await logPerformance("external_knowledge_structured", {
+        openAiMs: Date.now() - openAiStartedAt,
+        openAiUsed: true,
+        answerPreview: externalAnswer,
+        proofSourceType: externalLookup.sourceType,
+        proofSourceUrls: externalLookup.sourceUrls,
+        proofPartNumbers: externalLookupPartNumbers(externalLookup),
+        proofSearchTerms: externalLookupSearchTerms(externalLookup),
+        emrnMatchCount: emrnLookupProducts.length,
+        emrnMatchedSkus: emrnLookupProducts.map((product) => product.sku).filter(Boolean),
+      });
       await logAnalyticsEvent({
         type: "conversation_completed",
         sessionId,
@@ -3534,7 +3584,17 @@ async function handleAssistantPost(req: NextRequest) {
     if (extractedLookup) {
       const emrnLookupProducts = await findEmrnProductsForExternalLookup(extractedLookup, language);
       const extractedAnswer = externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language);
-      await logPerformance("external_knowledge_extracted", { openAiMs: Date.now() - openAiStartedAt, openAiUsed: true, answerPreview: extractedAnswer });
+      await logPerformance("external_knowledge_extracted", {
+        openAiMs: Date.now() - openAiStartedAt,
+        openAiUsed: true,
+        answerPreview: extractedAnswer,
+        proofSourceType: extractedLookup.sourceType,
+        proofSourceUrls: extractedLookup.sourceUrls,
+        proofPartNumbers: externalLookupPartNumbers(extractedLookup),
+        proofSearchTerms: externalLookupSearchTerms(extractedLookup),
+        emrnMatchCount: emrnLookupProducts.length,
+        emrnMatchedSkus: emrnLookupProducts.map((product) => product.sku).filter(Boolean),
+      });
       await logAnalyticsEvent({
         type: "conversation_completed",
         sessionId,

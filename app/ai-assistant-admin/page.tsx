@@ -29,6 +29,12 @@ type PerformanceRow = AdminRow & {
     searchQuery?: string;
     answerPath?: string;
     answerPreview?: string;
+    proofSourceType?: string;
+    proofSourceUrls?: string[];
+    proofPartNumbers?: string[];
+    proofSearchTerms?: string[];
+    emrnMatchCount?: number;
+    emrnMatchedSkus?: string[];
     deployVersion?: string;
     slow?: boolean;
     openAiUsed?: boolean;
@@ -146,7 +152,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 ) : null}
               </div>
             ) : (
-              <AssistantAdminTabs labels={["Overview", "Performance", "Teach", "Settings", "Logs"]} initialIndex={teachDraft ? 2 : 0}>
+              <AssistantAdminTabs labels={["Overview", "QA Queue", "Performance", "Teach", "Settings", "Logs"]} initialIndex={teachDraft ? 3 : 0}>
                 <div>
                   <section className="grid gap-4 md:grid-cols-4">
                     {Object.entries(data.metrics)
@@ -166,6 +172,8 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                     <Panel title="Support Handoffs" rows={data.support} />
                   </section>
                 </div>
+
+                <QaQueuePanel rows={data.performance || []} token={adminToken} fullHistory={fullHistory} />
 
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
@@ -296,6 +304,64 @@ function PerformancePanel({
   );
 }
 
+function QaQueuePanel({ rows, token, fullHistory }: { rows: PerformanceRow[]; token: string; fullHistory: boolean }) {
+  const sortedRows = sortRowsByTime(rows);
+  const groups = [
+    {
+      title: "Needs Teaching",
+      help: "Wrong, unsure, missing product, or no answer text. These are the best rows to teach first.",
+      rows: sortedRows.filter((row) => performanceReviewHint(row, cleanAdminAnswerPreview(String(row.performance?.answerPreview || ""))).needsTeaching).slice(0, 20),
+    },
+    {
+      title: "Can’t Confirm",
+      help: "Meri could not prove the answer. Teach if EMRN has the fact, SKU, or compatible product.",
+      rows: sortedRows.filter((row) => /can.t confirm|could not confirm|i do not see|item-sourcing/i.test(String(row.performance?.answerPreview || ""))).slice(0, 20),
+    },
+    {
+      title: "Slow But Answered",
+      help: "The answer may be fine, but repeated slow questions should be taught or optimized.",
+      rows: sortedRows.filter((row) => {
+        const answer = cleanAdminAnswerPreview(String(row.performance?.answerPreview || ""));
+        const hint = performanceReviewHint(row, answer);
+        return Number(row.performance?.totalMs || 0) >= 2500 && answer && !hint.needsTeaching;
+      }).slice(0, 20),
+    },
+    {
+      title: "OpenAI Used",
+      help: "These cost money and may be slower. Teach recurring good answers so Meri can answer from EMRN first.",
+      rows: sortedRows.filter((row) => row.performance?.openAiUsed).slice(0, 20),
+    },
+  ];
+
+  return (
+    <section className="grid gap-6 xl:grid-cols-2">
+      {groups.map((group) => (
+        <div key={group.title} className="rounded-md border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="text-lg font-semibold">{group.title}</h2>
+            <p className="mt-1 text-xs text-slate-500">{group.help}</p>
+          </div>
+          <div className="max-h-[680px] overflow-y-auto">
+            {group.rows.length ? (
+              group.rows.map((row, index) => (
+                <PerformanceCard key={`${group.title}-${row.createdAt}-${index}`} row={row} compact token={token} fullHistory={fullHistory} />
+              ))
+            ) : (
+              <div className="p-4 text-sm text-slate-500">No rows in this bucket right now.</div>
+            )}
+          </div>
+        </div>
+      ))}
+      <div className="rounded-md border border-slate-200 bg-white p-4 xl:col-span-2">
+        <h2 className="text-lg font-semibold">Reviewed Hidden</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Rows you mark Reviewed are hidden from QA Queue, Slow Questions, and Recent Timings. They stay in the raw logs for history.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function PerformanceCard({ row, compact, token, fullHistory }: { row: PerformanceRow; compact: boolean; token: string; fullHistory: boolean }) {
   const perf = row.performance || {};
   const totalMs = Number(perf.totalMs || 0);
@@ -305,6 +371,7 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
   const knowledgeMs = Number(perf.knowledgeMs || 0);
   const route = String(perf.answerPath || "unknown");
   const question = rowQuery(row) || "Unknown question";
+  const questionLabel = quickActionQuestionLabel(question);
   const answerPreview = cleanAdminAnswerPreview(String(perf.answerPreview || ""));
   const review = performanceReviewHint(row, answerPreview);
   const deployVersion = String(perf.deployVersion || "");
@@ -339,7 +406,7 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
       <div className="mt-3 rounded-md border border-slate-200 bg-white">
         <div className="grid gap-px bg-slate-200 sm:grid-cols-2">
           <div className="bg-slate-50 p-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer asked</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{questionLabel}</div>
             <div className="mt-1 text-sm font-semibold text-slate-950">{question}</div>
           </div>
           <div className="bg-slate-50 p-3">
@@ -361,7 +428,20 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
         <HumanMetric label="Products found" value={String(perf.productCount ?? 0)} />
         <HumanMetric label="Search used" value={String(perf.searchQuery || rowQuery(row) || "none").slice(0, 80)} />
         <HumanMetric label="Deploy" value={deployVersion ? shortId(deployVersion) : "not logged"} />
+        {perf.proofSourceType ? <HumanMetric label="Proof source" value={humanProofSource(String(perf.proofSourceType))} /> : null}
+        {typeof perf.emrnMatchCount === "number" ? <HumanMetric label="EMRN match" value={`${perf.emrnMatchCount} found${perf.emrnMatchedSkus?.length ? `: ${perf.emrnMatchedSkus.join(", ")}` : ""}`} /> : null}
       </div>
+
+      {perf.proofSourceUrls?.length || perf.proofPartNumbers?.length || perf.proofSearchTerms?.length ? (
+        <details className="mt-3 rounded bg-slate-50 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-slate-600">Proof and recovery details</summary>
+          <div className="mt-2 grid gap-3 text-sm text-slate-700 md:grid-cols-3">
+            <ProofList title="Where Meri checked" items={perf.proofSourceUrls || []} />
+            <ProofList title="Part numbers found" items={perf.proofPartNumbers || []} />
+            <ProofList title="EMRN searches tried" items={perf.proofSearchTerms || []} />
+          </div>
+        </details>
+      ) : null}
 
       {!compact ? (
         <>
@@ -392,6 +472,23 @@ function HumanMetric({ label, value }: { label: string; value: string }) {
     <div className="rounded bg-slate-50 p-3">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 text-sm font-semibold text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function ProofList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
+      {items.length ? (
+        <ul className="mt-1 space-y-1">
+          {items.slice(0, 8).map((item) => (
+            <li key={item} className="break-words text-xs">{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mt-1 text-xs text-slate-500">None logged.</div>
+      )}
     </div>
   );
 }
@@ -509,6 +606,30 @@ function rowQuery(row: AdminRow) {
 
 function cleanAdminAnswerPreview(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function quickActionQuestionLabel(question: string) {
+  if (/^I have a product question about compatibility, parts, or which item fits$/i.test(question)) return "Customer clicked quick button";
+  if (/^Find a product$/i.test(question)) return "Customer clicked quick button";
+  if (/^I need a quote$/i.test(question)) return "Customer clicked quick button";
+  if (/^Look up a quote$/i.test(question)) return "Customer clicked quick button";
+  if (/^Reorder my last order$/i.test(question)) return "Customer clicked quick button";
+  if (/^Find my invoice or receipt$/i.test(question)) return "Customer clicked quick button";
+  if (/^Can you check availability\?$/i.test(question)) return "Customer clicked quick button";
+  if (/^Check order status$/i.test(question)) return "Customer clicked quick button";
+  if (/^Contact support$/i.test(question)) return "Customer clicked quick button";
+  return "Customer asked";
+}
+
+function humanProofSource(value: string) {
+  const labels: Record<string, string> = {
+    manufacturer: "Manufacturer",
+    supplier_catalog: "Supplier/catalog",
+    emrn: "EMRN",
+    mixed: "Mixed sources",
+    unknown: "Unknown",
+  };
+  return labels[value] || value.replace(/_/g, " ");
 }
 
 function performanceReviewHint(row: PerformanceRow, answerPreview: string) {
