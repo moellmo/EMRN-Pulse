@@ -185,10 +185,15 @@ function hasFamilyConflict(normalizedQuery: string, value: string) {
   const itemLittle = littleFamilies.filter((family) => itemFamilies.has(family));
   if (queryLittle.length && itemLittle.length && !queryLittle.some((family) => itemFamilies.has(family))) return true;
 
-  const philipsFamilies = ["frx", "onsite"];
+  const philipsFamilies = ["philips", "frx", "onsite"];
   const queryPhilips = philipsFamilies.filter((family) => queryFamilies.has(family));
   const itemPhilips = philipsFamilies.filter((family) => itemFamilies.has(family));
-  return Boolean(queryPhilips.length && itemPhilips.length && !queryPhilips.some((family) => itemFamilies.has(family)));
+  if (queryPhilips.length && itemPhilips.length && !queryPhilips.some((family) => itemFamilies.has(family))) return true;
+
+  const aedBrands = ["philips", "zoll", "stryker", "physio-control"];
+  const queryAedBrands = aedBrands.filter((brand) => queryFamilies.has(brand));
+  const itemAedBrands = aedBrands.filter((brand) => itemFamilies.has(brand));
+  return Boolean(queryAedBrands.length && itemAedBrands.length && !queryAedBrands.some((brand) => itemFamilies.has(brand)));
 }
 
 function familyTokens(value: string) {
@@ -197,6 +202,10 @@ function familyTokens(value: string) {
   if (/\blittle\s+baby\b/.test(value)) families.add("little baby");
   if (/\blittle\s+anne\b/.test(value)) families.add("little anne");
   if (/\bfrx\b/.test(value)) families.add("frx");
+  if (/\bphilips\b/.test(value)) families.add("philips");
+  if (/\bzoll\b/.test(value)) families.add("zoll");
+  if (/\bstryker\b/.test(value)) families.add("stryker");
+  if (/\bphysio[-\s]?control\b/.test(value)) families.add("physio-control");
   if (/\b(?:onsite|heartstart\s+onsite|hs1)\b/.test(value)) families.add("onsite");
   return families;
 }

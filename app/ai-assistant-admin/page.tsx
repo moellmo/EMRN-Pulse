@@ -26,6 +26,7 @@ type PerformanceRow = AdminRow & {
     productCount?: number;
     searchQuery?: string;
     answerPath?: string;
+    deployVersion?: string;
     slow?: boolean;
     openAiUsed?: boolean;
     supabaseUsed?: boolean;
@@ -216,12 +217,16 @@ function Panel({ title, rows }: { title: string; rows: AdminRow[] }) {
 }
 
 function PerformancePanel({ title, rows, emptyText, compact = false }: { title: string; rows: PerformanceRow[]; emptyText: string; compact?: boolean }) {
+  const sortedRows = sortRowsByTime(rows);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
-      <h2 className="border-b border-slate-200 px-4 py-3 text-lg font-semibold">{title}</h2>
+      <div className="border-b border-slate-200 px-4 py-3">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <div className="mt-1 text-xs text-slate-500">Newest first · Eastern time</div>
+      </div>
       <div className="max-h-[620px] overflow-y-auto">
-        {rows.length ? (
-          rows.slice(0, compact ? 12 : 25).map((row, index) => <PerformanceCard key={index} row={row} compact={compact} />)
+        {sortedRows.length ? (
+          sortedRows.slice(0, compact ? 12 : 25).map((row, index) => <PerformanceCard key={`${row.createdAt}-${index}`} row={row} compact={compact} />)
         ) : (
           <div className="p-4 text-sm text-slate-500">{emptyText}</div>
         )}
@@ -238,6 +243,7 @@ function PerformanceCard({ row, compact }: { row: PerformanceRow; compact: boole
   const supabaseMs = Number(perf.supabaseMs || 0);
   const knowledgeMs = Number(perf.knowledgeMs || 0);
   const route = String(perf.answerPath || "unknown");
+  const deployVersion = String(perf.deployVersion || "");
   const rating = totalMs >= 5000 ? "Very slow" : totalMs >= 2500 ? "Slow" : totalMs >= 1200 ? "Okay" : "Fast";
   const ratingClass =
     rating === "Very slow"
@@ -254,7 +260,7 @@ function PerformanceCard({ row, compact }: { row: PerformanceRow; compact: boole
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="font-semibold text-slate-950">{rowQuery(row) || "Unknown question"}</div>
-          <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · {row.language || "unknown"}</div>
+          <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · {row.language || "unknown"} · session {shortId("sessionId" in row ? row.sessionId : undefined)}</div>
         </div>
         <span className={`rounded px-2 py-1 text-xs font-semibold ${ratingClass}`}>{rating}</span>
       </div>
@@ -264,6 +270,8 @@ function PerformanceCard({ row, compact }: { row: PerformanceRow; compact: boole
         <HumanMetric label="Answer route" value={humanAnswerPath(route)} />
         <HumanMetric label="OpenAI used" value={perf.openAiUsed ? "Yes" : "No"} />
         <HumanMetric label="Products found" value={String(perf.productCount ?? 0)} />
+        <HumanMetric label="Search used" value={String(perf.searchQuery || rowQuery(row) || "none").slice(0, 80)} />
+        <HumanMetric label="Deploy" value={deployVersion ? shortId(deployVersion) : "not logged"} />
       </div>
 
       {!compact ? (
@@ -315,11 +323,12 @@ function TimingBar({ label, value, total }: { label: string; value: number; tota
 }
 
 function AiUsagePanel({ rows }: { rows: AssistantAiUsageEvent[] }) {
+  const sortedRows = sortRowsByTime(rows);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
       <h2 className="border-b border-slate-200 px-4 py-3 text-lg font-semibold">AI Usage</h2>
       <div className="max-h-[520px] overflow-y-auto">
-        {rows.length ? rows.slice(0, 20).map((row, index) => (
+        {sortedRows.length ? sortedRows.slice(0, 20).map((row, index) => (
           <article key={index} className="border-b border-slate-100 p-4">
             <div className="font-semibold text-slate-950">{humanFeature(row.feature)} · {row.model}</div>
             <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · {row.status || "called"}</div>
@@ -337,11 +346,12 @@ function AiUsagePanel({ rows }: { rows: AssistantAiUsageEvent[] }) {
 }
 
 function ExternalSourcesPanel({ rows }: { rows: AdminRow[] }) {
+  const sortedRows = sortRowsByTime(rows);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
       <h2 className="border-b border-slate-200 px-4 py-3 text-lg font-semibold">External Source Checks</h2>
       <div className="max-h-[520px] overflow-y-auto">
-        {rows.length ? rows.slice(0, 20).map((row, index) => (
+        {sortedRows.length ? sortedRows.slice(0, 20).map((row, index) => (
           <article key={index} className="border-b border-slate-100 p-4">
             <div className="font-semibold text-slate-950">{rowQuery(row) || "External knowledge check"}</div>
             <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · customer links hidden</div>
@@ -366,11 +376,12 @@ function ExternalSourcesPanel({ rows }: { rows: AdminRow[] }) {
 }
 
 function KnowledgeShadowPanel({ rows }: { rows: AdminRow[] }) {
+  const sortedRows = sortRowsByTime(rows);
   return (
     <div className="rounded-md border border-slate-200 bg-white">
       <h2 className="border-b border-slate-200 px-4 py-3 text-lg font-semibold">Knowledge Checks</h2>
       <div className="max-h-[520px] overflow-y-auto">
-        {rows.length ? rows.slice(0, 20).map((row, index) => (
+        {sortedRows.length ? sortedRows.slice(0, 20).map((row, index) => (
           <article key={index} className="border-b border-slate-100 p-4">
             <div className="font-semibold text-slate-950">{rowQuery(row) || "Knowledge check"}</div>
             <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)}</div>
@@ -418,11 +429,23 @@ function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("en-CA", {
+    timeZone: "America/Toronto",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
   });
+}
+
+function sortRowsByTime<T extends { createdAt?: string }>(rows: T[]) {
+  return [...rows].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+}
+
+function shortId(value?: string) {
+  if (!value) return "unknown";
+  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 }
 
 function humanAnswerPath(value: string) {
@@ -431,6 +454,8 @@ function humanAnswerPath(value: string) {
     approved_knowledge: "Approved taught answer",
     openai_detail: "OpenAI verified answer",
     external_knowledge: "External knowledge verified",
+    external_knowledge_structured: "External structured + EMRN search",
+    external_knowledge_extracted: "External answer extracted + EMRN search",
     external_knowledge_off: "External knowledge off",
     product_results: "Product search results",
     single_product: "One product found",

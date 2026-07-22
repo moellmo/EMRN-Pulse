@@ -919,6 +919,7 @@ function escapeRegExp(value: string) {
 function cleanProductQuery(text: string) {
   return String(text || "")
     .replace(/\b(no,?\s+)?(do you have|do have|do u have|so you have|you have|do you carry|can you find|find me|find|search for|search|show me|how about|what about|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|i would like|we would like|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
+    .replace(/\b(what|which)\s+((?:adult|pediatric|paediatric|replacement|training)\s+)?(pads?|padz|electrodes?)\s+(?:work|works|fit|fits|go|goes)\s+with\b/gi, "$1 $2$3 for ")
     .replace(/\b(no|so|a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits|to|also|add|buy|purchase|order|get|take)\b/gi, " ")
     .replace(/[?!.]+/g, " ")
     .replace(/\s+/g, " ")
@@ -939,6 +940,21 @@ function hasProductWordsBeyondSku(text: string, skuCandidates: string[]) {
     .filter((word) => !/^(sku|part|item|product|produit|number|model)$/i.test(word));
 
   return words.length > 0;
+}
+
+function aedAccessorySkuHints(text: string) {
+  const normalized = normalizeSearchText(text);
+  const asksForPads = /\b(pads?|padz|electrodes?|électrodes?)\b/i.test(text);
+  if (!asksForPads) return [];
+
+  if (/\bzoll\b/.test(normalized) && /\baed\s+plus\b/.test(normalized)) {
+    if (/\b(pediatric|paediatric|child|children|kid|kids|pedi)\b/.test(normalized)) return ["8900-0810-01"];
+    return ["8900-0800-01", "8900-0810-01"];
+  }
+
+  if (/\bphilips\b/.test(normalized) && /\bfrx\b/.test(normalized)) return ["989803139261"];
+
+  return [];
 }
 
 function looksLikeQuoteDetailsReply(text: string) {
@@ -2890,6 +2906,7 @@ async function handleAssistantPost(req: NextRequest) {
       ? await productsFromPageContext(pageContext, language)
       : [];
   const skuCandidates = extractSkuCandidates(latest);
+  const aedAccessorySkus = !skuCandidates.length ? aedAccessorySkuHints(latest) : [];
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !isProductDetailIntent(latest) && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
@@ -2930,7 +2947,9 @@ async function handleAssistantPost(req: NextRequest) {
     : [];
   let searchQuery = pageProductsForCart.length
     ? pageProductsForCart[0].sku || pageProductsForCart[0].name
-    : skuCandidates.length
+    : aedAccessorySkus.length
+      ? aedAccessorySkus.join(", ")
+      : skuCandidates.length
       ? skuCandidates.join(", ")
       : rememberedContextProducts.length
         ? searchQueryForLatest(messages, latest, rememberedContextProducts)
@@ -2970,6 +2989,7 @@ async function handleAssistantPost(req: NextRequest) {
         productCount: 0,
         searchQuery,
         answerPath: "approved_knowledge",
+        deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500,
         openAiUsed: false,
         supabaseUsed: true,
@@ -2998,6 +3018,18 @@ async function handleAssistantPost(req: NextRequest) {
   };
   if (pageProductsForCart.length) {
     searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
+  } else if (aedAccessorySkus.length) {
+    const skuProducts = (
+      await Promise.all(
+        aedAccessorySkus.map(async (sku) => {
+          const matches = await searchBySKU(sku);
+          return matches;
+        })
+      )
+    ).flat();
+    searchResult = skuProducts.length
+      ? { products: skuProducts, found: skuProducts.length, searchQuery: aedAccessorySkus.join(", "), language }
+      : await searchProducts({ query: searchQuery, language, limit: 8 });
   } else if (skuCandidates.length) {
     const skuProducts = (
       await Promise.all(
@@ -3089,6 +3121,7 @@ async function handleAssistantPost(req: NextRequest) {
         productCount: products.length,
         searchQuery,
         answerPath,
+        deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
         slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
         openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0),
         supabaseUsed: Boolean((searchTiming.supabaseMs || 0) > 0),
@@ -3358,6 +3391,7 @@ async function handleAssistantPost(req: NextRequest) {
     }
     const trustedCompatibilitySkus = Array.from(
       new Set([
+        ...aedAccessorySkus,
         ...skuCandidates,
         ...approvedKnowledgeMatches
           .flatMap((item) => knowledgeRuleSkus(item))
