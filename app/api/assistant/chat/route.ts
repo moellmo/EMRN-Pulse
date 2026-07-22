@@ -1541,6 +1541,20 @@ function valueAfterLabel(text: string, label: string) {
   );
 }
 
+function sentenceContaining(text: string, pattern: RegExp) {
+  const cleaned = String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "";
+  return cleaned
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .find((sentence) => pattern.test(sentence))
+    ?.replace(/\s+/g, " ")
+    .slice(0, 220) || "";
+}
+
 function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
   const text = product.description || "";
   const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity)\b/i.test(question);
@@ -1549,6 +1563,8 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const wantsAvailability = /\b(availability|available|in stock|stock|ships|lead time)\b/i.test(question);
   const wantsPackage = /\b(how\s+many|box|boxes|pack|package|case|count|per box|per pack)\b/i.test(question);
   const wantsSoldBy = /\b(who\s+makes|who\s+sells|sold\s+by|manufacturer|brand)\b/i.test(question);
+  const wantsOxygenStorage = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|tank|cylinder|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene|oxygène|oxygene)\b/i.test(question) &&
+    /\b(oxygen|o2|tank|cylinder|oxygène|oxygene|réservoir|reservoir|cylindre)\b/i.test(question);
   const lines: string[] = [];
 
   if (wantsPrice && product.price) {
@@ -1573,6 +1589,23 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   if (wantsColor) {
     const color = valueAfterLabel(text, "Color") || valueAfterLabel(text, "Colour");
     if (color) lines.push(language === "fr" ? `Couleur: ${color}` : `Color: ${color}`);
+  }
+
+  if (wantsOxygenStorage) {
+    const oxygenSentence = sentenceContaining(text, /\b(oxygen|o2|tank|cylinder)\b/i);
+    if (oxygenSentence) {
+      lines.push(
+        language === "fr"
+          ? `Oxygène: oui. Détail EMRN trouvé: “${oxygenSentence}”`
+          : `Oxygen storage: yes. EMRN detail found: “${oxygenSentence}”`
+      );
+    } else {
+      lines.push(
+        language === "fr"
+          ? "Oxygène: je ne vois pas de mention claire d’un réservoir/cylindre d’oxygène dans les détails EMRN fournis pour ce produit."
+          : "Oxygen storage: I do not see a clear oxygen tank/cylinder mention in the supplied EMRN details for this product."
+      );
+    }
   }
 
   if (wantsSize) {

@@ -76,6 +76,13 @@ const tests: TestCase[] = [
     expect: ["Oui", "particuliers", "commandés en ligne"],
   },
   {
+    name: "G3 Oxygen Storage Detail",
+    description: "Product page/SKU questions about oxygen storage should answer the detail, not just show a product card.",
+    language: "en",
+    messages: [{ role: "user", content: "can this G35006TK+ hold an oxygen tank" }],
+    expect: ["Oxygen storage", "EMRN detail", "G35006TK+"],
+  },
+  {
     name: "Compatibility Fallback",
     description: "Compatibility answers should use a structured confidence label.",
     language: "en",
