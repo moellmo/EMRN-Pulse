@@ -174,6 +174,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 </div>
 
                 <QaQueuePanel rows={data.performance || []} token={adminToken} fullHistory={fullHistory} />
+                <SuggestedLiveTestsPanel token={adminToken} />
 
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
@@ -366,6 +367,50 @@ function QaQueuePanel({ rows, token, fullHistory }: { rows: PerformanceRow[]; to
   );
 }
 
+function SuggestedLiveTestsPanel({ token }: { token: string }) {
+  const tests = [
+    { group: "AED pads", query: "What AED pads work with Philips FRx?" },
+    { group: "AED pads", query: "What pediatric pads work with ZOLL AED Plus?" },
+    { group: "Batteries", query: "What battery works with Philips HeartStart FRx AED?" },
+    { group: "Batteries", query: "What replacement battery fits ZOLL AED Plus?" },
+    { group: "Lungs / airways", query: "Do Laerdal Little Junior QCPR replacement airways work with Little Junior QCPR?" },
+    { group: "Lungs / airways", query: "What replacement lungs fit Laerdal Little Anne QCPR?" },
+    { group: "SKU searches", query: "G35004BU+" },
+    { group: "SKU searches", query: "989803139261" },
+    { group: "French terms", query: "électrodes pour Philips FRx" },
+    { group: "French terms", query: "batterie pour défibrillateur Philips FRx" },
+    { group: "Typo searches", query: "hat AED pads work with Philips FRx?" },
+    { group: "Typo searches", query: "maniknns qcpr" },
+    { group: "No-match quote/source", query: "G35004OR" },
+    { group: "No-match quote/source", query: "does the orange G3 oxygen battery cartridge fit Philips FRx?" },
+  ];
+
+  return (
+    <section className="mt-6 rounded-md border border-slate-200 bg-white">
+      <div className="border-b border-slate-200 px-4 py-3">
+        <h2 className="text-lg font-semibold">Suggested Live Tests</h2>
+        <p className="mt-1 text-xs text-slate-500">Use these after deploy to check pads, batteries, replacement parts, SKUs, French, typos, and no-match/source cases.</p>
+      </div>
+      <div className="grid gap-px bg-slate-100 md:grid-cols-2">
+        {tests.map((test) => (
+          <div key={`${test.group}-${test.query}`} className="flex items-start justify-between gap-3 bg-white p-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{test.group}</div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">{test.query}</div>
+            </div>
+            <a
+              href={`/ai-assistant-test?${new URLSearchParams({ ...(token ? { token } : {}), q: test.query }).toString()}`}
+              className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Retest
+            </a>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function PerformanceCard({ row, compact, token, fullHistory }: { row: PerformanceRow; compact: boolean; token: string; fullHistory: boolean }) {
   const perf = row.performance || {};
   const totalMs = Number(perf.totalMs || 0);
@@ -378,6 +423,8 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
   const questionLabel = quickActionQuestionLabel(question);
   const answerPreview = cleanAdminAnswerPreview(String(perf.answerPreview || ""));
   const review = performanceReviewHint(row, answerPreview);
+  const reasons = qaReasonsForRow(row, answerPreview);
+  const teaching = teachingSuggestionForRow(row, answerPreview);
   const deployVersion = String(perf.deployVersion || "");
   const rating = totalMs >= 5000 ? "Very slow" : totalMs >= 2500 ? "Slow" : totalMs >= 1200 ? "Okay" : "Fast";
   const ratingClass =
@@ -426,6 +473,23 @@ function PerformanceCard({ row, compact, token, fullHistory }: { row: Performanc
         </div>
         <div className={`border-t border-slate-200 p-3 text-sm ${review.needsTeaching ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-900"}`}>
           <span className="font-semibold">{review.label}:</span> {review.reason}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="rounded bg-slate-50 p-3 text-sm text-slate-700">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Why this is here</div>
+          <ul className="mt-2 space-y-1">
+            {reasons.map((reason) => <li key={reason}>{reason}</li>)}
+          </ul>
+        </div>
+        <div className="rounded bg-slate-50 p-3 text-sm text-slate-700">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Suggested teaching</div>
+          <div className="mt-2 font-semibold text-slate-900">{teaching.typeLabel}</div>
+          <div className="mt-1">{teaching.reason}</div>
+          {teaching.fields.length ? (
+            <div className="mt-2 text-xs text-slate-600">{teaching.fields.join(" · ")}</div>
+          ) : null}
         </div>
       </div>
 
@@ -657,6 +721,89 @@ function humanProofSource(value: string) {
   return labels[value] || value.replace(/_/g, " ");
 }
 
+function qaReasonsForRow(row: PerformanceRow, answerPreview: string) {
+  const perf = row.performance || {};
+  const reasons: string[] = [];
+  const query = rowQuery(row);
+  const route = String(perf.answerPath || "");
+
+  if (!answerPreview) reasons.push("Older row: Meri's answer was not logged yet.");
+  if (/can.t confirm|could not confirm|i do not see|item-sourcing|send this to support/i.test(answerPreview)) reasons.push("Meri was unsure or moved toward support/sourcing.");
+  if (perf.openAiUsed) reasons.push("OpenAI was used, so this may be slower or worth teaching if it repeats.");
+  if (Number(perf.totalMs || 0) >= 2500) reasons.push(`Slow answer: ${formatMs(Number(perf.totalMs || 0))}.`);
+  if (route.includes("no_products") || Number(perf.productCount || 0) === 0) reasons.push("No exact EMRN product was found in the logged result.");
+  if (/\b(compatible|compatibility|fit|fits|work with|works with|replacement|pads?|airways?|lungs?|batter)/i.test(query)) reasons.push("Question looked like product compatibility or replacement-part help.");
+  if (typeof perf.emrnMatchCount === "number") reasons.push(`External recovery found ${perf.emrnMatchCount} EMRN match${perf.emrnMatchCount === 1 ? "" : "es"}.`);
+  if (isShortFollowUp(query)) reasons.push("This looks like a customer follow-up, not a standalone product question.");
+  if (quickActionQuestionLabel(query) === "Customer clicked quick button") reasons.push("This came from a starter button click.");
+  if (!reasons.length) reasons.push("No obvious issue detected; review only if the answer is wrong or incomplete.");
+  return reasons.slice(0, 5);
+}
+
+function teachingSuggestionForRow(row: PerformanceRow, answerPreview: string) {
+  const perf = row.performance || {};
+  const query = rowQuery(row);
+  const answerPath = String(perf.answerPath || "");
+  const type = knowledgeTypeForPerformanceRow(query, answerPath);
+  const sourceSku = firstUsefulSku([
+    ...(perf.emrnMatchedSkus || []),
+    ...(answerPreview.match(/\bSKU\s+\*\*?([A-Z0-9+.-]{2,})/gi) || []).map((value) => value.replace(/^SKU\s+\**/i, "")),
+    ...(perf.proofPartNumbers || []),
+  ]);
+  const searchTerms = String(perf.searchQuery || query || "").slice(0, 120);
+
+  if (isShortFollowUp(query)) {
+    return {
+      typeLabel: "No teaching needed",
+      reason: "Mark Reviewed unless this follow-up exposed a real bad answer in the full conversation.",
+      fields: ["Use Retest only with the full question."],
+    };
+  }
+  if (quickActionQuestionLabel(query) === "Customer clicked quick button") {
+    return {
+      typeLabel: "No teaching needed",
+      reason: "This is just the customer pressing a starter button.",
+      fields: ["Mark Reviewed after checking the follow-up question."],
+    };
+  }
+  if (/can.t confirm|could not confirm|i do not see|item-sourcing/i.test(answerPreview)) {
+    return {
+      typeLabel: knowledgeTypeLabel(type),
+      reason: "Teach this if EMRN has a known correct product, SKU, compatibility fact, or replacement part.",
+      fields: [`Query: ${query}`, sourceSku ? `SKU/part: ${sourceSku}` : "Add correct SKU if known", searchTerms ? `Search terms: ${searchTerms}` : ""].filter(Boolean),
+    };
+  }
+  if (perf.openAiUsed && sourceSku) {
+    return {
+      typeLabel: knowledgeTypeLabel(type === "alias" ? "preferred_product" : type),
+      reason: "A proven answer used OpenAI. Teaching it can make repeat questions faster and more consistent.",
+      fields: [`Query: ${query}`, `SKU/part: ${sourceSku}`, searchTerms ? `Search terms: ${searchTerms}` : ""].filter(Boolean),
+    };
+  }
+  if (Number(perf.totalMs || 0) >= 2500) {
+    return {
+      typeLabel: "Alias or preferred product",
+      reason: "The answer looks usable but slow. Teach better search terms or a preferred SKU if this query repeats.",
+      fields: [`Query: ${query}`, searchTerms ? `Search terms: ${searchTerms}` : ""].filter(Boolean),
+    };
+  }
+  return {
+    typeLabel: knowledgeTypeLabel(type),
+    reason: "Teach only if you know the answer is wrong, missing a better EMRN product, or needs cleaner wording.",
+    fields: [`Query: ${query}`, searchTerms ? `Search terms: ${searchTerms}` : ""].filter(Boolean),
+  };
+}
+
+function firstUsefulSku(values: string[]) {
+  return values
+    .map((value) => String(value || "").replace(/[^A-Z0-9+.-]/gi, "").toUpperCase())
+    .find((value) => /[A-Z0-9]/.test(value) && value.length >= 3) || "";
+}
+
+function knowledgeTypeLabel(type: KnowledgeMemoryType) {
+  return type.replace(/_/g, " ");
+}
+
 function performanceReviewHint(row: PerformanceRow, answerPreview: string) {
   const perf = row.performance || {};
   const route = String(perf.answerPath || "");
@@ -737,12 +884,21 @@ function teachLinkForRow(row: PerformanceRow, token: string, fullHistory: boolea
   const query = rowQuery(row);
   const answerPath = String(perf.answerPath || "unknown");
   const searchUsed = String(perf.searchQuery || "");
+  const answerPreview = cleanAdminAnswerPreview(String(perf.answerPreview || ""));
   const type = knowledgeTypeForPerformanceRow(query, answerPath);
+  const proof = [
+    perf.proofSourceType ? `Proof source: ${humanProofSource(String(perf.proofSourceType))}.` : "",
+    perf.proofPartNumbers?.length ? `Proof parts: ${perf.proofPartNumbers.join(", ")}.` : "",
+    perf.proofSearchTerms?.length ? `Recovery searches: ${perf.proofSearchTerms.slice(0, 5).join(", ")}.` : "",
+    typeof perf.emrnMatchCount === "number" ? `EMRN matches: ${perf.emrnMatchCount}${perf.emrnMatchedSkus?.length ? ` (${perf.emrnMatchedSkus.join(", ")})` : ""}.` : "",
+  ].filter(Boolean).join(" ");
   const note = [
     `From Performance row: ${humanAnswerPath(answerPath)}.`,
     `Server time: ${formatMs(Number(perf.totalMs || 0))}.`,
     perf.openAiUsed ? "OpenAI was used." : "OpenAI was not used.",
     `Products found: ${String(perf.productCount ?? 0)}.`,
+    answerPreview ? `Meri answered: ${answerPreview.slice(0, 400)}.` : "Meri answer was not logged.",
+    proof,
   ].join(" ");
   const params = new URLSearchParams({
     ...(token ? { token } : {}),
