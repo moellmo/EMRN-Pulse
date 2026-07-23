@@ -91,7 +91,7 @@ export function isContactIntent(text: string) {
 }
 
 export function isAvailabilityIntent(text: string) {
-  return /\b(availability|available|in stock|stock|check availability|lead time|ships|backorder|back order|disponibilite|disponibilité|disponible|en stock|delai|délai)\b/i.test(text);
+  return /\b(availability|available|in stock|stock|check availability|lead time|ship|ships|shipped|shipping date|ship date|when will.*ship|when.*shipped|backorder|back order|disponibilite|disponibilité|disponible|en stock|delai|délai|exp[eé]di[eé]|exp[eé]dition)\b/i.test(text);
 }
 
 export function isFindProductPrompt(text: string) {

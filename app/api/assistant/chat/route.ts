@@ -99,6 +99,33 @@ function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unkn
     : `I can send an order status request to our team. I still need: ${fields}.`;
 }
 
+function isShippingTimingQuestion(text: string) {
+  return /\b(ship|shipped|shipping|shipment|exp[eé]di[eé]|exp[eé]dition)\b/i.test(text) &&
+    /\b(when|check|status|update|where|will|would|has|not|quand|v[eé]rifier|statut|mise à jour|mise a jour)\b/i.test(text);
+}
+
+function hasOrderReferenceInConversation(messages: AssistantMessage[]) {
+  return messages.some((message) =>
+    /\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*[A-Z0-9-]{4,30}\b/i.test(message.content) ||
+    /\border\s*#\s*[A-Z0-9-]{4,30}\b/i.test(message.content) ||
+    /\b(order|commande|tracking|shipment|exp[eé]dition|suivi)\b/i.test(message.content)
+  );
+}
+
+function shippingTimingClarifierText(language: "en" | "fr" | "unknown") {
+  return language === "fr"
+    ? "Bien sûr. Est-ce pour une commande déjà passée ou pour savoir quand un produit sera expédié?\n\nPour une commande: envoyez le numéro de commande et le courriel utilisé.\nPour un produit: envoyez le SKU ou le nom du produit, et je vérifierai la disponibilité/le délai."
+    : "Sure. Is this for an order you already placed, or are you checking when a product can ship?\n\nFor an order: send the order number and the email used for the order.\nFor a product: send the SKU or product name, and I’ll check the availability/lead time.";
+}
+
+function recentSkuFromConversation(messages: AssistantMessage[]) {
+  return messages
+    .slice()
+    .reverse()
+    .flatMap((message) => extractSkuCandidates(message.content))
+    .find(Boolean) || "";
+}
+
 function invoiceMissingText(hasOrderOrInvoice: boolean, hasEmail: boolean, language: "en" | "fr" | "unknown") {
   if (hasOrderOrInvoice && !hasEmail) {
     return language === "fr"
@@ -2830,7 +2857,25 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isOrderStatusIntent(latest) || shouldSendOrderStatusSupport || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
+  const shippingTimingQuestion = isShippingTimingQuestion(latest);
+  const recentConversationSku = recentSkuFromConversation(messages.slice(0, -1));
+  const shippingTimingHasOrderContext =
+    shippingTimingQuestion && (hasOrderReferenceInConversation(messages.slice(0, -1)) || /\b(order|commande|tracking|shipment|suivi)\b/i.test(latest));
+  const shippingTimingHasProductContext =
+    shippingTimingQuestion && (extractSkuCandidates(latest).length > 0 || Boolean(recentConversationSku) || Boolean(pageContext.sku || pageContext.title));
+
+  if (
+    shippingTimingQuestion &&
+    !shippingTimingHasOrderContext &&
+    !shippingTimingHasProductContext &&
+    !priorAssistantRequestedOrderStatus
+  ) {
+    return new Response(textStream(shippingTimingClarifierText(language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (isOrderStatusIntent(latest) || shippingTimingHasOrderContext || shouldSendOrderStatusSupport || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
     const draft = buildOrderStatusDraft(messages, language);
     if (draft.request) {
       if (shouldSendOrderStatusSupport) {
@@ -3061,7 +3106,12 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isAvailabilityIntent(latest) && !isResultFilterIntent(latest)) {
-    const skuCandidates = extractSkuCandidates(latest);
+    const latestSkuCandidates = extractSkuCandidates(latest);
+    const skuCandidates = latestSkuCandidates.length
+      ? latestSkuCandidates
+      : shippingTimingQuestion && recentConversationSku
+        ? [recentConversationSku]
+        : [];
     const pageProducts = skuCandidates.length
       ? (await Promise.all(skuCandidates.map((sku) => searchBySKU(sku)))).flat()
       : /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
