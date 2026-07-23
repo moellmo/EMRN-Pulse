@@ -2188,11 +2188,13 @@ function externalLookupCustomerAnswer(
 ) {
   const sourceLabel = lookup.sourceType === "manufacturer"
     ? "manufacturer information"
-    : lookup.sourceType === "supplier_catalog"
-      ? "supplier catalog information"
-      : lookup.sourceType === "emrn"
-        ? "EMRN information"
-        : "approved product information";
+    : lookup.sourceType === "manual_pdf"
+      ? "manufacturer manual/spec sheet information"
+      : lookup.sourceType === "supplier_catalog"
+        ? "supplier catalog information"
+        : lookup.sourceType === "emrn"
+          ? "EMRN information"
+          : "approved product information";
   const partText = lookup.manufacturerPartNumbers.length
     ? ` Part number${lookup.manufacturerPartNumbers.length > 1 ? "s" : ""}: ${lookup.manufacturerPartNumbers.join(", ")}.`
     : "";

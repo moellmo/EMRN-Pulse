@@ -9,7 +9,7 @@ export type ExternalKnowledgeLookup = {
   exactProductName: string;
   manufacturerPartNumbers: string[];
   searchTerms: string[];
-  sourceType: "manufacturer" | "supplier_catalog" | "emrn" | "mixed" | "unknown";
+  sourceType: "manufacturer" | "manual_pdf" | "supplier_catalog" | "emrn" | "mixed" | "unknown";
   sourceUrls: string[];
 };
 
@@ -466,6 +466,8 @@ async function trustedDomainInstructions(products: CatalogProduct[]) {
     `Known EMRN catalog brands include: ${emrnCatalogBrandNames.join(", ")}.`,
     "Official brand/manufacturer websites are trusted when the domain clearly matches the supplied product brand/manufacturer, even if the exact brand domain is not listed above.",
     "StatPacks official product pages on statpacks.com are trusted for StatPacks/G3/Load N Go product details.",
+    "Official manuals, PDF manuals, instruction sheets, IFUs, spec sheets, compatibility charts, and catalog PDFs on trusted manufacturer/brand domains are trusted product sources.",
+    "If an official brand/product page does not answer the question, search the exact brand/model/SKU with terms like manual, PDF, instruction manual, user guide, IFU, spec sheet, compatibility chart, parts list, or product catalog.",
   ].join("\n");
 }
 
@@ -511,6 +513,8 @@ function detailAnswerInstructions(language: AssistantLanguage, showExternalSourc
     "- If the EMRN context clearly answers the compatibility, dimension, accessory, replacement-part, or specification question, answer from EMRN context and do not rely on general memory.",
     "- If EMRN context is unclear and web search is available, search only trusted EMRN/manufacturer/large medical supplier domains listed in the request.",
     "- Search the exact brand/manufacturer page first when a brand or model is mentioned. If the manufacturer page is not enough, use large medical supplier catalogs or product catalog pages only as support.",
+    "- If the official product page does not clearly answer, search official manuals, PDF manuals, user guides, IFUs, instruction sheets, spec sheets, parts lists, compatibility charts, and product catalog PDFs using the exact brand, model, SKU, and product title.",
+    "- Treat manuals/PDFs from official manufacturer/brand domains as strong proof. If the best proof is a manual/spec sheet PDF, summarize only the relevant detail and do not expose the external PDF link unless source links are enabled.",
     "- For EMRN catalog lookup, treat the supplied EMRN SKU as exact. For manufacturer/web lookup, remember EMRN SKUs may add store-specific prefixes or suffixes, such as DY for Dynarex or trailing internal letters for Nasco. Search and match by manufacturer name, manufacturer model/part number embedded in the SKU or product title, exact product title, dimensions, and option labels too.",
     "- Do not reject a manufacturer source just because its part number omits an EMRN prefix/suffix, but do require the product title/model/dimensions/options to clearly match the EMRN product.",
     "- When a manufacturer, catalog, manual, or approved supplier source identifies the exact part number, model number, or catalog SKU, include that part number in the reply even when EMRN does not currently have a matching catalog product supplied.",
@@ -538,6 +542,8 @@ function externalLookupInstructions() {
     "Return structured JSON only.",
     "Find whether the customer's compatibility, replacement-part, accessory, dimension, or product-identification question can be confirmed.",
     "Prefer manufacturer pages, manuals, official product pages, and EMRN pages over supplier or marketplace pages.",
+    "If the normal product page does not prove the answer, search official manuals/PDFs: user manual, instruction manual, IFU, spec sheet, parts list, compatibility chart, product catalog PDF, or service manual.",
+    "Use sourceType manual_pdf when the strongest proof is an official manual, IFU, instruction sheet, spec sheet, compatibility chart, parts list, or catalog PDF.",
     "If confirmed, identify exact manufacturer part numbers, model numbers, catalog SKUs, and clean EMRN search terms.",
     "Put only bare part/model/catalog numbers in manufacturerPartNumbers, without descriptions or dashes.",
     "Do not include prices from external websites.",
@@ -598,7 +604,7 @@ function parseExternalLookup(value: unknown): ExternalKnowledgeLookup | null {
       exactProductName: String(parsed.exactProductName || "").trim().slice(0, 220),
       manufacturerPartNumbers: cleanLookupArray(parsed.manufacturerPartNumbers),
       searchTerms: cleanLookupArray(parsed.searchTerms),
-      sourceType: ["manufacturer", "supplier_catalog", "emrn", "mixed", "unknown"].includes(String(parsed.sourceType || ""))
+      sourceType: ["manufacturer", "manual_pdf", "supplier_catalog", "emrn", "mixed", "unknown"].includes(String(parsed.sourceType || ""))
         ? parsed.sourceType as ExternalKnowledgeLookup["sourceType"]
         : "unknown",
       sourceUrls: cleanLookupArray(parsed.sourceUrls, 12),
@@ -644,7 +650,7 @@ export async function lookupExternalKnowledge({
             exactProductName: { type: "string" },
             manufacturerPartNumbers: { type: "array", items: { type: "string" } },
             searchTerms: { type: "array", items: { type: "string" } },
-            sourceType: { type: "string", enum: ["manufacturer", "supplier_catalog", "emrn", "mixed", "unknown"] },
+            sourceType: { type: "string", enum: ["manufacturer", "manual_pdf", "supplier_catalog", "emrn", "mixed", "unknown"] },
             sourceUrls: { type: "array", items: { type: "string" } },
           },
           required: [
@@ -682,7 +688,7 @@ export async function lookupExternalKnowledge({
       "  \"exactProductName\": \"exact item name if found\",",
       "  \"manufacturerPartNumbers\": [\"part/model/catalog numbers\"],",
       "  \"searchTerms\": [\"clean EMRN product searches, no sentences\"],",
-      "  \"sourceType\": \"manufacturer | supplier_catalog | emrn | mixed | unknown\",",
+      "  \"sourceType\": \"manufacturer | manual_pdf | supplier_catalog | emrn | mixed | unknown\",",
       "  \"sourceUrls\": [\"source URLs used\"]",
       "}",
     ].join("\n"),
