@@ -85,8 +85,16 @@ export type QuoteRequest = {
 export type SupportRequest = {
   name: string;
   email: string;
+  phone?: string;
   question: string;
   category?: "product_missing" | "compatibility" | "quote" | "invoice" | "order_status" | "cart" | "other";
+  attachments?: Array<{
+    url: string;
+    storagePath?: string;
+    fileName?: string;
+    contentType?: string;
+    kind?: "product_photo" | "return_photo" | "support_photo";
+  }>;
   summary?: {
     customerQuestion: string;
     productContext?: string;

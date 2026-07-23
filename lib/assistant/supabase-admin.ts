@@ -29,8 +29,16 @@ function supabaseKey() {
   );
 }
 
+function supabaseServiceRoleKey() {
+  return process.env.EMRN_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+}
+
 export function supabaseAdminConfigured() {
   return Boolean(supabaseUrl() && supabaseKey());
+}
+
+export function supabaseStorageConfigured() {
+  return Boolean(supabaseUrl() && supabaseServiceRoleKey());
 }
 
 export function supabaseAdminUrlHint() {
@@ -65,6 +73,63 @@ async function supabaseRequest<T>(path: string, init: RequestInit = {}): Promise
   }
   if (!text) return null as T;
   return JSON.parse(text) as T;
+}
+
+async function supabaseStorageRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const baseUrl = supabaseUrl().replace(/\/+$/, "");
+  const key = supabaseServiceRoleKey();
+  if (!baseUrl || !key) throw new Error("Supabase storage is not configured.");
+
+  const response = await fetch(`${baseUrl}/storage/v1/${path}`, {
+    ...init,
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      ...(init.headers || {}),
+    },
+    cache: "no-store",
+  });
+  const text = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(`Supabase storage ${path} failed: ${response.status} ${text.slice(0, 300)}`);
+  }
+  if (!text) return null as T;
+  return JSON.parse(text) as T;
+}
+
+export async function uploadSupabaseAssistantPhoto(input: {
+  bucket?: string;
+  path: string;
+  contentType: string;
+  body: ArrayBuffer;
+  signedUrlExpiresInSeconds?: number;
+}) {
+  if (!supabaseStorageConfigured()) return null;
+  const bucket = input.bucket || process.env.EMRN_SUPABASE_UPLOAD_BUCKET || "assistant-uploads";
+  const cleanPath = input.path.replace(/^\/+/, "");
+  await supabaseStorageRequest(`object/${encodeURIComponent(bucket)}/${cleanPath.split("/").map(encodeURIComponent).join("/")}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": input.contentType,
+      "x-upsert": "false",
+    },
+    body: input.body,
+  });
+  const signed = await supabaseStorageRequest<{ signedURL?: string; signedUrl?: string }>(
+    `object/sign/${encodeURIComponent(bucket)}/${cleanPath.split("/").map(encodeURIComponent).join("/")}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expiresIn: input.signedUrlExpiresInSeconds || 60 * 60 * 24 * 14 }),
+    }
+  );
+  const signedPath = signed?.signedURL || signed?.signedUrl || "";
+  const baseUrl = supabaseUrl().replace(/\/+$/, "");
+  return {
+    bucket,
+    path: cleanPath,
+    url: signedPath.startsWith("http") ? signedPath : `${baseUrl}/storage/v1${signedPath}`,
+  };
 }
 
 function insertRow(table: string, row: unknown) {

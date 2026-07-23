@@ -80,6 +80,7 @@ export async function sendSupportEmail(request: SupportRequest) {
       "Customer information",
       `Name: ${request.name}`,
       `Email: ${request.email}`,
+      `Phone: ${request.phone || "Not provided"}`,
       "",
       "Question",
       request.question,
@@ -91,6 +92,15 @@ export async function sendSupportEmail(request: SupportRequest) {
       `EMRN data found: ${summary?.emrnDataFound || "Not captured"}`,
       `Web/manufacturer result: ${summary?.externalDataFound || "Not used or not captured"}`,
       `Confidence: ${summary?.confidence || "unknown"}`,
+      ...(request.attachments?.length
+        ? [
+            "",
+            "Attachments",
+            ...request.attachments.map((attachment) =>
+              `- ${attachment.kind || "photo"}: ${attachment.fileName || attachment.storagePath || "uploaded file"}${attachment.url ? ` - ${attachment.url}` : ""}`
+            ),
+          ]
+        : []),
       ...(summary?.transcriptSnippet?.length
         ? ["", "Transcript snippet", ...summary.transcriptSnippet]
         : []),

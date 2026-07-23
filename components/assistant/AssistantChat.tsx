@@ -20,6 +20,10 @@ type UiText = {
   typing: string;
   retry: string;
   error: string;
+  uploadProductPhoto: string;
+  uploadReturnPhoto: string;
+  uploadPhoto: string;
+  uploadingPhoto: string;
   disclaimer: string;
   proactivePrompt: string;
   proactiveDismiss: string;
@@ -68,7 +72,7 @@ function isOldDemoConversation(messages: AssistantMessage[]) {
 const ui: Record<"en" | "fr", UiText> = {
   en: {
     greeting:
-      "Hi! I’m Meri 👋\nI can help you find products, compare options, check availability, request a quote, or connect you with our team. What can I help you with today?",
+      "Hi! I’m Meri 👋\nI can help you find products, compare options, check availability, request a quote, identify items from photos, help with returns/problems, or connect you with our team. What can I help you with today?",
     placeholder: "Type your message...",
     online: "Meri is online",
     openLabel: "Open EMRN Pulse",
@@ -80,6 +84,10 @@ const ui: Record<"en" | "fr", UiText> = {
     typing: "Meri is checking EMRN data...",
     retry: "Retry",
     error: "I’m sorry, I could not complete that request. Would you like me to send this to our support team?",
+    uploadProductPhoto: "Find from Photo",
+    uploadReturnPhoto: "Return/Problem Photo",
+    uploadPhoto: "Upload photo",
+    uploadingPhoto: "Meri is checking the photo...",
     disclaimer: "Meri can make mistakes. Please verify compatibility, availability, and safety-critical details before purchase or use.",
     proactivePrompt: "Need help finding a product? I can help.",
     proactiveDismiss: "Dismiss help message",
@@ -97,7 +105,7 @@ const ui: Record<"en" | "fr", UiText> = {
   },
   fr: {
     greeting:
-      "Bonjour! Je suis Meri 👋\nJe peux vous aider à trouver des produits, comparer des options, vérifier la disponibilité, demander un devis ou communiquer avec notre équipe. Comment puis-je vous aider aujourd’hui?",
+      "Bonjour! Je suis Meri 👋\nJe peux vous aider à trouver des produits, comparer des options, vérifier la disponibilité, demander un devis, identifier des articles par photo, aider avec les retours/problèmes ou communiquer avec notre équipe. Comment puis-je vous aider aujourd’hui?",
     placeholder: "Tapez votre message...",
     online: "Meri est en ligne",
     openLabel: "Ouvrir EMRN Pulse",
@@ -110,6 +118,10 @@ const ui: Record<"en" | "fr", UiText> = {
     retry: "Réessayer",
     error:
       "Je suis désolée, je n’ai pas pu compléter cette demande. Voulez-vous que je l’envoie à notre équipe de support?",
+    uploadProductPhoto: "Trouver par photo",
+    uploadReturnPhoto: "Photo retour/problème",
+    uploadPhoto: "Téléverser une photo",
+    uploadingPhoto: "Meri vérifie la photo...",
     disclaimer: "Meri peut faire des erreurs. Veuillez vérifier la compatibilité, la disponibilité et les détails critiques avant l’achat ou l’utilisation.",
     proactivePrompt: "Besoin d’aide pour trouver un produit? Je peux vous aider.",
     proactiveDismiss: "Masquer le message d’aide",
@@ -143,6 +155,10 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledExternalRequestsRef = useRef<Set<string>>(new Set());
   const [pendingExternalPrompt, setPendingExternalPrompt] = useState("");
+  const [pendingPhotoFlow, setPendingPhotoFlow] = useState<"product_lookup" | "return_problem" | null>(null);
+  const [showPhotoChoices, setShowPhotoChoices] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const currentLanguage = language === "fr" ? "fr" : "en";
   const text = ui[currentLanguage];
 
@@ -359,6 +375,69 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     }
   }
 
+  function startPhotoUpload(flow: "product_lookup" | "return_problem") {
+    if (busy) return;
+    setShowPhotoChoices(false);
+    setPendingPhotoFlow(flow);
+    fileInputRef.current?.click();
+  }
+
+  async function onPhotoSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !pendingPhotoFlow || busy) return;
+
+    const flow = pendingPhotoFlow;
+    setPendingPhotoFlow(null);
+    setHasError(false);
+    const userText = flow === "return_problem"
+      ? currentLanguage === "fr"
+        ? `Photo téléversée pour un retour/problème: ${file.name}`
+        : `Uploaded a return/problem photo: ${file.name}`
+      : currentLanguage === "fr"
+        ? `Photo téléversée pour trouver un produit: ${file.name}`
+        : `Uploaded a product photo to identify: ${file.name}`;
+    const nextMessages = [...messages, { role: "user" as const, content: userText, createdAt: new Date().toISOString() }];
+    setMessages([...nextMessages, { role: "assistant", content: "", createdAt: new Date().toISOString() }]);
+    setBusy(true);
+    setUploadingPhoto(true);
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("flow", flow);
+      formData.set("language", currentLanguage);
+      formData.set("sessionId", sessionId);
+      formData.set("note", input.trim());
+      formData.set("messages", JSON.stringify(nextMessages.slice(-16)));
+
+      const response = await fetch("/api/assistant/photo", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json().catch(() => null) as { answer?: string; error?: string } | null;
+      if (!response.ok || !payload?.answer) throw new Error(payload?.error || "Photo upload failed");
+      setInput("");
+      setMessages([...nextMessages, { role: "assistant", content: payload.answer, createdAt: new Date().toISOString() }]);
+    } catch {
+      setHasError(true);
+      setMessages([
+        ...nextMessages,
+        {
+          role: "assistant",
+          content:
+            currentLanguage === "fr"
+              ? "Je n’ai pas pu traiter cette photo. Vous pouvez réessayer ou envoyer les détails à notre équipe de support."
+              : "I could not process that photo. You can try again or send the details to our support team.",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setUploadingPhoto(false);
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!pendingExternalPrompt || busy) return;
     const prompt = pendingExternalPrompt;
@@ -447,7 +526,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
                 <span />
                 <span />
               </span>
-              {text.typing}
+              {uploadingPhoto ? text.uploadingPhoto : text.typing}
             </div>
           ) : null}
           {hasError && lastPrompt ? (
@@ -480,7 +559,14 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
           ))}
         </div>
 
-        <form onSubmit={onSubmit} className="emrn-pulse-input-wrap flex items-end gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
+          className="sr-only"
+          onChange={onPhotoSelected}
+        />
+        <form onSubmit={onSubmit} className="emrn-pulse-input-wrap relative flex items-end gap-2">
           <label className="sr-only" htmlFor={`${mode}-emrn-pulse-input`}>
             {text.placeholder}
           </label>
@@ -495,6 +581,37 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
             className="emrn-pulse-input"
             style={{ borderColor: "#eadfdd" }}
           />
+          <div className="relative shrink-0">
+            {showPhotoChoices ? (
+              <div className="absolute bottom-[60px] right-0 z-10 w-[210px] overflow-hidden rounded-xl border bg-white text-sm shadow-[0_12px_28px_rgba(23,28,38,0.14)]" style={{ borderColor: "#eadfdd" }}>
+                <button
+                  type="button"
+                  onClick={() => startPhotoUpload("product_lookup")}
+                  className="block w-full px-3 py-2.5 text-left font-semibold text-[#171c26] hover:bg-[#faf7f6]"
+                >
+                  {text.uploadProductPhoto}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => startPhotoUpload("return_problem")}
+                  className="block w-full border-t px-3 py-2.5 text-left font-semibold text-[#171c26] hover:bg-[#faf7f6]"
+                  style={{ borderColor: "#eadfdd" }}
+                >
+                  {text.uploadReturnPhoto}
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              disabled={busy}
+              aria-label={text.uploadPhoto}
+              onClick={() => setShowPhotoChoices((current) => !current)}
+              className="flex h-[52px] w-[52px] items-center justify-center rounded-full border bg-white transition hover:bg-[#faf7f6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+              style={{ borderColor: brand, color: brand, outlineColor: brand }}
+            >
+              <Icon name="photo" />
+            </button>
+          </div>
           <button
             type="submit"
             disabled={!input.trim() || busy}
@@ -823,7 +940,7 @@ export function MeriMascot({ className = "" }: { className?: string }) {
   );
 }
 
-export function Icon({ name }: { name: "search" | "quote" | "box" | "send" | "menu" | "minus" | "refresh" | "heart" | "shield" | "truck" | "leaf" | "lock" | "cart" | "mail" | "globe" | "fleur" | "kit" | "spark" | "people" }) {
+export function Icon({ name }: { name: "search" | "quote" | "box" | "send" | "photo" | "menu" | "minus" | "refresh" | "heart" | "shield" | "truck" | "leaf" | "lock" | "cart" | "mail" | "globe" | "fleur" | "kit" | "spark" | "people" }) {
   const common = {
     width: 18,
     height: 18,
@@ -845,6 +962,8 @@ export function Icon({ name }: { name: "search" | "quote" | "box" | "send" | "me
       return <svg {...common}><path d="m21 8-9-5-9 5 9 5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></svg>;
     case "send":
       return <svg {...common}><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4z" /></svg>;
+    case "photo":
+      return <svg {...common}><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10.5" r="1.5" /><path d="m21 15-5-5L5 19" /></svg>;
     case "menu":
       return <svg {...common}><circle cx="12" cy="5" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="19" r="1" fill="currentColor" /></svg>;
     case "minus":

@@ -2948,8 +2948,8 @@ async function handleAssistantPost(req: NextRequest) {
     return new Response(
       textStream(
         language === "fr"
-          ? "Bien sûr. Quel produit cherchez-vous? Vous pouvez me donner un nom, une marque, une catégorie, une utilisation médicale ou un SKU."
-          : "Sure. What product are you looking for? You can give me a name, brand, category, medical use, or SKU."
+          ? "Bien sûr. Quel produit cherchez-vous? Vous pouvez me donner un nom, une marque, une catégorie, une utilisation médicale ou un SKU. Si vous ne connaissez pas le nom, vous pouvez aussi téléverser une photo avec le bouton photo."
+          : "Sure. What product are you looking for? You can give me a name, brand, category, medical use, or SKU. If you don’t know the name, you can also upload a photo with the photo button."
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
