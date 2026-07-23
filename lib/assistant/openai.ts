@@ -468,6 +468,7 @@ async function trustedDomainInstructions(products: CatalogProduct[]) {
     "StatPacks official product pages on statpacks.com are trusted for StatPacks/G3/Load N Go product details.",
     "Official manuals, PDF manuals, instruction sheets, IFUs, spec sheets, compatibility charts, and catalog PDFs on trusted manufacturer/brand domains are trusted product sources.",
     "If an official brand/product page does not answer the question, search the exact brand/model/SKU with terms like manual, PDF, instruction manual, user guide, IFU, spec sheet, compatibility chart, parts list, or product catalog.",
+    "If the official brand site does not expose the manual, trusted manual libraries and major medical supplier catalog/PDF pages may be used as secondary proof when the manual clearly matches the exact brand, model, SKU, option, and intended use.",
   ].join("\n");
 }
 
@@ -514,7 +515,8 @@ function detailAnswerInstructions(language: AssistantLanguage, showExternalSourc
     "- If EMRN context is unclear and web search is available, search only trusted EMRN/manufacturer/large medical supplier domains listed in the request.",
     "- Search the exact brand/manufacturer page first when a brand or model is mentioned. If the manufacturer page is not enough, use large medical supplier catalogs or product catalog pages only as support.",
     "- If the official product page does not clearly answer, search official manuals, PDF manuals, user guides, IFUs, instruction sheets, spec sheets, parts lists, compatibility charts, and product catalog PDFs using the exact brand, model, SKU, and product title.",
-    "- Treat manuals/PDFs from official manufacturer/brand domains as strong proof. If the best proof is a manual/spec sheet PDF, summarize only the relevant detail and do not expose the external PDF link unless source links are enabled.",
+    "- Treat manuals/PDFs from official manufacturer/brand domains as strong proof. If the official site does not expose the manual, trusted manual libraries and major medical supplier catalog/PDF pages may be used as secondary proof only when the manual clearly matches the exact brand, model, SKU, option, and intended use.",
+    "- If the best proof is a manual/spec sheet PDF, summarize only the relevant detail and do not expose the external PDF link unless source links are enabled.",
     "- For EMRN catalog lookup, treat the supplied EMRN SKU as exact. For manufacturer/web lookup, remember EMRN SKUs may add store-specific prefixes or suffixes, such as DY for Dynarex or trailing internal letters for Nasco. Search and match by manufacturer name, manufacturer model/part number embedded in the SKU or product title, exact product title, dimensions, and option labels too.",
     "- Do not reject a manufacturer source just because its part number omits an EMRN prefix/suffix, but do require the product title/model/dimensions/options to clearly match the EMRN product.",
     "- When a manufacturer, catalog, manual, or approved supplier source identifies the exact part number, model number, or catalog SKU, include that part number in the reply even when EMRN does not currently have a matching catalog product supplied.",
@@ -543,7 +545,8 @@ function externalLookupInstructions() {
     "Find whether the customer's compatibility, replacement-part, accessory, dimension, or product-identification question can be confirmed.",
     "Prefer manufacturer pages, manuals, official product pages, and EMRN pages over supplier or marketplace pages.",
     "If the normal product page does not prove the answer, search official manuals/PDFs: user manual, instruction manual, IFU, spec sheet, parts list, compatibility chart, product catalog PDF, or service manual.",
-    "Use sourceType manual_pdf when the strongest proof is an official manual, IFU, instruction sheet, spec sheet, compatibility chart, parts list, or catalog PDF.",
+    "If the official brand site does not expose the manual, trusted manual libraries and major medical supplier catalog/PDF pages may be used as secondary proof only when the manual clearly matches the exact brand, model, SKU, option, and intended use.",
+    "Use sourceType manual_pdf when the strongest proof is a manual, IFU, instruction sheet, spec sheet, compatibility chart, parts list, or catalog PDF.",
     "If confirmed, identify exact manufacturer part numbers, model numbers, catalog SKUs, and clean EMRN search terms.",
     "Put only bare part/model/catalog numbers in manufacturerPartNumbers, without descriptions or dashes.",
     "Do not include prices from external websites.",
