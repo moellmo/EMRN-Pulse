@@ -339,7 +339,15 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
   const failedSearches = analytics.filter((event) => event.type === "no_result_search" || event.type === "search_failure");
   const knowledgeShadow = analytics.filter((event) => event.type === "knowledge_shadow");
   const externalKnowledgeSources = analytics.filter((event) => event.type === "external_knowledge_sources");
-  const photoUploads = analytics.filter((event) => event.type === "photo_upload" && event.photoReview);
+  const reviewedPhotoKeys = new Set(
+    analytics
+      .filter((event) => event.type === "admin_reviewed_photo")
+      .map((event) => "reviewedPhotoKey" in event ? event.reviewedPhotoKey || "" : "")
+      .filter(Boolean)
+  );
+  const photoUploads = analytics
+    .filter((event) => event.type === "photo_upload" && event.photoReview)
+    .filter((event) => !reviewedPhotoKeys.has(photoReviewKey(event)));
   const reviewedPerformanceKeys = new Set(
     analytics
       .filter((event) => event.type === "admin_reviewed_performance")
@@ -445,6 +453,21 @@ export function performanceReviewKey(event: {
     event.performance?.answerPath || "",
     event.performance?.searchQuery || "",
     String(event.performance?.totalMs || ""),
+  ].join("|");
+}
+
+export function photoReviewKey(event: {
+  createdAt?: string;
+  sessionId?: string;
+  query?: string;
+  photoReview?: { flow?: string; storagePath?: string; uploadUrl?: string; fileName?: string };
+}) {
+  return [
+    event.createdAt || "",
+    event.sessionId || "",
+    event.query || "",
+    event.photoReview?.flow || "",
+    event.photoReview?.storagePath || event.photoReview?.uploadUrl || event.photoReview?.fileName || "",
   ].join("|");
 }
 

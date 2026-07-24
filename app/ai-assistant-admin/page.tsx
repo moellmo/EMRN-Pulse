@@ -1,4 +1,4 @@
-import { performanceReviewKey, readAssistantAdminData } from "@/lib/assistant/analytics";
+import { performanceReviewKey, photoReviewKey, readAssistantAdminData } from "@/lib/assistant/analytics";
 import { readAssistantConfig } from "@/lib/assistant/admin-config";
 import { readKnowledgeMemory } from "@/lib/assistant/knowledge-memory";
 import { readSkuConfigSync } from "@/lib/assistant/sku-config";
@@ -10,6 +10,7 @@ import { AnswerCacheRefreshButton } from "@/components/assistant/AnswerCacheRefr
 import { CacheExpiryText } from "@/components/assistant/CacheExpiryText";
 import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmin";
 import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
+import { PhotoReviewedButton } from "@/components/assistant/PhotoReviewedButton";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
 import type { KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
 import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
@@ -542,6 +543,7 @@ function PhotoReviewCard({ row, token }: { row: PhotoReviewRow; token: string })
           <a className="rounded bg-slate-950 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800" href={teachHref}>
             Teach from photo
           </a>
+          <PhotoReviewedButton token={token} reviewedPhotoKey={photoReviewKey(row)} query={row.query || review.note || photoFlowLabel(review.flow)} />
           <span className={`rounded px-2 py-1 text-xs font-semibold ${photoNeedsHumanReview(review) ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
             {photoNeedsHumanReview(review) ? "Needs review" : "Looks okay"}
           </span>

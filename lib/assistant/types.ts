@@ -162,6 +162,7 @@ export type AssistantAnalyticsEvent =
         | "knowledge_shadow"
         | "assistant_performance"
         | "admin_reviewed_performance"
+        | "admin_reviewed_photo"
         | "external_knowledge_sources"
         | "quote_request"
         | "quote_lookup"
@@ -172,6 +173,7 @@ export type AssistantAnalyticsEvent =
       language: AssistantLanguage;
       query?: string;
       reviewedPerformanceKey?: string;
+      reviewedPhotoKey?: string;
       productIds?: number[];
       knowledge?: {
         kind: "compatibility" | "product_detail" | "none";
