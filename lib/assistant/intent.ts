@@ -36,15 +36,52 @@ function escapeRegExp(value: string) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function intentText(text: string) {
+  return String(text || "")
+    .replace(/\bteh\b/gi, "the")
+    .replace(/\bwhti\b/gi, "with")
+    .replace(/\bwit\b/gi, "with")
+    .replace(/\bsepak\b/gi, "speak")
+    .replace(/\bspeek\b/gi, "speak")
+    .replace(/\btlak\b/gi, "talk")
+    .replace(/\brepresen(?:ta|at|taa|ata)?t(?:a|ai|ia)?ive\b/gi, "representative")
+    .replace(/\brep\b/gi, "representative")
+    .replace(/\bagnet\b/gi, "agent")
+    .replace(/\bcostumer\b/gi, "customer")
+    .replace(/\bsupprot\b/gi, "support")
+    .replace(/\bsuport\b/gi, "support")
+    .replace(/\bcontect\b/gi, "contact")
+    .replace(/\bcontct\b/gi, "contact")
+    .replace(/\boder\b/gi, "order")
+    .replace(/\bordr\b/gi, "order")
+    .replace(/\bstauts\b/gi, "status")
+    .replace(/\bstaus\b/gi, "status")
+    .replace(/\btraking\b/gi, "tracking")
+    .replace(/\btrackng\b/gi, "tracking")
+    .replace(/\bshipp?d\b/gi, "shipped")
+    .replace(/\bshiping\b/gi, "shipping")
+    .replace(/\bqoute\b/gi, "quote")
+    .replace(/\bqupte\b/gi, "quote")
+    .replace(/\bqutoe\b/gi, "quote")
+    .replace(/\bavailvilty\b/gi, "availability")
+    .replace(/\bavailablity\b/gi, "availability")
+    .replace(/\bavail(?:a|i)?b(?:i|l)?l?ity\b/gi, "availability")
+    .replace(/\bavalable\b/gi, "available")
+    .replace(/\bavailble\b/gi, "available");
+}
+
 export function isMedicalAdviceRequest(text: string) {
+  text = intentText(text);
   return /\b(should i use|what treatment|diagnose|diagnosis|symptoms|medication|dose|dosage|prescribe|wound infected|is this safe for my condition)\b/i.test(text);
 }
 
 export function isQuoteIntent(text: string) {
+  text = intentText(text);
   return /\b(quote|pricing|formal quote|request a quote|special pricing|bulk price|company pricing|purchase order|po\b|b2b|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
 }
 
 export function isCartIntent(text: string) {
+  text = intentText(text);
   return /\b(add (?:the |this |that |it |one |red |blue |both |all )?.*(?:too|also)?|add to (?:my )?(?:cart|catt|cartt|crt)|(?:cart|catt|cartt|crt)|checkout|buy this|buy it|purchase online|order online|ajouter au panier|panier|payer|commander en ligne)\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:take|get|buy|order|purchase|want|need|choose|pick|go with)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b(?:i|we)\s*(?:(?:'|’)?(?:ll|d)|will|would)?\s*(?:want|need|would like|like)\s+to\s+(?:purchase|buy|order|get|take)\s+(?:the\s+)?(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
@@ -60,6 +97,7 @@ export function isCartIntent(text: string) {
 }
 
 export function isProductCapabilityIntent(text: string) {
+  text = intentText(text);
   if (isQuoteIntent(text) || isCartIntent(text) || isOrderStatusIntent(text) || isContactIntent(text) || isAccountIntent(text)) {
     return false;
   }
@@ -78,6 +116,7 @@ export function isProductCapabilityIntent(text: string) {
 }
 
 export function isProductDetailIntent(text: string) {
+  text = intentText(text);
   if (/\b(?:do\s+you|do\s+u|you)\s+(?:have|carry|sell|stock|offer)\b/i.test(text)) {
     return false;
   }
@@ -85,27 +124,33 @@ export function isProductDetailIntent(text: string) {
 }
 
 export function isAccountIntent(text: string) {
+  text = intentText(text);
   return /\b(my account|business account|create an account|make an account|open an account|register|logged in|login|shipping address|ship to|purchase history|reorder|last year|invoice|orders|company pricing|buyer portal|mon compte|compte entreprise|creer un compte|créer un compte|adresse de livraison|historique|facture|mes commandes)\b/i.test(text);
 }
 
 export function isOrderStatusIntent(text: string) {
+  text = intentText(text);
   return /\b(order status|order update|update on my order|update for my order|order tracking|track(?:ing)?|where is my order|shipment update|shipping update|check order|check my order|commande|suivi|statut de commande|ou est ma commande|où est ma commande)\b/i.test(text) ||
     /\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30}\b/i.test(text);
 }
 
 export function isContactIntent(text: string) {
+  text = intentText(text);
   return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agent|talk to agent|speak to someone|speak with someone|speak to an agent|speak with an agent|speak with agent|live agent|agent|representative|human support|human agent|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agent|parler a un agent|agent humain|support humain|service client|représentant|representant)\b/i.test(text);
 }
 
 export function isAvailabilityIntent(text: string) {
+  text = intentText(text);
   return /\b(availability|available|in stock|stock|check availability|lead time|ship|ships|shipped|shipping date|ship date|when will.*ship|when.*shipped|backorder|back order|disponibilite|disponibilité|disponible|en stock|delai|délai|exp[eé]di[eé]|exp[eé]dition)\b/i.test(text);
 }
 
 export function isFindProductPrompt(text: string) {
+  text = intentText(text);
   return /^\s*(find a product|find product|trouver un produit|je cherche un produit)\s*$/i.test(text);
 }
 
 export function isProductSearchIntent(text: string) {
+  text = intentText(text);
   if (isQuoteIntent(text) || isCartIntent(text) || isOrderStatusIntent(text) || isContactIntent(text) || isAccountIntent(text)) {
     return false;
   }
@@ -145,7 +190,7 @@ export function extractSkuCandidates(text: string) {
     candidates.push(value);
   }
 
-  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase().replace(/^(?:THIS|ITEM|PRODUCT|PRODUIT|HAVE|CARRY|FIND|SEARCH)(?=\d)/i, "")).filter((sku) => {
+  return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase().replace(/^(?:THIS|ITEM|PRODUCT|PRODUIT|HAVE|CARRY|FIND|SEARCH|FOR|POUR)(?=\d)/i, "")).filter((sku) => {
     if (/^\d{1,3}G$/i.test(sku)) return false;
     if (/^OF\d{1,5}$/i.test(sku)) return false;
     if (/^X\d{1,5}$/i.test(sku)) return false;
