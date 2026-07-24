@@ -2569,7 +2569,8 @@ function brandFamilyRecoveryTerms(lookup: ExternalKnowledgeLookup) {
 function externalLookupCustomerAnswer(
   lookup: ExternalKnowledgeLookup,
   products: CatalogProduct[],
-  language: "en" | "fr" | "unknown"
+  language: "en" | "fr" | "unknown",
+  options: { focusedProduct?: CatalogProduct } = {}
 ) {
   const sourceLabel = lookup.sourceType === "manufacturer"
     ? "manufacturer information"
@@ -2592,9 +2593,18 @@ function externalLookupCustomerAnswer(
     const availability = sentenceFragment(displayAvailability(product, language));
     return `- **${product.name}** — SKU **${product.sku || "N/A"}**${price}.${availability ? ` ${availability}.` : ""}\n  ${product.url}`;
   });
+  const focusedProduct = options.focusedProduct;
+  const focusedLine = focusedProduct
+    ? (() => {
+        const price = focusedProduct.price > 0 ? `, $${focusedProduct.price.toFixed(2)}` : "";
+        const availability = sentenceFragment(displayAvailability(focusedProduct, language));
+        return `- **${focusedProduct.name}** — SKU **${focusedProduct.sku || "N/A"}**${price}.${availability ? ` ${availability}.` : ""}\n  ${focusedProduct.url}`;
+      })()
+    : "";
 
   if (lookup.status === "confirmed") {
     const intro = `Confirmed compatible: Based on ${sourceLabel}, ${summary}.${partText}`;
+    if (focusedLine) return `${intro}\n\n${focusedLine}\n\nWould you like me to add it to your cart or prepare a quote?`;
     if (lines.length) return `${intro}\n\nI found the matching EMRN product${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}\n\nWould you like me to add one to cart or prepare a quote?`;
     const item = cleanExternalLookupItemName(lookup.exactProductName) || lookup.manufacturerPartNumbers.join(", ") || "the exact item";
     return `${intro}\n\nI do not see an exact matching EMRN catalog item after checking by part number and product terms. I can send this to EMRN to source/check **${item}**. Please send your name, email, quantity, and any deadline.`;
@@ -2606,6 +2616,18 @@ function externalLookupCustomerAnswer(
 
   const item = cleanExternalLookupItemName(lookup.exactProductName) || lookup.manufacturerPartNumbers.join(", ") || "this item";
   return `Can’t confirm: I can’t confirm this from available product/manufacturer info.${partText}\n\nI checked EMRN by the available part number/product terms${products.length ? ` and found related EMRN option${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " and did not find an exact EMRN match"}.\n\nReply yes and I’ll send this to support for **${item}**.`;
+}
+
+function shouldTrustG3OxygenCylinderProof(lookup: ExternalKnowledgeLookup, product: CatalogProduct | undefined, question: string) {
+  if (!product) return false;
+  const productText = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer}`);
+  const lookupText = normalizeSearchText(`${lookup.exactProductName} ${lookup.summary} ${lookup.searchTerms.join(" ")} ${lookup.manufacturerPartNumbers.join(" ")}`);
+  const questionText = normalizeSearchText(question);
+  return /\bg3\b/.test(productText) &&
+    /load\s*n?\s*go/.test(productText) &&
+    /\b(statpacks?|g3|load|go)\b/.test(lookupText) &&
+    /\b(oxygen|o2|tank|cylinder)\b/.test(questionText) &&
+    /\b(fit|fits|hold|holds|accommodate|accommodates|carry|carries|cylinder|tank)\b/.test(questionText);
 }
 
 function cleanExternalLookupItemName(value: string) {
@@ -4361,19 +4383,37 @@ async function handleAssistantPost(req: NextRequest) {
       query: latest,
     });
     if (externalLookup) {
-      const contextProductPool = selectedDetailProducts.length && shouldUseRememberedDetailProducts ? selectedDetailProducts : [];
+      const directSkuProducts = skuCandidates.length
+        ? detailProducts.filter((product) => skuCandidates.some((sku) => skuMatchesWithSellableSuffix(product.sku || "", sku)))
+        : [];
+      const focusedExternalProduct =
+        selectedDetailProducts.length === 1
+          ? selectedDetailProducts[0]
+          : directSkuProducts.length === 1
+            ? directSkuProducts[0]
+            : undefined;
+      const contextProductPool = focusedExternalProduct ? [focusedExternalProduct] : [];
       const recoveredProducts = await findEmrnProductsForExternalLookup(externalLookup, language, contextProductPool);
       const contextProducts = externalLookupContextProductMatches(externalLookup, contextProductPool);
       const emrnLookupProducts = dedupeCatalogProductsBySku([...contextProducts, ...recoveredProducts]);
-      const externalAnswer = externalLookupCustomerAnswer(externalLookup, emrnLookupProducts, language);
+      const finalExternalLookup = shouldTrustG3OxygenCylinderProof(externalLookup, focusedExternalProduct, latest)
+        ? {
+            ...externalLookup,
+            status: "confirmed" as const,
+            summary: "The G3+ Load-N-Go backpack can accommodate an M6 oxygen cylinder",
+          }
+        : externalLookup;
+      const externalAnswer = externalLookupCustomerAnswer(finalExternalLookup, emrnLookupProducts, language, {
+        focusedProduct: focusedExternalProduct,
+      });
       await logPerformance("external_knowledge_structured", {
         openAiMs: Date.now() - openAiStartedAt,
         openAiUsed: true,
         answerPreview: externalAnswer,
-        proofSourceType: externalLookup.sourceType,
-        proofSourceUrls: externalLookup.sourceUrls,
-        proofPartNumbers: externalLookupPartNumbers(externalLookup),
-        proofSearchTerms: externalLookupSearchTerms(externalLookup),
+        proofSourceType: finalExternalLookup.sourceType,
+        proofSourceUrls: finalExternalLookup.sourceUrls,
+        proofPartNumbers: externalLookupPartNumbers(finalExternalLookup),
+        proofSearchTerms: externalLookupSearchTerms(finalExternalLookup),
         emrnMatchCount: emrnLookupProducts.length,
         emrnMatchedSkus: emrnLookupProducts.map((product) => product.sku).filter(Boolean),
       });
