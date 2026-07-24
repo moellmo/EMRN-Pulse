@@ -192,9 +192,84 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
 }
 
 export async function taughtIntentRouteForQuery(query: string): Promise<KnowledgeIntentRoute | null> {
-  const match = (await matchingApprovedKnowledgeForQuery(query)).find((item) => item.type === "intent_route" && /^route_/.test(item.answer || ""));
-  const route = match?.answer?.replace(/^route_/, "") as KnowledgeIntentRoute | undefined;
-  return route && ["contact", "quote", "order_status", "availability", "support"].includes(route) ? route : null;
+  const normalizedQuery = normalizeIntentRouteText(query);
+  if (!normalizedQuery) return null;
+
+  const matches = (await approvedKnowledgeMemory())
+    .filter((item) => item.type === "intent_route" && /^route_/.test(item.answer || ""))
+    .map((item) => {
+      const route = item.answer?.replace(/^route_/, "") as KnowledgeIntentRoute | undefined;
+      return {
+        item,
+        route,
+        score: route && isKnownIntentRoute(route) ? intentRouteMatchScore(normalizedQuery, item, route) : 0,
+      };
+    })
+    .filter((match) => match.route && match.score > 0)
+    .sort((a, b) => b.score - a.score || b.item.updatedAt.localeCompare(a.item.updatedAt));
+
+  return matches[0]?.route || null;
+}
+
+function isKnownIntentRoute(route: string): route is KnowledgeIntentRoute {
+  return ["contact", "quote", "order_status", "availability", "support"].includes(route);
+}
+
+function normalizeIntentRouteText(value: string) {
+  return normalizeSearchText(value)
+    .replace(/\b(?:qutoes|qoutes|qoute|qute|qutes|quot|quote|quotes|quotation|quotations|devis)\b/g, "quote")
+    .replace(/\b(?:agen|agent|agentt|agnt|agents|representative|representatives|represenattive|represenative|rep|staff|human)\b/g, "agent")
+    .replace(/\b(?:speak|talk|chat|contact|connect|reach|call|email|message)\b/g, "contact")
+    .replace(/\b(?:support|help|problem|issue|team)\b/g, "support")
+    .replace(/\b(?:order|orders|commande|commandes)\b/g, "order")
+    .replace(/\b(?:status|tracking|track|shipped|shipment|ship|shipping)\b/g, "status")
+    .replace(/\b(?:available|availability|stock|instock|in\s+stock|eta|leadtime|lead\s+time)\b/g, "availability")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function intentRouteMatchScore(normalizedQuery: string, item: KnowledgeMemoryItem, route: KnowledgeIntentRoute) {
+  if (!querySupportsRoute(normalizedQuery, route)) return 0;
+
+  const normalizedRule = normalizeIntentRouteText(`${item.query} ${item.note || ""}`);
+  if (!normalizedRule) return 0;
+  if (routeCoreTerms(route).some((term) => normalizedQuery.includes(term) && normalizedRule.includes(term))) return 90;
+  if (normalizedQuery.includes(normalizedRule) || normalizedRule.includes(normalizedQuery)) return 100;
+
+  const queryTerms = significantIntentRouteTerms(normalizedQuery);
+  const ruleTerms = significantIntentRouteTerms(normalizedRule);
+  const matches = ruleTerms.filter((term) => queryTerms.includes(term));
+  let score = matches.length * 10;
+  if (routeCoreTerms(route).some((term) => queryTerms.includes(term) && ruleTerms.includes(term))) score += 30;
+  return score >= 30 ? score : 0;
+}
+
+function querySupportsRoute(normalizedQuery: string, route: KnowledgeIntentRoute) {
+  const terms = significantIntentRouteTerms(normalizedQuery);
+  const has = (values: string[]) => values.some((value) => terms.includes(value));
+  if (route === "quote") return has(["quote"]);
+  if (route === "contact") return has(["contact", "agent"]);
+  if (route === "support") return has(["support", "contact", "agent"]);
+  if (route === "order_status") return has(["order"]) && has(["status"]);
+  if (route === "availability") return has(["availability", "status"]);
+  return false;
+}
+
+function routeCoreTerms(route: KnowledgeIntentRoute) {
+  if (route === "quote") return ["quote"];
+  if (route === "contact") return ["contact", "agent"];
+  if (route === "support") return ["support", "contact", "agent"];
+  if (route === "order_status") return ["order", "status"];
+  if (route === "availability") return ["availability", "status"];
+  return [];
+}
+
+function significantIntentRouteTerms(value: string) {
+  return value
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3)
+    .filter((term) => !/^(the|and|for|with|this|that|item|product|part|parts|can|get|need|want|please|hello|hi|hey|merci|thanks)$/.test(term));
 }
 
 function hasMeaningfulOverlap(normalizedQuery: string, value: string) {
