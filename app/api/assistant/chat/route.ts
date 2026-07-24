@@ -809,8 +809,8 @@ function recentAssistantProductSkus(messages: AssistantMessage[]) {
       );
     if (!looksProductRelated) continue;
 
-    for (const match of content.matchAll(/\bSKU:\s*([A-Z0-9+/-]{3,40})/gi)) addSku(match[1] || "");
-    for (const match of content.matchAll(/\bSKU\s+([A-Z0-9+/-]{3,40})\b/gi)) addSku(match[1] || "");
+    for (const match of content.matchAll(/\bSKU\s*:?\s*(?:\*\*)?([A-Z0-9+/-]{3,40})(?:\*\*)?/gi)) addSku(match[1] || "");
+    for (const match of content.matchAll(/\bSKU\s+(?:\*\*)?([A-Z0-9+/-]{3,40})(?:\*\*)?\b/gi)) addSku(match[1] || "");
     for (const match of content.matchAll(/\b(?:item|article)\s+for\s+[“"']?([A-Z0-9+/-]{3,40})[”"']?/gi)) addSku(match[1] || "");
     for (const match of content.matchAll(/\b(?:for|pour)\s+[“"']([A-Z0-9+/-]{3,40})[”"']/gi)) addSku(match[1] || "");
     for (const match of content.matchAll(/\(([A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9-]*\+?)\)/gi)) addSku(match[1] || "");
@@ -885,6 +885,22 @@ function isContextProductSelectionReply(text: string) {
     /\b(?:first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])(?:\s+(?:one|item|product))?\b/i.test(text) ||
     /\b\d{1,5}\s+(?:of\s+)?(?:#|number|no\.?|option|item)\s*[1-5]\b/i.test(text) ||
     /^\s*(?:add\s+(?:to\s+(?:my\s+)?)?(?:cart|catt|cartt|crt)|add\s+it\s+to\s+(?:my\s+)?(?:cart|catt|cartt|crt)|add\s+this\s+to\s+(?:my\s+)?(?:cart|catt|cartt|crt)|buy\s+it|purchase\s+it)\s*$/i.test(text);
+}
+
+function isGenericContextProductReply(text: string) {
+  const normalized = String(text || "").toLowerCase();
+  if (!/\b(it|this|that|the item|the product|ce produit|cet article)\b/i.test(normalized)) return false;
+  if (extractSkuCandidates(normalized).length) return false;
+  if (extractOrdinalSelection(normalized, 20) !== null) return false;
+  if (/\b(all|both|these|those|them|first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|#?\s*[1-5]|number\s+[1-5]|option\s+[1-5])\b/i.test(normalized)) return false;
+  if (/\b(black|blue|green|orange|pink|purple|red|white|yellow|noir|bleu|vert|rouge|blanc|jaune)\b/i.test(normalized)) return false;
+  return true;
+}
+
+function selectContextProducts(text: string, products: CatalogProduct[]) {
+  if (!products.length) return [];
+  if (isGenericContextProductReply(text)) return [products[0]];
+  return selectProductsForCart(text, products);
 }
 
 function isSelectionWithoutQuantity(text: string) {
@@ -973,6 +989,17 @@ function mcpCartEmptyAfterRemoveText(language: "en" | "fr" | "unknown", browserA
 
 function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
+}
+
+function normalizeSkuBase(value: string) {
+  return normalizeSku(value).replace(/\++$/g, "");
+}
+
+function skuMatchesWithSellableSuffix(left: string, right: string) {
+  const leftSku = normalizeSku(left);
+  const rightSku = normalizeSku(right);
+  if (!leftSku || !rightSku) return false;
+  return leftSku === rightSku || normalizeSkuBase(leftSku) === normalizeSkuBase(rightSku);
 }
 
 function skuZeroInsertionCandidates(sku: string) {
@@ -1908,10 +1935,10 @@ function oxygenStorageEvidence(text: string) {
     .replace(/\s+/g, " ")
     .trim();
   return (
-    cleaned.match(/\bO2\s*\(([^)]{8,140})\)/i)?.[0]?.trim() ||
-    cleaned.match(/\b(?:accommodates?|holds?|carries?|fits?)\s+[^.]{0,140}?(?:oxygen|o2)\s+(?:tank|cylinder)\b/i)?.[0]?.trim() ||
-    cleaned.match(/\b(?:oxygen|o2)\s+(?:tank|cylinder)[^.]{0,140}?\b(?:compartment|pocket|holder|sleeve|strap)\b/i)?.[0]?.trim() ||
-    sentenceContaining(cleaned, /\b(oxygen|o2|tank|cylinder)\b/i)
+    cleaned.match(/\b(?:accommodates?|holds?|carries?|fits?|stores?)\s+[^.]{0,140}?(?:oxygen|o2)\s+(?:tank|cylinder)\b/i)?.[0]?.trim() ||
+    cleaned.match(/\b(?:oxygen|o2)\s+(?:tank|cylinder)[^.]{0,140}?\b(?:compartment|pocket|holder|sleeve|strap|storage|carrier)\b/i)?.[0]?.trim() ||
+    cleaned.match(/\b(?:compartment|pocket|holder|sleeve|strap|storage|carrier)[^.]{0,140}?\b(?:oxygen|o2)\s+(?:tank|cylinder)\b/i)?.[0]?.trim() ||
+    cleaned.match(/\b(?:M6|D|E)\s+(?:oxygen\s*)?(?:tank|cylinder)[^.]{0,140}?\b(?:fits?|accommodates?|holds?|carries?|stores?|compartment|pocket|holder|sleeve|strap)\b/i)?.[0]?.trim()
   );
 }
 
@@ -2473,7 +2500,7 @@ function externalLookupProductMatches(lookup: ExternalKnowledgeLookup, products:
       const haystack = `${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer} ${product.categories.join(" ")} ${product.description}`;
       const normalizedHaystack = normalizeSearchText(haystack);
       const sku = normalizeSku(product.sku);
-      if (partNumbers.length && partNumbers.some((part) => sku === part)) return true;
+      if (partNumbers.length && partNumbers.some((part) => skuMatchesWithSellableSuffix(sku, part))) return true;
       if (partNumbers.length) return false;
       if (requestedPartType && !requestedPartType.test(haystack)) return false;
       if (!sourceTerms.length) return false;
@@ -2483,7 +2510,32 @@ function externalLookupProductMatches(lookup: ExternalKnowledgeLookup, products:
     .slice(0, 5);
 }
 
-async function findEmrnProductsForExternalLookup(lookup: ExternalKnowledgeLookup, language: "en" | "fr" | "unknown") {
+function externalLookupContextProductMatches(lookup: ExternalKnowledgeLookup, products: CatalogProduct[]) {
+  const sourceText = normalizeSearchText([
+    lookup.exactProductName,
+    lookup.summary,
+    ...lookup.searchTerms,
+  ].join(" "));
+  const sourceTerms = sourceText
+    .split(/\s+/)
+    .filter((term) => term.length >= 3)
+    .filter((term) => !/^(the|and|for|with|this|that|product|item|part|parts|replacement|compatible|compatibility|work|works|fit|fits|main|compartment|dimensions|information|manufacturer|pour|avec)$/.test(term));
+  if (!sourceTerms.length) return [];
+
+  return dedupeCatalogProductsBySku(products)
+    .filter((product) => {
+      const haystack = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer} ${product.categories.join(" ")} ${product.description}`);
+      const matches = sourceTerms.filter((term) => haystack.includes(term));
+      return matches.length >= Math.min(3, sourceTerms.length);
+    })
+    .slice(0, 5);
+}
+
+async function findEmrnProductsForExternalLookup(
+  lookup: ExternalKnowledgeLookup,
+  language: "en" | "fr" | "unknown",
+  contextProducts: CatalogProduct[] = []
+) {
   const partNumbers = externalLookupPartNumbers(lookup);
   const terms = Array.from(
     new Set([
@@ -2499,7 +2551,7 @@ async function findEmrnProductsForExternalLookup(lookup: ExternalKnowledgeLookup
   const searchProductsResults = (
     await Promise.all(terms.map((term) => searchProducts({ query: term, language, limit: 8 })))
   ).flatMap((result) => result.products);
-  return externalLookupProductMatches(lookup, [...skuProducts, ...searchProductsResults]);
+  return externalLookupProductMatches(lookup, [...contextProducts, ...skuProducts, ...searchProductsResults]);
 }
 
 function brandFamilyRecoveryTerms(lookup: ExternalKnowledgeLookup) {
@@ -3532,7 +3584,7 @@ async function handleAssistantPost(req: NextRequest) {
       ? await recentAssistantProducts(messages)
       : [];
     const availabilityPool = pageProducts.length ? pageProducts : rememberedProducts;
-    const availabilityProducts = availabilityPool.length ? selectProductsForCart(latest, availabilityPool) : [];
+    const availabilityProducts = availabilityPool.length ? selectContextProducts(latest, availabilityPool) : [];
 
     if (availabilityProducts.length) {
       return new Response(textStream(await availabilityTextWithSubstitutes(availabilityProducts[0], language)), {
@@ -3792,6 +3844,18 @@ async function handleAssistantPost(req: NextRequest) {
     supabaseMs: (searchResult.timings?.supabaseMs || 0) + preSearchKnowledgeMs,
   };
   let products = searchResult.products;
+  const shouldSelectRememberedContextProduct =
+    rememberedContextProducts.length > 0 &&
+    isContextProductSelectionReply(latest) &&
+    !shouldHandleCart &&
+    !shouldCompareRememberedProducts &&
+    !shouldFilterRememberedProducts;
+  if (shouldSelectRememberedContextProduct) {
+    const selectedProducts = selectContextProducts(latest, products);
+    if (selectedProducts.length && selectedProducts.length < products.length) {
+      products = selectedProducts;
+    }
+  }
   const colorFallback = await colorFallbackSearch({ latest, searchQuery, products, language });
   if (colorFallback) {
     products = colorFallback.products;
@@ -4172,8 +4236,12 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (isProductDetailIntent(latest)) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
-    const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
-    const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
+    const shouldUseRememberedDetailProducts =
+      rememberedDetailProducts.length > 0 &&
+      isContextProductSelectionReply(latest) &&
+      !extractSkuCandidates(latest).length;
+    const detailProducts = await refreshProductsBySku(shouldUseRememberedDetailProducts ? rememberedDetailProducts : products);
+    const selectedDetailProducts = selectContextProducts(latest, detailProducts);
     const catalogDetailCandidates = catalogDetailCandidateProducts(latest, selectedDetailProducts.length ? selectedDetailProducts : detailProducts).slice(0, 8);
     for (const product of catalogDetailCandidates) {
       const catalogAnswer = productDetailFromCatalog(product, latest, language);
@@ -4293,7 +4361,10 @@ async function handleAssistantPost(req: NextRequest) {
       query: latest,
     });
     if (externalLookup) {
-      const emrnLookupProducts = await findEmrnProductsForExternalLookup(externalLookup, language);
+      const contextProductPool = selectedDetailProducts.length && shouldUseRememberedDetailProducts ? selectedDetailProducts : [];
+      const recoveredProducts = await findEmrnProductsForExternalLookup(externalLookup, language, contextProductPool);
+      const contextProducts = externalLookupContextProductMatches(externalLookup, contextProductPool);
+      const emrnLookupProducts = dedupeCatalogProductsBySku([...contextProducts, ...recoveredProducts]);
       const externalAnswer = externalLookupCustomerAnswer(externalLookup, emrnLookupProducts, language);
       await logPerformance("external_knowledge_structured", {
         openAiMs: Date.now() - openAiStartedAt,
@@ -4332,7 +4403,7 @@ async function handleAssistantPost(req: NextRequest) {
     const fallbackText = await streamToText(stream);
     const extractedLookup = externalLookupFromAnswerText(fallbackText, latest);
     if (extractedLookup) {
-      const emrnLookupProducts = await findEmrnProductsForExternalLookup(extractedLookup, language);
+      const emrnLookupProducts = await findEmrnProductsForExternalLookup(extractedLookup, language, detailProducts);
       const extractedAnswer = externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language);
       await logPerformance("external_knowledge_extracted", {
         openAiMs: Date.now() - openAiStartedAt,
