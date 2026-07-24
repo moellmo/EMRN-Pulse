@@ -94,9 +94,16 @@ function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unkn
       ? missing.map((field) => ({ email: "courriel", "order number": "numero de commande" })[field] || field).join(", ")
       : missing.join(", ");
 
+  const onlyEmailMissing = missing.length === 1 && missing[0] === "email";
+  if (onlyEmailMissing) {
+    return language === "fr"
+      ? "Je peux vérifier le statut de la commande dans BigCommerce. Pour protéger les détails de la commande, envoyez le courriel utilisé pour cette commande."
+      : "I can check the order status in BigCommerce first. To protect the order details, please send the email used for that order.";
+  }
+
   return language === "fr"
-    ? `Je peux envoyer une demande de suivi de commande à notre équipe. Il me manque: ${fields}.`
-    : `I can send an order status request to our team. I still need: ${fields}.`;
+    ? `Je peux vérifier le statut de la commande dans BigCommerce d’abord. Il me manque: ${fields}.`
+    : `I can check the order status in BigCommerce first. I still need: ${fields}.`;
 }
 
 function isShippingTimingQuestion(text: string) {
@@ -2878,7 +2885,7 @@ async function handleAssistantPost(req: NextRequest) {
     .some(
       (message) =>
         message.role === "assistant" &&
-        /order status request|suivi de commande|statut de commande|order number/i.test(message.content)
+        /order status request|order status in BigCommerce|email used for that order|protect the order details|suivi de commande|statut de commande|statut de la commande dans BigCommerce|courriel utilisé|courriel utilise|protéger les détails de la commande|proteger les details de la commande|order number/i.test(message.content)
     );
 
   const looksLikeOrderDetailsReply =
