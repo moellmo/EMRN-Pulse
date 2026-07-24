@@ -335,6 +335,14 @@ function includesAny(text: string, terms: string[]) {
 }
 
 const commonSearchTypoMap: Record<string, string> = {
+  bandaids: "bandages",
+  bandges: "bandages",
+  bateries: "batteries",
+  batery: "battery",
+  blodd: "blood",
+  cloride: "chloride",
+  diagnostcs: "diagnostics",
+  guaze: "gauze",
   lardel: "laerdal",
   lardal: "laerdal",
   laredal: "laerdal",
@@ -360,6 +368,11 @@ const commonSearchTypoMap: Record<string, string> = {
   manikan: "manikin",
   manikinne: "manikin",
   mannekin: "manikin",
+  neddle: "needle",
+  neddles: "needles",
+  phlebotmy: "phlebotomy",
+  phlebtomy: "phlebotomy",
+  phlebttomy: "phlebotomy",
   qcrp: "qcpr",
   qcprr: "qcpr",
   oximter: "oximeter",
@@ -368,9 +381,13 @@ const commonSearchTypoMap: Record<string, string> = {
   stethescope: "stethoscope",
   bandagee: "bandage",
   bandaid: "bandage",
+  sodiam: "sodium",
+  staus: "status",
+  stauts: "status",
+  stausus: "status",
 };
 
-function normalizeCommonSearchTypos(value: string) {
+export function normalizeCommonSearchTypos(value: string) {
   return normalizeSearchText(value)
     .split(/\s+/)
     .map((token) => commonSearchTypoMap[token] || token)

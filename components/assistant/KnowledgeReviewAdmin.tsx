@@ -205,6 +205,7 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches, initialDraf
 }
 
 function typeLabel(type: KnowledgeMemoryType) {
+  if (type === "alias") return "alias / spelling typo";
   return type.replace(/_/g, " ");
 }
 

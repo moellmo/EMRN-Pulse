@@ -1243,6 +1243,7 @@ function firstUsefulSku(values: string[]) {
 }
 
 function knowledgeTypeLabel(type: KnowledgeMemoryType) {
+  if (type === "alias") return "alias / spelling typo";
   return type.replace(/_/g, " ");
 }
 

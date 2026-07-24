@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createCart, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCartItem } from "@/lib/assistant/catalog";
+import { createCart, normalizeCommonSearchTypos, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCartItem } from "@/lib/assistant/catalog";
 import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
@@ -973,6 +973,176 @@ function mcpCartEmptyAfterRemoveText(language: "en" | "fr" | "unknown", browserA
 
 function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
+}
+
+function skuZeroInsertionCandidates(sku: string) {
+  const value = String(sku || "").trim().toUpperCase();
+  if (!value || value.includes("0")) return [];
+  const candidates = new Set<string>();
+  for (let index = 1; index < value.length; index += 1) {
+    const previous = value[index - 1];
+    const current = value[index];
+    if (!/[A-Z0-9]/.test(previous) || !/[A-Z0-9]/.test(current)) continue;
+    candidates.add(`${value.slice(0, index)}0${value.slice(index)}`);
+  }
+  return Array.from(candidates).slice(0, 18);
+}
+
+function skuEditDistance(a: string, b: string) {
+  const left = normalizeSku(a);
+  const right = normalizeSku(b);
+  if (left === right) return 0;
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const before = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (left[i - 1] === right[j - 1] ? 0 : 1)
+      );
+      diagonal = before;
+    }
+  }
+  return previous[right.length];
+}
+
+function isCloseSkuMatch(requestedSku: string, productSku: string) {
+  const requested = normalizeSku(requestedSku);
+  const actual = normalizeSku(productSku);
+  if (!requested || !actual || requested === actual) return false;
+  if (!requested.includes("0") && actual.length === requested.length + 1 && actual.replace(/0/g, "") === requested) return true;
+  if (Math.abs(actual.length - requested.length) > 1) return false;
+  return skuEditDistance(requested, actual) <= 1;
+}
+
+async function closeSkuSuggestion(skuCandidates: string[], language: "en" | "fr" | "unknown") {
+  for (const originalSku of skuCandidates) {
+    const suggestedSkus = skuZeroInsertionCandidates(originalSku);
+    for (const suggestedSku of suggestedSkus) {
+      const matches = (await searchBySKU(suggestedSku)).filter((product) => isCloseSkuMatch(originalSku, product.sku || ""));
+      if (matches.length) {
+        return {
+          originalSku,
+          suggestedSku: matches[0].sku || suggestedSku,
+          products: dedupeCatalogProductsBySku(matches).slice(0, 3),
+        };
+      }
+    }
+
+    const fuzzyMatches = (await searchProducts({ query: originalSku, language, limit: 10 })).products
+      .filter((product) => isCloseSkuMatch(originalSku, product.sku || ""));
+    if (fuzzyMatches.length) {
+      return {
+        originalSku,
+        suggestedSku: fuzzyMatches[0].sku || originalSku,
+        products: dedupeCatalogProductsBySku(fuzzyMatches).slice(0, 3),
+      };
+    }
+  }
+  return null;
+}
+
+function skuSuggestionText(
+  suggestion: { originalSku: string; suggestedSku: string; products: CatalogProduct[] },
+  language: "en" | "fr" | "unknown"
+) {
+  const lines = suggestion.products.map((product) => {
+    const price = product.quoteOnly
+      ? language === "fr"
+        ? "devis requis"
+        : "quote required"
+      : product.price
+        ? `$${product.price.toFixed(2)}`
+        : language === "fr"
+          ? "prix non disponible"
+          : "price unavailable";
+    const availability = displayAvailability(product, language);
+    return language === "fr"
+      ? `- **${product.name}** — SKU **${product.sku || "non disponible"}** — ${price}. ${availability}. [Voir le produit](${product.url})`
+      : `- **${product.name}** — SKU **${product.sku || "unavailable"}** — ${price}. ${availability}. [View product](${product.url})`;
+  });
+  if (language === "fr") {
+    return `Je n’ai pas trouvé le SKU **${suggestion.originalSku}**, mais j’ai trouvé un SKU EMRN très proche: **${suggestion.suggestedSku}**.\n\n${lines.join("\n")}\n\nEst-ce l’article que vous vouliez dire? Si non, je peux envoyer une demande de sourcing/devis à EMRN.`;
+  }
+  return `I could not find SKU **${suggestion.originalSku}**, but I found a very close EMRN SKU: **${suggestion.suggestedSku}**.\n\n${lines.join("\n")}\n\nIs this the item you meant? If not, I can send an item-sourcing/quote request to EMRN.`;
+}
+
+function priorAssistantOfferedSkuSuggestion(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /very close EMRN SKU|SKU EMRN très proche|SKU EMRN tres proche/i.test(
+          message.content
+        )
+    );
+}
+
+function recentSkuSuggestion(messages: AssistantMessage[]) {
+  const assistantText = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "assistant" && /very close EMRN SKU|SKU EMRN très proche|SKU EMRN tres proche/i.test(message.content))
+    ?.content || "";
+  return (
+    assistantText.match(/very close EMRN SKU:\s*\*\*([^*]+)\*\*/i)?.[1]?.trim() ||
+    assistantText.match(/SKU EMRN tr[eè]s proche:\s*\*\*([^*]+)\*\*/i)?.[1]?.trim() ||
+    ""
+  );
+}
+
+function priorAssistantOfferedKeywordSuggestion(messages: AssistantMessage[]) {
+  return messages
+    .slice(-4)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /Did you mean “[^”]+”|Vouliez-vous dire «[^»]+»/i.test(message.content)
+    );
+}
+
+function recentKeywordSuggestion(messages: AssistantMessage[]) {
+  const assistantText = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "assistant" && /Did you mean “[^”]+”|Vouliez-vous dire «[^»]+»/i.test(message.content))
+    ?.content || "";
+  return (
+    assistantText.match(/Did you mean “([^”]+)”/i)?.[1]?.trim() ||
+    assistantText.match(/Vouliez-vous dire «([^»]+)»/i)?.[1]?.trim() ||
+    ""
+  );
+}
+
+async function keywordSuggestion(query: string, language: "en" | "fr" | "unknown") {
+  const cleaned = cleanProductQuery(query);
+  const corrected = normalizeCommonSearchTypos(cleaned);
+  if (!cleaned || !corrected || corrected === normalizeSearchText(cleaned)) return null;
+  if (corrected.length < 3 || extractSkuCandidates(query).length) return null;
+  const result = await searchProducts({ query: corrected, language, limit: 6 });
+  if (!result.products.length) return null;
+  return {
+    originalQuery: cleaned,
+    suggestedQuery: corrected,
+    products: result.products.slice(0, 5),
+  };
+}
+
+function keywordSuggestionText(
+  suggestion: { originalQuery: string; suggestedQuery: string; products: CatalogProduct[] },
+  language: "en" | "fr" | "unknown"
+) {
+  const preview = productResultsText(suggestion.products.slice(0, 3), language, suggestion.suggestedQuery)
+    .replace(/\n\nIf you tell me[\s\S]*$/i, "")
+    .replace(/\n\nSi vous me dites[\s\S]*$/i, "");
+  if (language === "fr") {
+    return `Je n’ai pas trouvé de résultats EMRN pour « ${suggestion.originalQuery} ».\n\nVouliez-vous dire « ${suggestion.suggestedQuery} »?\n\n${preview}\n\nRépondez oui pour voir ces résultats, ou non et je peux envoyer une demande de sourcing/devis à EMRN.`;
+  }
+  return `I did not find EMRN results for “${suggestion.originalQuery}”.\n\nDid you mean “${suggestion.suggestedQuery}”?\n\n${preview}\n\nReply yes to see these results, or no and I can send an item-sourcing/quote request to EMRN.`;
 }
 
 function escapeRegExp(value: string) {
@@ -3156,6 +3326,54 @@ async function handleAssistantPost(req: NextRequest) {
   const shouldContinueItemRequestFlow =
     !shouldIgnorePriorQuoteFlow && priorAssistantOfferedItemRequest(messages) && isAffirmative(latest);
 
+  const suggestedSku = recentSkuSuggestion(messages);
+  if (suggestedSku && priorAssistantOfferedSkuSuggestion(messages) && isAffirmative(latest)) {
+    const products = await searchBySKU(suggestedSku);
+    if (products.length) {
+      const answer = products.length === 1
+        ? exactProductFoundText(products[0], language, suggestedSku)
+        : productResultsText(products, language, suggestedSku);
+      return new Response(textStream(answer), {
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+  }
+
+  const suggestedKeyword = recentKeywordSuggestion(messages);
+  if (suggestedKeyword && priorAssistantOfferedKeywordSuggestion(messages) && isAffirmative(latest)) {
+    const result = await searchProducts({ query: suggestedKeyword, language, limit: 8 });
+    const answer = result.products.length
+      ? productResultsText(result.products, language, suggestedKeyword)
+      : language === "fr"
+        ? "Je n’ai pas trouvé ces résultats maintenant. Je peux envoyer une demande de sourcing/devis à EMRN."
+        : "I could not find those results right now. I can send an item-sourcing/quote request to EMRN.";
+    return new Response(textStream(answer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  if (priorAssistantOfferedSkuSuggestion(messages) && isNegative(latest)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "D’accord, ce n’est pas le bon article. Je peux envoyer une demande de sourcing/devis à EMRN pour vérifier l’article exact. Envoyez-moi votre nom, courriel, et toute photo, marque, modèle, SKU ou description que vous avez."
+          : "No problem, that is not the right item. I can send an item-sourcing/quote request to EMRN to check the exact item. Please send your name, email, and any photo, brand, model, SKU, or description you have."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (priorAssistantOfferedKeywordSuggestion(messages) && isNegative(latest)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "D’accord, ce n’est pas le bon terme. Je peux envoyer une demande de sourcing/devis à EMRN. Envoyez-moi votre nom, courriel, et toute photo, marque, modèle, SKU ou description que vous avez."
+          : "No problem, that is not the right search term. I can send an item-sourcing/quote request to EMRN. Please send your name, email, and any photo, brand, model, SKU, or description you have."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   if (priorAssistantOfferedCartAdd(messages) && isNegative(latest)) {
     return new Response(
       textStream(
@@ -3508,6 +3726,7 @@ async function handleAssistantPost(req: NextRequest) {
       fallbackMs?: number;
     };
   };
+  let skuSuggestion: Awaited<ReturnType<typeof closeSkuSuggestion>> = null;
   if (pageProductsForCart.length) {
     searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
   } else if (aedAccessorySkus.length) {
@@ -3533,11 +3752,22 @@ async function handleAssistantPost(req: NextRequest) {
     ).flat();
     if (skuProducts.length) {
       searchResult = { products: skuProducts, found: skuCandidates.length };
-    } else if (hasProductWordsBeyondSku(latest, skuCandidates)) {
-      searchQuery = searchQueryForLatest(messages, latest, []);
-      searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
     } else {
-      searchResult = { products: [], found: 0, searchQuery: skuCandidates.join(", "), language };
+      skuSuggestion = await closeSkuSuggestion(skuCandidates, language);
+      if (skuSuggestion) {
+        searchQuery = skuSuggestion.suggestedSku;
+        searchResult = {
+          products: skuSuggestion.products,
+          found: skuSuggestion.products.length,
+          searchQuery,
+          language,
+        };
+      } else if (hasProductWordsBeyondSku(latest, skuCandidates)) {
+        searchQuery = searchQueryForLatest(messages, latest, []);
+        searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
+      } else {
+        searchResult = { products: [], found: 0, searchQuery: skuCandidates.join(", "), language };
+      }
     }
   } else if (rememberedContextProducts.length) {
     searchResult = { products: rememberedContextProducts, found: rememberedContextProducts.length };
@@ -3879,6 +4109,23 @@ async function handleAssistantPost(req: NextRequest) {
         });
       }
     }
+    if (!skuCandidates.length && isProductSearchIntent(latest) && !isQuoteIntent(latest) && !isOrderStatusIntent(latest) && !isContactIntent(latest)) {
+      const suggestion = await keywordSuggestion(latest, language);
+      if (suggestion) {
+        const suggestionAnswer = keywordSuggestionText(suggestion, language);
+        await logPerformance("keyword_did_you_mean", {
+          answerPreview: suggestionAnswer,
+          proofSearchTerms: [suggestion.originalQuery, suggestion.suggestedQuery],
+          emrnMatchedSkus: suggestion.products.map((product) => product.sku).filter(Boolean),
+        });
+        return new Response(textStream(suggestionAnswer), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
     await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
     const fallbackSearchUrl = siteSearchUrl(searchQuery || latest);
     const skuText = skuCandidates.length ? ` SKU/part number ${skuCandidates.join(", ")}` : "";
@@ -3899,6 +4146,21 @@ async function handleAssistantPost(req: NextRequest) {
       language,
       productIds: products.slice(0, 5).map((product) => product.productId),
       createdAt,
+    });
+  }
+
+  if (skuSuggestion && products.length) {
+    const suggestionAnswer = skuSuggestionText(skuSuggestion, language);
+    await logPerformance("sku_did_you_mean", {
+      answerPreview: suggestionAnswer,
+      proofSearchTerms: [skuSuggestion.originalSku, skuSuggestion.suggestedSku],
+      emrnMatchedSkus: products.map((product) => product.sku).filter(Boolean),
+    });
+    return new Response(textStream(suggestionAnswer), {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
     });
   }
 
