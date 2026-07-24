@@ -1739,7 +1739,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
   const wantsAvailability = /\b(availability|available|in stock|stock|ships|lead time)\b/i.test(question);
-  const wantsPackage = /\b(how\s+many|box|boxes|pack|package|case|count|per box|per pack)\b/i.test(question);
+  const wantsPackage = /\b(how\s+many|box|boxes|pack|package|case|count|quantity|quantities|qty|sold by|sold as|unit of sale|per box|per pack|quantit[eé]|vendu comme|vendu par)\b/i.test(question);
   const wantsPackagePrice = wantsPrice && /\b(piece|each|unit|single|box|boxes|pack|package|case|per)\b/i.test(question);
   const wantsSoldBy = /\b(who\s+makes|who\s+sells|sold\s+by|manufacturer|brand)\b/i.test(question);
   const wantsOxygenStorage = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|tank|cylinder|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene|oxygène|oxygene)\b/i.test(question) &&
@@ -1766,7 +1766,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
     if (pack && !wantsPackagePrice) lines.push(language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`);
   }
 
-  if (wantsSoldBy) {
+  if (wantsSoldBy && !(wantsPackage && pack)) {
     const soldBy = soldByInfo(product);
     if (soldBy) lines.push(language === "fr" ? `Vendu par: ${soldBy}` : `Sold by: ${soldBy}`);
   }
@@ -1842,6 +1842,10 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
     : "";
 
   return `${intro}\n\n${lines.map((line) => `- ${line}`).join("\n")}\n\n[View product](${product.url})${addPrompt}`;
+}
+
+function isPackageDetailQuestion(text: string) {
+  return /\b(how\s+many|box|boxes|pack|package|case|count|quantity|quantities|qty|sold by|sold as|unit of sale|per box|per pack|quantit[eé]|vendu comme|vendu par)\b/i.test(text);
 }
 
 function isCompareIntent(text: string) {
@@ -3831,6 +3835,21 @@ async function handleAssistantPost(req: NextRequest) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
+    const catalogDetailCandidates = (selectedDetailProducts.length ? selectedDetailProducts : detailProducts).slice(0, 8);
+    if (isPackageDetailQuestion(latest)) {
+      for (const product of catalogDetailCandidates) {
+        const catalogAnswer = productDetailFromCatalog(product, latest, language);
+        if (catalogAnswer) {
+          await logPerformance("catalog_detail", { answerPreview: catalogAnswer });
+          return new Response(textStream(catalogAnswer), {
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Cache-Control": "no-store",
+            },
+          });
+        }
+      }
+    }
     const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
     const ruleAnswer = approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language, latest);
     if (ruleAnswer) {
@@ -3912,7 +3931,6 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
 
-    const catalogDetailCandidates = (selectedDetailProducts.length ? selectedDetailProducts : detailProducts).slice(0, 8);
     for (const product of catalogDetailCandidates) {
       const catalogAnswer = productDetailFromCatalog(product, latest, language);
       if (catalogAnswer) {
