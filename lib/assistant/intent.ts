@@ -46,7 +46,9 @@ function intentText(text: string) {
     .replace(/\btlak\b/gi, "talk")
     .replace(/\brepresen(?:ta|at|taa|ata)?t(?:a|ai|ia)?ive\b/gi, "representative")
     .replace(/\brep\b/gi, "representative")
+    .replace(/\bagens\b/gi, "agents")
     .replace(/\bagen\b/gi, "agent")
+    .replace(/\bagnets\b/gi, "agents")
     .replace(/\bagnet\b/gi, "agent")
     .replace(/\bcostumer\b/gi, "customer")
     .replace(/\bsupprot\b/gi, "support")
@@ -137,7 +139,7 @@ export function isOrderStatusIntent(text: string) {
 
 export function isContactIntent(text: string) {
   text = intentText(text);
-  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agent|talk to agent|speak to someone|speak with someone|speak to an agent|speak with an agent|speak with agent|live agent|agent|representative|human support|human agent|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agent|parler a un agent|agent humain|support humain|service client|représentant|representant)\b/i.test(text);
+  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agents?|talk to agents?|speak to someone|speak with someone|speak to an agents?|speak with an agents?|speak with agents?|live agents?|agents?|representatives?|human support|human agents?|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agents?|parler a un agents?|agents? humain|support humain|service client|représentants?|representants?)\b/i.test(text);
 }
 
 export function isAvailabilityIntent(text: string) {

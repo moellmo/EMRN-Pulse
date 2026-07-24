@@ -9,7 +9,7 @@ import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/a
 import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistant/openai";
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
 import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
-import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
+import { assistantFeatureEnabledAsync, matchesConfiguredContactIntent } from "@/lib/assistant/admin-config";
 import { answerCacheEligibility, getCachedAnswer, saveCachedAnswer, type AnswerCacheEligibility, type CacheSaveResult } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
@@ -3505,7 +3505,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isContactIntent(latest)) {
+  if (isContactIntent(latest) || await matchesConfiguredContactIntent(latest)) {
     return new Response(textStream(contactHelpText(language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });

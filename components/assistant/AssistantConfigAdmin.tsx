@@ -8,7 +8,7 @@ type AssistantConfigAdminProps = {
   config: AssistantRuntimeConfig;
 };
 
-type BooleanConfigKey = Exclude<keyof Omit<AssistantRuntimeConfig, "updatedAt">, "trustedExternalDomains">;
+type BooleanConfigKey = Exclude<keyof Omit<AssistantRuntimeConfig, "updatedAt">, "trustedExternalDomains" | "contactIntentPhrases">;
 
 const labels: Array<[BooleanConfigKey, string, string]> = [
   [
@@ -51,6 +51,7 @@ const labels: Array<[BooleanConfigKey, string, string]> = [
 export function AssistantConfigAdmin({ token, config }: AssistantConfigAdminProps) {
   const [draft, setDraft] = useState(config);
   const [trustedDomainsText, setTrustedDomainsText] = useState((config.trustedExternalDomains || []).join("\n"));
+  const [contactPhrasesText, setContactPhrasesText] = useState((config.contactIntentPhrases || []).join("\n"));
   const [status, setStatus] = useState("");
 
   async function save() {
@@ -59,6 +60,10 @@ export function AssistantConfigAdmin({ token, config }: AssistantConfigAdminProp
       const payload = {
         ...draft,
         trustedExternalDomains: trustedDomainsText
+          .split(/[\n,]+/)
+          .map((item) => item.trim())
+          .filter(Boolean),
+        contactIntentPhrases: contactPhrasesText
           .split(/[\n,]+/)
           .map((item) => item.trim())
           .filter(Boolean),
@@ -75,6 +80,7 @@ export function AssistantConfigAdmin({ token, config }: AssistantConfigAdminProp
       if (!response.ok) throw new Error(saved?.error || "Save failed");
       setDraft(saved);
       setTrustedDomainsText((saved.trustedExternalDomains || []).join("\n"));
+      setContactPhrasesText((saved.contactIntentPhrases || []).join("\n"));
       setStatus("Saved. New assistant requests will use this config.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Save failed");
@@ -102,6 +108,24 @@ export function AssistantConfigAdmin({ token, config }: AssistantConfigAdminProp
             </span>
           </label>
         ))}
+      </div>
+      <div className="mt-4 rounded-md border border-slate-200 p-3">
+        <label className="block text-sm font-semibold text-slate-800" htmlFor="contact-phrases">
+          Contact / Support Typo Phrases
+        </label>
+        <p className="mt-1 text-xs text-slate-500">
+          Add phrases that should go to the team/contact flow before product search. Use this for things like misspelled agent, representative, customer service, or support requests.
+        </p>
+        <textarea
+          id="contact-phrases"
+          value={contactPhrasesText}
+          onChange={(event) => setContactPhrasesText(event.target.value)}
+          className="mt-3 min-h-28 w-full rounded-md border border-slate-200 p-3 text-sm text-slate-800"
+          placeholder={"speak with agen\nspeak with agents\ntalk to representative"}
+        />
+        <p className="mt-2 text-xs text-slate-500">
+          Product typos still belong in Teach. These phrases are only for routing customers to support/contact instead of product results.
+        </p>
       </div>
       <div className="mt-4 rounded-md border border-slate-200 p-3">
         <label className="block text-sm font-semibold text-slate-800" htmlFor="trusted-domains">
