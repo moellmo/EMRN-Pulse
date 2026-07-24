@@ -94,7 +94,7 @@ export function isOrderStatusIntent(text: string) {
 }
 
 export function isContactIntent(text: string) {
-  return /\b(contact us|contact support|customer service|talk to support|talk to someone|human support|speak to someone|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|support humain|service client)\b/i.test(text);
+  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agent|talk to agent|speak to someone|speak with someone|speak to an agent|speak with an agent|speak with agent|live agent|agent|representative|human support|human agent|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agent|parler a un agent|agent humain|support humain|service client|représentant|representant)\b/i.test(text);
 }
 
 export function isAvailabilityIntent(text: string) {
