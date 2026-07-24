@@ -1458,11 +1458,26 @@ function packageInfo(product: CatalogProduct) {
     if (/^(PK|PACK)$/.test(code)) return `pack of ${count}`;
     if (/^(CS|CASE)$/.test(code)) return `case of ${count}`;
   }
+  const reversePackageCode = text.match(/\b(\d{1,5})\s*(?:\/|per)\s*(BT|BX|BOX|PK|PACK|PKG|CS|CASE)\b/i);
+  if (reversePackageCode?.[1] && reversePackageCode[2]) {
+    const count = reversePackageCode[1];
+    const code = reversePackageCode[2].toUpperCase();
+    if (/^(BT|BX|BOX)$/.test(code)) return `box of ${count}`;
+    if (/^(PK|PACK|PKG)$/.test(code)) return `pack of ${count}`;
+    if (/^(CS|CASE)$/.test(code)) return `case of ${count}`;
+  }
+  const namedPackageCode = text.match(/\b(\d{1,5})\s*(?:pkg|pkgs|pack|packs|box|boxes|case|cases)\b/i);
+  if (namedPackageCode?.[1] && namedPackageCode[0]) {
+    const count = namedPackageCode[1];
+    const label = namedPackageCode[0].toLowerCase();
+    if (/\bpkg|pack/.test(label)) return `pack of ${count}`;
+    if (/\bbox/.test(label)) return `box of ${count}`;
+    if (/\bcase/.test(label)) return `case of ${count}`;
+  }
   const patterns = [
     /\bbox\s+of\s+(\d{1,5})\b/i,
     /\bpack\s+of\s+(\d{1,5})\b/i,
     /\bcase\s+of\s+(\d{1,5})\b/i,
-    /\b(\d{1,5})\s*(?:\/|per)\s*(?:box|pack|case)\b/i,
     /\b(\d{1,5})\s*(?:count|ct)\b/i,
   ];
   for (const pattern of patterns) {
@@ -1548,6 +1563,13 @@ function packagePriceText(product: CatalogProduct, pack: string, language: "en" 
   const price = product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
   if (language === "fr") return `Le prix affiché est pour ${pack}, pas pour une seule unité. Prix: ${price}.`;
   return `The listed price is for the ${pack}, not a single piece. Price: ${price}.`;
+}
+
+function packageQuantityText(pack: string, language: "en" | "fr" | "unknown") {
+  const count = Number(pack.match(/\b(?:box|pack|case|boîte|paquet|caisse)\s+(?:of|de)\s+(\d{1,5})\b/i)?.[1] || 0);
+  if (!count) return language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`;
+  if (language === "fr") return `Vendu comme ${pack}; cela contient ${count} unités.`;
+  return `Sold as ${pack}; it contains ${count} units.`;
 }
 
 function looksLikePackageCode(value: string) {
@@ -1763,7 +1785,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   }
 
   if (wantsPackage) {
-    if (pack && !wantsPackagePrice) lines.push(language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`);
+    if (pack && !wantsPackagePrice) lines.push(packageQuantityText(pack, language));
   }
 
   if (wantsSoldBy && !(wantsPackage && pack)) {
@@ -3372,7 +3394,7 @@ async function handleAssistantPost(req: NextRequest) {
     ? (await Promise.all(preSearchSkus.map((sku) => searchBySKU(sku)))).flat()
     : [];
   const preSearchSkuMs = Date.now() - preSearchSkuStartedAt;
-  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
+  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !isPackageDetailQuestion(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
     ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language, latest)
     : "";
   if (earlyApprovedRuleAnswer) {
@@ -3851,7 +3873,9 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
     const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
-    const ruleAnswer = approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language, latest);
+    const ruleAnswer = isPackageDetailQuestion(latest)
+      ? ""
+      : approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language, latest);
     if (ruleAnswer) {
       await logPerformance("approved_knowledge", { answerPreview: ruleAnswer });
       return new Response(textStream(ruleAnswer), {
@@ -3870,12 +3894,14 @@ async function handleAssistantPost(req: NextRequest) {
           .filter(Boolean),
       ].map((sku) => sku.toUpperCase()))
     );
-    const localCompatibilityAnswer = catalogCompatibilityAnswerFromProducts(
-      selectedDetailProducts.length ? selectedDetailProducts : detailProducts,
-      latest,
-      language,
-      trustedCompatibilitySkus
-    );
+    const localCompatibilityAnswer = isPackageDetailQuestion(latest)
+      ? ""
+      : catalogCompatibilityAnswerFromProducts(
+          selectedDetailProducts.length ? selectedDetailProducts : detailProducts,
+          latest,
+          language,
+          trustedCompatibilitySkus
+        );
 
     if (localCompatibilityAnswer) {
       await logPerformance("emrn_compatibility", { answerPreview: localCompatibilityAnswer });
@@ -3887,7 +3913,7 @@ async function handleAssistantPost(req: NextRequest) {
       });
     }
 
-    if (isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
+    if (!isPackageDetailQuestion(latest) && isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
       const compatibilityAnswer = catalogCompatibilityAnswer(selectedDetailProducts[0], latest, language);
       if (compatibilityAnswer && !/^Can’t confirm:|^Can.t confirm:|^Je ne peux pas confirmer/i.test(compatibilityAnswer)) {
         await logPerformance("catalog_compatibility", { answerPreview: compatibilityAnswer });
