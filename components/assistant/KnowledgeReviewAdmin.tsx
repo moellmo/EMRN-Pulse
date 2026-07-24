@@ -104,7 +104,7 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches, initialDraf
       if (!response.ok) throw new Error(payload?.error || "Save failed");
       setMemoryItems((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       setDraft(emptyDraft);
-      setStatus("Saved. Approved rows are used as extra EMRN search hints.");
+      setStatus("Saved. Approved rows are used by Pulse.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Save failed");
     }
@@ -203,7 +203,7 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches, initialDraf
                 <div className="font-semibold text-slate-800">{item.query || item.correctSku || item.correctSearchTerms}</div>
                 <div className="text-xs text-slate-500">{typeLabel(item.type)} · {item.status} · {item.updatedAt}</div>
                 <div className="mt-1 text-xs text-slate-700">
-                  {[item.correctSku, item.correctSearchTerms, item.relatedSku].filter(Boolean).join(" · ")}
+                  {[item.answer, item.correctSku, item.correctSearchTerms, item.relatedSku].filter(Boolean).join(" · ")}
                 </div>
                 {item.note ? <div className="mt-1 text-xs text-slate-500">{item.note}</div> : null}
                 <button type="button" onClick={() => void remove(item.id)} className="mt-2 text-xs font-semibold text-red-700">Delete</button>

@@ -111,6 +111,10 @@ export async function saveKnowledgeMemoryItem(input: Partial<KnowledgeMemoryItem
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };
+  if (next.type === "intent_route" && !/^route_/.test(next.answer || "")) {
+    const inferredRoute = inferIntentRouteFromText(`${next.query} ${next.correctSearchTerms || ""} ${next.note || ""}`);
+    if (inferredRoute) next.answer = `route_${inferredRoute}`;
+  }
 
   if (!next.query && !next.correctSearchTerms && !next.correctSku) {
     throw new Error("Knowledge row needs a query, search terms, or SKU.");
@@ -196,9 +200,9 @@ export async function taughtIntentRouteForQuery(query: string): Promise<Knowledg
   if (!normalizedQuery) return null;
 
   const matches = (await approvedKnowledgeMemory())
-    .filter((item) => item.type === "intent_route" && /^route_/.test(item.answer || ""))
+    .filter((item) => item.type === "intent_route")
     .map((item) => {
-      const route = item.answer?.replace(/^route_/, "") as KnowledgeIntentRoute | undefined;
+      const route = routeFromKnowledgeItem(item);
       return {
         item,
         route,
@@ -213,6 +217,23 @@ export async function taughtIntentRouteForQuery(query: string): Promise<Knowledg
 
 function isKnownIntentRoute(route: string): route is KnowledgeIntentRoute {
   return ["contact", "quote", "order_status", "availability", "support"].includes(route);
+}
+
+function routeFromKnowledgeItem(item: KnowledgeMemoryItem): KnowledgeIntentRoute | null {
+  const explicitRoute = item.answer?.replace(/^route_/, "") || "";
+  if (isKnownIntentRoute(explicitRoute)) return explicitRoute;
+  return inferIntentRouteFromText(`${item.query} ${item.correctSearchTerms || ""} ${item.note || ""}`);
+}
+
+function inferIntentRouteFromText(value: string): KnowledgeIntentRoute | null {
+  const normalized = normalizeIntentRouteText(value);
+  if (!normalized) return null;
+  if (querySupportsRoute(normalized, "quote")) return "quote";
+  if (querySupportsRoute(normalized, "order_status")) return "order_status";
+  if (querySupportsRoute(normalized, "availability")) return "availability";
+  if (querySupportsRoute(normalized, "contact")) return "contact";
+  if (querySupportsRoute(normalized, "support")) return "support";
+  return null;
 }
 
 function normalizeIntentRouteText(value: string) {
