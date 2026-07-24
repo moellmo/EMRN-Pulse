@@ -339,6 +339,7 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
   const failedSearches = analytics.filter((event) => event.type === "no_result_search" || event.type === "search_failure");
   const knowledgeShadow = analytics.filter((event) => event.type === "knowledge_shadow");
   const externalKnowledgeSources = analytics.filter((event) => event.type === "external_knowledge_sources");
+  const photoUploads = analytics.filter((event) => event.type === "photo_upload" && event.photoReview);
   const reviewedPerformanceKeys = new Set(
     analytics
       .filter((event) => event.type === "admin_reviewed_performance")
@@ -404,6 +405,7 @@ export async function readAssistantAdminData(options: { limit?: number; full?: b
     failedSearches: failedSearches.slice(-100).reverse(),
     knowledgeShadow: knowledgeShadow.slice(-100).reverse(),
     externalKnowledgeSources: externalKnowledgeSources.slice(-100).reverse(),
+    photoUploads: photoUploads.slice(-100).reverse(),
     performance: performanceEvents.slice(-100).reverse(),
     slowPerformance: slowPerformanceEvents.slice(-100).reverse(),
     quoteLookups: analytics.filter((event) => event.type === "quote_lookup").slice(-100).reverse(),

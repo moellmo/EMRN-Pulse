@@ -13,6 +13,23 @@ const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "ima
 const redoReturnUrl = process.env.EMRN_REDO_RETURNS_URL || process.env.NEXT_PUBLIC_EMRN_REDO_RETURNS_URL || "https://returns.getredo.com/widget_id/y1cij5e1r309vaq/returns-portal/login?referralId=699c9248ecb6ce99fca4e162";
 
 type PhotoFlow = "product_lookup" | "return_problem";
+type ProductPhotoAnalysis = {
+  visibleText: string;
+  brand: string;
+  model: string;
+  upcCandidates: string[];
+  skuCandidates: string[];
+  manufacturerPartNumbers: string[];
+  productType: string;
+  searchTerms: string[];
+  confidence: "high" | "medium" | "low";
+};
+type ProductPhotoResult = {
+  answer: string;
+  productMatches: CatalogProduct[];
+  externalLookup?: Awaited<ReturnType<typeof lookupExternalKnowledge>>;
+  finalEmrnSearchTerms: string[];
+};
 
 export async function POST(req: NextRequest) {
   try {
@@ -55,10 +72,28 @@ export async function POST(req: NextRequest) {
       });
       const missing = missingReturnSupportFields(supportRequest);
       const answer = returnPhotoAnswer(language, missing);
+      const photoReview = {
+        flow,
+        uploadUrl: upload.url,
+        storagePath: upload.storagePath,
+        fileName: upload.fileName,
+        contentType: upload.contentType,
+        note,
+        answerPreview: answer,
+        missingFields: missing,
+      };
       if (!missing.length) {
         await Promise.allSettled([
           logSupportRequest(supportRequest),
           sendSupportEmail(supportRequest),
+          logAnalyticsEvent({
+            type: "photo_upload",
+            sessionId,
+            language,
+            query: "return/problem photo upload",
+            photoReview,
+            createdAt: new Date().toISOString(),
+          }),
           logAnalyticsEvent({
             type: "support_escalation",
             sessionId,
@@ -68,27 +103,72 @@ export async function POST(req: NextRequest) {
           }),
         ]);
       } else {
-        await logAnalyticsEvent({
-          type: "support_escalation",
-          sessionId,
-          language,
-          query: `return/problem photo upload missing ${missing.join(", ")}`,
-          createdAt: new Date().toISOString(),
-        });
+        await Promise.allSettled([
+          logAnalyticsEvent({
+            type: "photo_upload",
+            sessionId,
+            language,
+            query: `return/problem photo upload missing ${missing.join(", ")}`,
+            photoReview,
+            createdAt: new Date().toISOString(),
+          }),
+          logAnalyticsEvent({
+            type: "support_escalation",
+            sessionId,
+            language,
+            query: `return/problem photo upload missing ${missing.join(", ")}`,
+            createdAt: new Date().toISOString(),
+          }),
+        ]);
       }
       return NextResponse.json({ answer, upload });
     }
 
     const analysis = await analyzeProductPhoto(arrayBuffer, file.type);
-    const answer = await productPhotoAnswer(analysis, language);
+    const productResult = await productPhotoAnswer(analysis, language);
+    await logAnalyticsEvent({
+      type: "photo_upload",
+      sessionId,
+      language,
+      query: analysis.searchTerms.join(", ") || note || "product photo upload",
+      productIds: productResult.productMatches.map((product) => product.productId),
+      photoReview: {
+        flow,
+        uploadUrl: upload.url,
+        storagePath: upload.storagePath,
+        fileName: upload.fileName,
+        contentType: upload.contentType,
+        note,
+        answerPreview: productResult.answer,
+        analysis,
+        productMatches: productResult.productMatches.map((product) => ({
+          name: product.name,
+          sku: product.sku,
+          url: product.url,
+          productId: product.productId,
+          variantId: product.variantId,
+        })),
+        externalLookup: productResult.externalLookup ? {
+          status: productResult.externalLookup.status,
+          sourceType: productResult.externalLookup.sourceType,
+          sourceUrls: productResult.externalLookup.sourceUrls,
+          manufacturerPartNumbers: productResult.externalLookup.manufacturerPartNumbers,
+          searchTerms: productResult.externalLookup.searchTerms,
+          exactProductName: productResult.externalLookup.exactProductName,
+        } : undefined,
+        finalEmrnSearchTerms: productResult.finalEmrnSearchTerms,
+      },
+      createdAt: new Date().toISOString(),
+    });
     await logAnalyticsEvent({
       type: "product_search",
       sessionId,
       language,
       query: analysis.searchTerms.join(", ") || note || "product photo upload",
+      productIds: productResult.productMatches.map((product) => product.productId),
       createdAt: new Date().toISOString(),
     });
-    return NextResponse.json({ answer, upload, analysis });
+    return NextResponse.json({ answer: productResult.answer, upload, analysis });
   } catch (error) {
     console.error("[EMRN Pulse] photo upload failed", error);
     return NextResponse.json({ error: "Photo upload failed." }, { status: 500 });
@@ -170,7 +250,7 @@ async function storeAssistantPhoto(input: {
   };
 }
 
-async function analyzeProductPhoto(arrayBuffer: ArrayBuffer, contentType: string) {
+async function analyzeProductPhoto(arrayBuffer: ArrayBuffer, contentType: string): Promise<ProductPhotoAnalysis> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return {
@@ -253,7 +333,7 @@ async function analyzeProductPhoto(arrayBuffer: ArrayBuffer, contentType: string
   return normalizePhotoAnalysis(await response.json());
 }
 
-function normalizePhotoAnalysis(value: unknown) {
+function normalizePhotoAnalysis(value: unknown): ProductPhotoAnalysis {
   const raw = outputTextFromResponse(value).match(/\{[\s\S]*\}/)?.[0] || "";
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -306,7 +386,7 @@ function outputTextFromResponse(value: unknown) {
 async function productPhotoAnswer(
   analysis: Awaited<ReturnType<typeof analyzeProductPhoto>>,
   language: AssistantLanguage
-) {
+): Promise<ProductPhotoResult> {
   const directPartCandidates = Array.from(new Set([
     ...analysis.skuCandidates,
     ...analysis.manufacturerPartNumbers,
@@ -330,7 +410,11 @@ async function productPhotoAnswer(
     const intro = language === "fr"
       ? `J’ai analysé la photo et trouvé ${analysis.confidence === "high" ? "une correspondance probable" : "des correspondances possibles"} dans EMRN.`
       : `I checked the photo and found ${analysis.confidence === "high" ? "a likely match" : "possible matches"} in EMRN.`;
-    return `${intro}\n\n${productLines(products, language).join("\n")}\n\n${language === "fr" ? "Veuillez vérifier le SKU/modèle avant d’acheter ou d’utiliser l’article." : "Please verify the SKU/model before purchase or use."}`;
+    return {
+      answer: `${intro}\n\n${productLines(products, language).join("\n")}\n\n${language === "fr" ? "Veuillez vérifier le SKU/modèle avant d’acheter ou d’utiliser l’article." : "Please verify the SKU/model before purchase or use."}`,
+      productMatches: products,
+      finalEmrnSearchTerms: directPartCandidates.length ? directPartCandidates : query ? [query] : [],
+    };
   }
 
   const externalLookup = query
@@ -364,12 +448,22 @@ async function productPhotoAnswer(
     ].map((value) => value.trim()).filter(Boolean)));
     const recoveredProducts = await finalEmrnRecoverySearch(recoveryTerms, language);
     if (recoveredProducts.length) {
-      return `${language === "fr" ? "J’ai identifié l’article avec une source approuvée, puis trouvé des correspondances EMRN possibles:" : "I identified the item using approved product information, then found possible EMRN matches:"}\n\n${productLines(recoveredProducts, language).join("\n")}\n\n${language === "fr" ? "Veuillez vérifier le SKU/modèle avant d’acheter ou d’utiliser l’article." : "Please verify the SKU/model before purchase or use."}`;
+      return {
+        answer: `${language === "fr" ? "J’ai identifié l’article avec une source approuvée, puis trouvé des correspondances EMRN possibles:" : "I identified the item using approved product information, then found possible EMRN matches:"}\n\n${productLines(recoveredProducts, language).join("\n")}\n\n${language === "fr" ? "Veuillez vérifier le SKU/modèle avant d’acheter ou d’utiliser l’article." : "Please verify the SKU/model before purchase or use."}`,
+        productMatches: recoveredProducts,
+        externalLookup,
+        finalEmrnSearchTerms: recoveryTerms,
+      };
     }
     const exact = externalLookup.exactProductName || externalLookup.manufacturerPartNumbers.join(", ") || analysis.productType || "this item";
-    return language === "fr"
-      ? `J’ai identifié l’article comme **${exact}** à partir d’une source approuvée, mais je n’ai pas trouvé de correspondance EMRN claire.\n\nEMRN peut vérifier ou sourcer cet article. Envoyez votre nom, courriel, quantité et délai souhaité, et je l’enverrai à l’équipe des devis.`
-      : `I identified the item as **${exact}** using approved product information, but I did not find a clear EMRN catalog match.\n\nEMRN can check/source this item. Send your name, email, quantity, and any deadline, and I’ll send it to the quote team.`;
+    return {
+      answer: language === "fr"
+        ? `J’ai identifié l’article comme **${exact}** à partir d’une source approuvée, mais je n’ai pas trouvé de correspondance EMRN claire.\n\nEMRN peut vérifier ou sourcer cet article. Envoyez votre nom, courriel, quantité et délai souhaité, et je l’enverrai à l’équipe des devis.`
+        : `I identified the item as **${exact}** using approved product information, but I did not find a clear EMRN catalog match.\n\nEMRN can check/source this item. Send your name, email, quantity, and any deadline, and I’ll send it to the quote team.`,
+      productMatches: [],
+      externalLookup,
+      finalEmrnSearchTerms: recoveryTerms,
+    };
   }
 
   const clues = [
@@ -380,9 +474,14 @@ async function productPhotoAnswer(
     analysis.manufacturerPartNumbers.length ? `Manufacturer part candidates: ${analysis.manufacturerPartNumbers.join(", ")}` : "",
     analysis.productType ? `Product type: ${analysis.productType}` : "",
   ].filter(Boolean);
-  return language === "fr"
-    ? `Je n’ai pas trouvé de correspondance EMRN claire à partir de cette photo.${clues.length ? `\n\nCe que j’ai pu lire: ${clues.join("; ")}.` : ""}\n\nJe peux envoyer cette photo à l’équipe EMRN pour vérifier ou préparer un devis.`
-    : `I did not find a clear EMRN match from this photo.${clues.length ? `\n\nWhat I could read: ${clues.join("; ")}.` : ""}\n\nI can send this photo to the EMRN team to check/source the item or prepare a quote.`;
+  return {
+    answer: language === "fr"
+      ? `Je n’ai pas trouvé de correspondance EMRN claire à partir de cette photo.${clues.length ? `\n\nCe que j’ai pu lire: ${clues.join("; ")}.` : ""}\n\nJe peux envoyer cette photo à l’équipe EMRN pour vérifier ou préparer un devis.`
+      : `I did not find a clear EMRN match from this photo.${clues.length ? `\n\nWhat I could read: ${clues.join("; ")}.` : ""}\n\nI can send this photo to the EMRN team to check/source the item or prepare a quote.`,
+    productMatches: [],
+    externalLookup: externalLookup || undefined,
+    finalEmrnSearchTerms: query ? [query] : [],
+  };
 }
 
 async function finalEmrnRecoverySearch(terms: string[], language: AssistantLanguage) {

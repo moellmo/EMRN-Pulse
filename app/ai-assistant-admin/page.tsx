@@ -12,7 +12,7 @@ import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmi
 import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
 import type { KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
-import type { AssistantAiUsageEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
+import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
 import type { CachedAnswer } from "@/lib/assistant/answer-cache";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,11 @@ type AdminRow =
   | (QuoteRequest & { createdAt: string })
   | (SupportRequest & { createdAt: string })
   | AssistantAiUsageEvent
-  | { createdAt: string; type: string; query?: string; language?: string; sessionId?: string; performance?: unknown; externalSources?: Array<{ title?: string; url: string; domain?: string }> };
+  | { createdAt: string; type: string; query?: string; language?: string; sessionId?: string; performance?: unknown; externalSources?: Array<{ title?: string; url: string; domain?: string }>; photoReview?: PhotoReviewPayload };
+
+type PhotoUploadRow = Extract<AssistantAnalyticsEvent, { photoReview?: unknown }>;
+type PhotoReviewPayload = NonNullable<PhotoUploadRow["photoReview"]>;
+type PhotoReviewRow = PhotoUploadRow & { photoReview: PhotoReviewPayload };
 
 type PerformanceRow = AdminRow & {
   performance?: {
@@ -163,7 +167,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                 ) : null}
               </div>
             ) : (
-              <AssistantAdminTabs labels={["Overview", "QA Queue", "Performance", "Teach", "Settings", "Logs"]} initialIndex={teachDraft ? 3 : 0}>
+              <AssistantAdminTabs labels={["Overview", "QA Queue", "Photo Review", "Performance", "Teach", "Settings", "Logs"]} initialIndex={teachDraft ? 4 : 0}>
                 <div>
                   <section className="grid gap-4 md:grid-cols-4">
                     {Object.entries(data.metrics)
@@ -188,6 +192,8 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
                   <QaQueuePanel rows={data.performance || []} token={adminToken} fullHistory={fullHistory} />
                   <SuggestedLiveTestsPanel token={adminToken} />
                 </div>
+
+                <PhotoReviewPanel rows={data.photoUploads || []} token={adminToken} />
 
                 <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <PerformancePanel title="Slow Questions" rows={data.slowPerformance || []} emptyText="No slow questions yet." token={adminToken} fullHistory={fullHistory} />
@@ -433,6 +439,266 @@ function SuggestedLiveTestsPanel({ token }: { token: string }) {
       </div>
     </section>
   );
+}
+
+function PhotoReviewPanel({ rows, token }: { rows: AssistantAnalyticsEvent[]; token: string }) {
+  const sortedRows = sortRowsByTime(rows.filter(hasPhotoReview));
+  const needsReview = sortedRows.filter((row) => photoNeedsHumanReview(row.photoReview));
+  const productPhotos = sortedRows.filter((row) => row.photoReview?.flow === "product_lookup");
+  const returnPhotos = sortedRows.filter((row) => row.photoReview?.flow === "return_problem");
+  const groups = [
+    {
+      title: "Needs Review",
+      help: "Photo uploads where Meri had no EMRN match, missing return details, low confidence, or source-only proof.",
+      rows: needsReview,
+      emptyText: "No photo uploads need review right now.",
+    },
+    {
+      title: "Product Photo Lookups",
+      help: "Customers looking for a product by photo, label, UPC, SKU, or packaging.",
+      rows: productPhotos,
+      emptyText: "No product photo lookups yet.",
+    },
+    {
+      title: "Return / Problem Photos",
+      help: "Return, damage, warranty, or order-problem photos sent to Meri.",
+      rows: returnPhotos,
+      emptyText: "No return/problem photos yet.",
+    },
+  ];
+
+  return (
+    <section className="grid gap-6 xl:grid-cols-2">
+      <div className="rounded-md border border-slate-200 bg-white p-4 xl:col-span-2">
+        <h2 className="text-lg font-semibold">Photo Review</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Review uploaded photos without digging through raw logs. Customer photo links stay in Admin; customer replies still stay EMRN-first.
+        </p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <HumanMetric label="Needs review" value={String(needsReview.length)} />
+          <HumanMetric label="Product photos" value={String(productPhotos.length)} />
+          <HumanMetric label="Return/problem photos" value={String(returnPhotos.length)} />
+        </div>
+      </div>
+
+      {groups.map((group, groupIndex) => (
+        <div key={group.title} className={`rounded-md border border-slate-200 bg-white ${groupIndex === 0 ? "xl:col-span-2" : ""}`}>
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="text-lg font-semibold">{group.title}</h2>
+            <p className="mt-1 text-xs text-slate-500">{group.help} Showing {Math.min(group.rows.length, 25)} of {group.rows.length}.</p>
+          </div>
+          <div className="max-h-[720px] overflow-y-auto">
+            {group.rows.length ? (
+              group.rows.slice(0, 25).map((row, index) => (
+                <PhotoReviewCard key={`${group.title}-${row.createdAt}-${index}`} row={row} token={token} />
+              ))
+            ) : (
+              <div className="p-4 text-sm text-slate-500">{group.emptyText}</div>
+            )}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function PhotoReviewCard({ row, token }: { row: PhotoReviewRow; token: string }) {
+  const review = row.photoReview;
+  const analysis = review.analysis || {};
+  const matches = review.productMatches || [];
+  const externalLookup = review.externalLookup;
+  const reviewReasons = photoReviewReasons(review);
+  const searchTerms = Array.from(new Set([
+    ...(review.finalEmrnSearchTerms || []),
+    ...(analysis.searchTerms || []),
+    ...(analysis.skuCandidates || []),
+    ...(analysis.manufacturerPartNumbers || []),
+    ...(analysis.upcCandidates || []),
+  ].map((value) => String(value || "").trim()).filter(Boolean))).slice(0, 8);
+  const retestHref = row.query
+    ? `/ai-assistant-test?${new URLSearchParams({ ...(token ? { token } : {}), q: row.query }).toString()}`
+    : "";
+  const teachHref = photoTeachLink(row, token, searchTerms);
+
+  return (
+    <article className="border-b border-slate-100 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="font-semibold text-slate-950">{photoFlowLabel(review.flow)}</div>
+          <div className="mt-1 text-xs text-slate-500">{formatDate(row.createdAt)} · {row.language || "unknown"} · session {shortId(row.sessionId)}</div>
+          {row.query ? <div className="mt-2 text-sm font-semibold text-slate-800">{row.query}</div> : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {review.uploadUrl ? (
+            <a className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" href={review.uploadUrl} target="_blank" rel="noreferrer">
+              Open photo
+            </a>
+          ) : null}
+          {retestHref ? (
+            <a className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" href={retestHref}>
+              Retest
+            </a>
+          ) : null}
+          <a className="rounded bg-slate-950 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800" href={teachHref}>
+            Teach from photo
+          </a>
+          <span className={`rounded px-2 py-1 text-xs font-semibold ${photoNeedsHumanReview(review) ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
+            {photoNeedsHumanReview(review) ? "Needs review" : "Looks okay"}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-[220px_1fr]">
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          {review.uploadUrl ? (
+            <a href={review.uploadUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded border border-slate-200 bg-white">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={review.uploadUrl} alt="Uploaded customer photo" className="h-44 w-full object-contain" />
+            </a>
+          ) : (
+            <div className="flex h-44 items-center justify-center rounded border border-dashed border-slate-300 text-sm text-slate-500">No photo link</div>
+          )}
+          <div className="mt-2 break-all text-xs text-slate-500">{review.fileName || review.storagePath || "Photo upload"}</div>
+        </div>
+
+        <div className="space-y-3">
+          <div className={`rounded-md border p-3 text-sm ${photoNeedsHumanReview(review) ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}>
+            <div className="font-semibold">Why this is here</div>
+            <ul className="mt-1 space-y-1">
+              {reviewReasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <HumanMetric label="Flow" value={photoFlowLabel(review.flow)} />
+            <HumanMetric label="EMRN matches" value={matches.length ? `${matches.length} found` : "none"} />
+            <HumanMetric label="Vision confidence" value={String(analysis.confidence || "not logged")} />
+            <HumanMetric label="External proof" value={externalLookup?.status ? `${externalLookup.status}${externalLookup.sourceType ? ` · ${humanProofSource(externalLookup.sourceType)}` : ""}` : "not used"} />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <PhotoList title="What Meri read" items={[
+              analysis.brand ? `Brand: ${analysis.brand}` : "",
+              analysis.model ? `Model: ${analysis.model}` : "",
+              analysis.productType ? `Type: ${analysis.productType}` : "",
+              analysis.visibleText ? `Visible text: ${analysis.visibleText}` : "",
+              analysis.skuCandidates?.length ? `SKU candidates: ${analysis.skuCandidates.join(", ")}` : "",
+              analysis.manufacturerPartNumbers?.length ? `Part numbers: ${analysis.manufacturerPartNumbers.join(", ")}` : "",
+              analysis.upcCandidates?.length ? `UPC/barcode: ${analysis.upcCandidates.join(", ")}` : "",
+            ].filter(Boolean)} />
+            <PhotoList title="Searches tried" items={searchTerms.length ? searchTerms : ["No search terms logged."]} />
+          </div>
+
+          {matches.length ? (
+            <div className="rounded bg-slate-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">EMRN product matches</div>
+              <div className="mt-2 space-y-2">
+                {matches.slice(0, 6).map((match, index) => (
+                  <div key={`${match.productId || index}-${match.sku || match.name}`} className="rounded bg-white p-2 text-sm">
+                    <div className="font-semibold text-slate-900">{match.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">SKU: {match.sku || "not logged"}{match.productId ? ` · Product ${match.productId}` : ""}</div>
+                    {match.url ? <a className="mt-1 inline-block text-xs font-semibold text-red-700 underline underline-offset-2" href={match.url} target="_blank" rel="noreferrer">View product</a> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {externalLookup?.sourceUrls?.length || externalLookup?.manufacturerPartNumbers?.length || externalLookup?.searchTerms?.length ? (
+            <div className="grid gap-3 rounded bg-slate-50 p-3 text-sm md:grid-cols-3">
+              <ProofList title="External sources" items={externalLookup.sourceUrls || []} />
+              <ProofList title="Parts found" items={externalLookup.manufacturerPartNumbers || []} />
+              <ProofList title="Source search terms" items={externalLookup.searchTerms || []} />
+            </div>
+          ) : null}
+
+          {review.missingFields?.length ? (
+            <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <span className="font-semibold">Return review missing:</span> {review.missingFields.join(", ")}
+            </div>
+          ) : null}
+
+          {review.answerPreview ? (
+            <details>
+              <summary className="cursor-pointer text-xs font-semibold text-slate-500">Meri answer preview</summary>
+              <div className="mt-2 rounded bg-slate-50 p-3 text-sm text-slate-700">{answerPreviewText(review.answerPreview)}</div>
+            </details>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function PhotoList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded bg-slate-50 p-3 text-sm text-slate-700">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
+      <ul className="mt-2 space-y-1">
+        {items.slice(0, 8).map((item) => <li key={item}>{item}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+function hasPhotoReview(row: AssistantAnalyticsEvent): row is PhotoReviewRow {
+  return "photoReview" in row && Boolean(row.photoReview);
+}
+
+function photoNeedsHumanReview(review?: PhotoReviewPayload) {
+  if (!review) return false;
+  if (review.flow === "return_problem") return Boolean(review.missingFields?.length);
+  const hasMatch = Boolean(review.productMatches?.length);
+  const confidence = review.analysis?.confidence || "low";
+  if (!hasMatch) return true;
+  if (confidence === "low") return true;
+  if (review.externalLookup?.status && review.externalLookup.status !== "confirmed") return true;
+  return false;
+}
+
+function photoReviewReasons(review: PhotoReviewPayload) {
+  const reasons: string[] = [];
+  if (review.flow === "return_problem") {
+    reasons.push("Customer uploaded a return, damage, warranty, or order-problem photo.");
+    if (review.missingFields?.length) reasons.push(`Needs customer details: ${review.missingFields.join(", ")}.`);
+    else reasons.push("Enough customer details were captured for EMRN review.");
+  } else {
+    reasons.push("Customer asked Meri to search by photo.");
+    if (review.analysis?.confidence) reasons.push(`Vision confidence: ${review.analysis.confidence}.`);
+    if (review.productMatches?.length) reasons.push(`Found ${review.productMatches.length} EMRN product match${review.productMatches.length === 1 ? "" : "es"}.`);
+    else reasons.push("No EMRN product match was logged.");
+    if (review.externalLookup?.status) reasons.push(`External/source result: ${review.externalLookup.status}.`);
+  }
+  return reasons.slice(0, 5);
+}
+
+function photoFlowLabel(flow: PhotoReviewPayload["flow"]) {
+  return flow === "return_problem" ? "Return / problem photo" : "Product photo lookup";
+}
+
+function photoTeachLink(row: PhotoUploadRow, token: string, searchTerms: string[]) {
+  const review = row.photoReview;
+  const firstSku = firstUsefulSku([
+    ...(review?.productMatches || []).map((product) => product.sku || ""),
+    ...(review?.analysis?.skuCandidates || []),
+    ...(review?.analysis?.manufacturerPartNumbers || []),
+  ]);
+  const query = row.query || review?.note || searchTerms.join(" ") || photoFlowLabel(review?.flow || "product_lookup");
+  const note = [
+    "From Photo Review.",
+    review?.fileName ? `File: ${review.fileName}.` : "",
+    review?.analysis?.visibleText ? `Visible text: ${review.analysis.visibleText.slice(0, 250)}.` : "",
+    review?.externalLookup?.sourceType ? `Proof source: ${humanProofSource(review.externalLookup.sourceType)}.` : "",
+    review?.answerPreview ? `Meri answered: ${answerPreviewText(review.answerPreview).slice(0, 300)}.` : "",
+  ].filter(Boolean).join(" ");
+  const params = new URLSearchParams({
+    ...(token ? { token } : {}),
+    teachQuery: query,
+    teachType: review?.flow === "return_problem" ? "note" : firstSku ? "preferred_product" : "alias",
+    teachTerms: firstSku || searchTerms.join(", "),
+    teachNote: note,
+  });
+  return `/ai-assistant-admin?${params.toString()}#teach`;
 }
 
 function PerformanceCard({
@@ -844,6 +1110,7 @@ function humanProofSource(value: string) {
   const labels: Record<string, string> = {
     manufacturer: "Manufacturer",
     supplier_catalog: "Supplier/catalog",
+    manual_pdf: "Manual/PDF",
     emrn: "EMRN",
     mixed: "Mixed sources",
     unknown: "Unknown",

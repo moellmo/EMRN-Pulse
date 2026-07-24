@@ -165,6 +165,7 @@ export type AssistantAnalyticsEvent =
         | "external_knowledge_sources"
         | "quote_request"
         | "quote_lookup"
+        | "photo_upload"
         | "support_escalation"
         | "unanswered_question";
       sessionId: string;
@@ -213,6 +214,43 @@ export type AssistantAnalyticsEvent =
         url: string;
         domain?: string;
       }>;
+      photoReview?: {
+        flow: "product_lookup" | "return_problem";
+        uploadUrl?: string;
+        storagePath?: string;
+        fileName?: string;
+        contentType?: string;
+        note?: string;
+        answerPreview?: string;
+        missingFields?: string[];
+        analysis?: {
+          visibleText?: string;
+          brand?: string;
+          model?: string;
+          upcCandidates?: string[];
+          skuCandidates?: string[];
+          manufacturerPartNumbers?: string[];
+          productType?: string;
+          searchTerms?: string[];
+          confidence?: "high" | "medium" | "low";
+        };
+        productMatches?: Array<{
+          name: string;
+          sku?: string;
+          url?: string;
+          productId?: number;
+          variantId?: number;
+        }>;
+        externalLookup?: {
+          status?: string;
+          sourceType?: string;
+          sourceUrls?: string[];
+          manufacturerPartNumbers?: string[];
+          searchTerms?: string[];
+          exactProductName?: string;
+        };
+        finalEmrnSearchTerms?: string[];
+      };
       createdAt: string;
     };
 
