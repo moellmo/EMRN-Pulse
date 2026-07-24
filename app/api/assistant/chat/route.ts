@@ -1758,6 +1758,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const text = product.description || "";
   const normalizedQuestion = question.toLowerCase();
   const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity)\b/i.test(question);
+  const wantsDescription = /\b(description|details?|overview|specs?|specifications?|features?|what\s+is\s+it|tell\s+me\s+about|what\s+does\s+it\s+include|included|includes|include|comes?\s+with|décris|decris|description|détails?|details?|aperçu|apercu|spécifications?|specifications?|caractéristiques?|caracteristiques?|inclus|comprend)\b/i.test(question);
   const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
   const wantsAvailability = /\b(availability|available|in stock|stock|ships|lead time)\b/i.test(question);
@@ -1796,6 +1797,14 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   if (wantsColor) {
     const color = valueAfterLabel(text, "Color") || valueAfterLabel(text, "Colour");
     if (color) lines.push(language === "fr" ? `Couleur: ${color}` : `Color: ${color}`);
+  }
+
+  if (wantsDescription) {
+    const overview =
+      valueAfterLabel(text, "Product Overview") ||
+      valueAfterLabel(text, "Overview") ||
+      sentenceContaining(text, /\b(designed|features|includes|comes with|contains|ideal|used for|conçu|comprend|inclut)\b/i);
+    if (overview) lines.push(language === "fr" ? `Détail EMRN: ${overview}` : `EMRN detail: ${overview}`);
   }
 
   if (wantsOxygenStorage) {
@@ -1868,6 +1877,39 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
 
 function isPackageDetailQuestion(text: string) {
   return /\b(how\s+many|box|boxes|pack|package|case|count|quantity|quantities|qty|sold by|sold as|unit of sale|per box|per pack|quantit[eé]|vendu comme|vendu par)\b/i.test(text);
+}
+
+function isDirectCatalogDetailQuestion(text: string) {
+  return isPackageDetailQuestion(text) ||
+    /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|couleur|description|details?|overview|specs?|specifications?|features?|what\s+is\s+it|tell\s+me\s+about|what\s+does\s+it\s+include|included|includes|include|comes?\s+with|décris|decris|détails?|details?|aperçu|apercu|spécifications?|specifications?|caractéristiques?|caracteristiques?|inclus|comprend)\b/i.test(text);
+}
+
+function catalogDetailCandidateProducts(question: string, products: CatalogProduct[]) {
+  const skuCandidates = extractSkuCandidates(question).map(normalizeSku).filter(Boolean);
+  if (skuCandidates.length) {
+    const exactSkuProducts = products.filter((product) => skuCandidates.includes(normalizeSku(product.sku || "")));
+    if (exactSkuProducts.length) return exactSkuProducts;
+  }
+
+  const asksAccessory =
+    /\b(shelving|shelf|module|oxygen module|accessor(?:y|ies)|replacement|refill|strap|pouch|insert|divider|part|parts|pi[eè]ce|accessoire|remplacement)\b/i.test(question);
+  const asksColor = /\b(black|blue|green|orange|pink|purple|red|white|yellow|noir|bleu|vert|rouge|blanc|jaune)\b/i.test(question);
+  const accessoryNamePattern = /\b(shelving|shelf|module|accessor(?:y|ies)|replacement|refill|strap|pouch|insert|divider|parts?)\b/i;
+
+  return [...products].sort((a, b) => {
+    const score = (product: CatalogProduct) => {
+      const name = `${product.name} ${product.parentName}`.toLowerCase();
+      let value = 0;
+      if (productDetailFromCatalog(product, question, "en")) value += 20;
+      if (product.purchasable && !product.quoteOnly) value += 2;
+      if (asksColor && /\b(black|blue|green|orange|pink|purple|red|white|yellow)\b/i.test(name)) value += 8;
+      if (!asksAccessory && accessoryNamePattern.test(name)) value -= 30;
+      if (!asksAccessory && /\b(black|blue|green|orange|red)\b/i.test(name)) value += 4;
+      if (/\bg3\+?\s+backup\b/i.test(question) && /\bg35006tk\+?\b/i.test(product.sku || "")) value += 10;
+      return value;
+    };
+    return score(b) - score(a);
+  });
 }
 
 function isCompareIntent(text: string) {
@@ -3394,7 +3436,7 @@ async function handleAssistantPost(req: NextRequest) {
     ? (await Promise.all(preSearchSkus.map((sku) => searchBySKU(sku)))).flat()
     : [];
   const preSearchSkuMs = Date.now() - preSearchSkuStartedAt;
-  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !isPackageDetailQuestion(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
+  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !isDirectCatalogDetailQuestion(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
     ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language, latest)
     : "";
   if (earlyApprovedRuleAnswer) {
@@ -3857,23 +3899,21 @@ async function handleAssistantPost(req: NextRequest) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const detailProducts = await refreshProductsBySku(rememberedDetailProducts.length ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectProductsForCart(latest, detailProducts);
-    const catalogDetailCandidates = (selectedDetailProducts.length ? selectedDetailProducts : detailProducts).slice(0, 8);
-    if (isPackageDetailQuestion(latest)) {
-      for (const product of catalogDetailCandidates) {
-        const catalogAnswer = productDetailFromCatalog(product, latest, language);
-        if (catalogAnswer) {
-          await logPerformance("catalog_detail", { answerPreview: catalogAnswer });
-          return new Response(textStream(catalogAnswer), {
-            headers: {
-              "Content-Type": "text/plain; charset=utf-8",
-              "Cache-Control": "no-store",
-            },
-          });
-        }
+    const catalogDetailCandidates = catalogDetailCandidateProducts(latest, selectedDetailProducts.length ? selectedDetailProducts : detailProducts).slice(0, 8);
+    for (const product of catalogDetailCandidates) {
+      const catalogAnswer = productDetailFromCatalog(product, latest, language);
+      if (catalogAnswer) {
+        await logPerformance("catalog_detail", { answerPreview: catalogAnswer });
+        return new Response(textStream(catalogAnswer), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
       }
     }
     const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
-    const ruleAnswer = isPackageDetailQuestion(latest)
+    const ruleAnswer = isDirectCatalogDetailQuestion(latest)
       ? ""
       : approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language, latest);
     if (ruleAnswer) {
@@ -3894,7 +3934,7 @@ async function handleAssistantPost(req: NextRequest) {
           .filter(Boolean),
       ].map((sku) => sku.toUpperCase()))
     );
-    const localCompatibilityAnswer = isPackageDetailQuestion(latest)
+    const localCompatibilityAnswer = isDirectCatalogDetailQuestion(latest)
       ? ""
       : catalogCompatibilityAnswerFromProducts(
           selectedDetailProducts.length ? selectedDetailProducts : detailProducts,
@@ -3913,7 +3953,7 @@ async function handleAssistantPost(req: NextRequest) {
       });
     }
 
-    if (!isPackageDetailQuestion(latest) && isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
+    if (!isDirectCatalogDetailQuestion(latest) && isCompatibilityQuestion(latest) && selectedDetailProducts.length === 1) {
       const compatibilityAnswer = catalogCompatibilityAnswer(selectedDetailProducts[0], latest, language);
       if (compatibilityAnswer && !/^Can’t confirm:|^Can.t confirm:|^Je ne peux pas confirmer/i.test(compatibilityAnswer)) {
         await logPerformance("catalog_compatibility", { answerPreview: compatibilityAnswer });
@@ -3949,19 +3989,6 @@ async function handleAssistantPost(req: NextRequest) {
         const relatedAnswer = `${intro}\n\n${productResultsText(relatedParts.slice(0, 6), language, partsQueries[0]).replace(/^Here are the products I found for .+?:\n\n/i, "").replace(/\n\nIf you tell me[\s\S]*$/i, "")}`;
         await logPerformance("related_parts", { answerPreview: relatedAnswer });
         return new Response(textStream(relatedAnswer), {
-          headers: {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-store",
-          },
-        });
-      }
-    }
-
-    for (const product of catalogDetailCandidates) {
-      const catalogAnswer = productDetailFromCatalog(product, latest, language);
-      if (catalogAnswer) {
-        await logPerformance("catalog_detail", { answerPreview: catalogAnswer });
-        return new Response(textStream(catalogAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
