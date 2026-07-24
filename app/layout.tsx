@@ -4,6 +4,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "EMRN Pulse | AI Medical Supply Assistant",
   description: "EMRN Pulse helps customers find medical supplies, request quotes, and connect with EMRN support.",
+  icons: {
+    icon: "/emrn-pulse/meri-avatar.png",
+    shortcut: "/emrn-pulse/meri-avatar.png",
+    apple: "/emrn-pulse/meri-avatar.png",
+  },
 };
 
 export default function RootLayout({
