@@ -168,14 +168,18 @@ export function isSupportYes(text: string) {
 
 export function extractSkuCandidates(text: string) {
   const candidates: string[] = [];
-  const skuText = text
+  const normalizedText = String(text || "").replace(
+    /\b(do\s*you\s*have|do\s*u\s*have|have|carry|find|search|show\s*me|sku|item|product|produit|avez[-\s]?vous|cherche)(?=[A-Z]{1,12}\d|[A-Z0-9]{2,}[/-][A-Z0-9]+|\d{4,})/gi,
+    "$1 "
+  );
+  const skuText = normalizedText
     .replace(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30}\b/gi, " ")
     .replace(/\b(?:this|item|product|produit)(?=[A-Z]{1,10}\s*-?\s*\d{2,})/gi, " ")
     .replace(/\b(?:do\s+you\s+have|do\s+u\s+have|have|carry|find|search|show\s+me|looking\s+for|look\s+for|avez[-\s]?vous|cherche)\b/gi, " ")
     .replace(/\b(?:i|we)\s+(?:want|would like|need)\s+to\s+(?:purchase|buy|order)\b/gi, " ")
     .replace(/\b(?:purchase|buy|order|add|cart|catt|cartt|crt|checkout|sku|item|product|produit|acheter|commander|panier)\b/gi, " ");
 
-  for (const match of text.matchAll(/\bsku\s*[:#]?\s*([A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
+  for (const match of normalizedText.matchAll(/\bsku\s*[:#]?\s*([A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
     candidates.push(match[1]);
   }
 
