@@ -8,8 +8,8 @@ import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistant/openai";
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
-import { matchingApprovedKnowledgeForQuery } from "@/lib/assistant/knowledge-memory";
-import { assistantFeatureEnabledAsync, matchesConfiguredContactIntent } from "@/lib/assistant/admin-config";
+import { matchingApprovedKnowledgeForQuery, taughtIntentRouteForQuery } from "@/lib/assistant/knowledge-memory";
+import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
 import { answerCacheEligibility, getCachedAnswer, saveCachedAnswer, type AnswerCacheEligibility, type CacheSaveResult } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
 import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
@@ -2934,6 +2934,11 @@ async function handleAssistantPost(req: NextRequest) {
   const language = requestedLanguage && requestedLanguage !== "unknown" ? requestedLanguage : detectCustomerLanguage(messages);
   const pageContext = (body?.pageContext || {}) as ProductPageContext;
   const latest = messages.at(-1)?.content || "";
+  const taughtIntentRoute = await taughtIntentRouteForQuery(latest);
+  const taughtContactIntent = taughtIntentRoute === "contact" || taughtIntentRoute === "support";
+  const taughtQuoteIntent = taughtIntentRoute === "quote";
+  const taughtOrderStatusIntent = taughtIntentRoute === "order_status";
+  const taughtAvailabilityIntent = taughtIntentRoute === "availability";
   const createdAt = new Date().toISOString();
   let searchTiming: {
     totalMs?: number;
@@ -3233,7 +3238,7 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isOrderStatusIntent(latest) || shippingTimingHasOrderContext || shouldSendOrderStatusSupport || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
+  if (isOrderStatusIntent(latest) || taughtOrderStatusIntent || shippingTimingHasOrderContext || shouldSendOrderStatusSupport || (priorAssistantRequestedOrderStatus && looksLikeOrderDetailsReply && !isQuickActionPrompt(latest))) {
     const draft = buildOrderStatusDraft(messages, language);
     if (draft.request) {
       if (shouldSendOrderStatusSupport) {
@@ -3320,7 +3325,7 @@ async function handleAssistantPost(req: NextRequest) {
     }
   }
 
-  const shouldIgnorePriorQuoteFlow = (isQuickActionPrompt(latest) || isProductSearchIntent(latest)) && !isQuoteIntent(latest);
+  const shouldIgnorePriorQuoteFlow = (isQuickActionPrompt(latest) || isProductSearchIntent(latest)) && !isQuoteIntent(latest) && !taughtQuoteIntent;
   const shouldContinuePriorQuoteFlow =
     !shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages) && looksLikeQuoteDetailsReply(latest);
   const shouldContinueItemRequestFlow =
@@ -3505,13 +3510,13 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isContactIntent(latest) || await matchesConfiguredContactIntent(latest)) {
+  if (isContactIntent(latest) || taughtContactIntent) {
     return new Response(textStream(contactHelpText(language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
 
-  if (isAvailabilityIntent(latest) && !isResultFilterIntent(latest)) {
+  if ((isAvailabilityIntent(latest) || taughtAvailabilityIntent) && !isResultFilterIntent(latest)) {
     const latestSkuCandidates = extractSkuCandidates(latest);
     const skuCandidates = latestSkuCandidates.length
       ? latestSkuCandidates
@@ -3546,7 +3551,7 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   const pageProductsForCart =
-    (isCartIntent(latest) || isQuoteIntent(latest) || isProductDetailIntent(latest)) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
+    (isCartIntent(latest) || isQuoteIntent(latest) || taughtQuoteIntent || isProductDetailIntent(latest)) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
       ? await productsFromPageContext(pageContext, language)
       : [];
   const skuCandidates = extractSkuCandidates(latest);
@@ -3575,6 +3580,7 @@ async function handleAssistantPost(req: NextRequest) {
   const shouldUseRememberedProducts =
     shouldUseRememberedCartProducts ||
     isQuoteIntent(latest) ||
+    taughtQuoteIntent ||
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
     (isProductDetailIntent(latest) && isContextProductSelectionReply(latest)) ||
@@ -4050,7 +4056,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (!shouldContinueMissingProductFlow && (isQuoteIntent(latest) || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow)) {
+  if (!shouldContinueMissingProductFlow && (isQuoteIntent(latest) || taughtQuoteIntent || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
       await Promise.all([
@@ -4109,7 +4115,7 @@ async function handleAssistantPost(req: NextRequest) {
         });
       }
     }
-    if (!skuCandidates.length && isProductSearchIntent(latest) && !isQuoteIntent(latest) && !isOrderStatusIntent(latest) && !isContactIntent(latest)) {
+    if (!skuCandidates.length && isProductSearchIntent(latest) && !isQuoteIntent(latest) && !taughtQuoteIntent && !isOrderStatusIntent(latest) && !taughtOrderStatusIntent && !isContactIntent(latest) && !taughtContactIntent) {
       const suggestion = await keywordSuggestion(latest, language);
       if (suggestion) {
         const suggestionAnswer = keywordSuggestionText(suggestion, language);

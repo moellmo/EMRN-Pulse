@@ -14,11 +14,10 @@ export type AssistantRuntimeConfig = {
   qaDailyReminderEnabled: boolean;
   answerCacheEnabled: boolean;
   trustedExternalDomains: string[];
-  contactIntentPhrases: string[];
   updatedAt?: string;
 };
 
-export type AssistantRuntimeBooleanFeature = Exclude<keyof Omit<AssistantRuntimeConfig, "updatedAt">, "trustedExternalDomains" | "contactIntentPhrases">;
+export type AssistantRuntimeBooleanFeature = Exclude<keyof Omit<AssistantRuntimeConfig, "updatedAt">, "trustedExternalDomains">;
 
 function envFlag(name: string, fallback: boolean) {
   const value = process.env[name];
@@ -44,19 +43,6 @@ function domainListValue(value: unknown, fallback: string[]) {
   return Array.from(new Set(domains));
 }
 
-function phraseListValue(value: unknown, fallback: string[]) {
-  const raw = Array.isArray(value)
-    ? value
-    : typeof value === "string"
-      ? value.split(/[\n,]+/)
-      : fallback;
-  const phrases = raw
-    .map((item) => String(item || "").toLowerCase().trim())
-    .map((item) => item.replace(/\s+/g, " "))
-    .filter((item) => item.length >= 3 && item.length <= 80);
-  return Array.from(new Set(phrases)).slice(0, 250);
-}
-
 function writeConfigFile(config: AssistantRuntimeConfig) {
   try {
     mkdirSync(dataDir, { recursive: true });
@@ -78,17 +64,6 @@ function defaultConfig(): AssistantRuntimeConfig {
     qaDailyReminderEnabled: envFlag("EMRN_QA_DAILY_REMINDER_ENABLED", true),
     answerCacheEnabled: envFlag("EMRN_ANSWER_CACHE_ENABLED", true),
     trustedExternalDomains: domainListValue(process.env.EMRN_TRUSTED_EXTERNAL_DOMAINS, []),
-    contactIntentPhrases: phraseListValue(process.env.EMRN_CONTACT_INTENT_PHRASES, [
-      "speak with agent",
-      "speak with agents",
-      "speak with agen",
-      "speak with agens",
-      "speak to agent",
-      "talk to agent",
-      "talk to someone",
-      "customer service",
-      "contact support",
-    ]),
   };
 }
 
@@ -113,7 +88,6 @@ export function readAssistantConfigSync(): AssistantRuntimeConfig {
     qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, defaults.qaDailyReminderEnabled),
     answerCacheEnabled: booleanValue(saved.answerCacheEnabled, defaults.answerCacheEnabled),
     trustedExternalDomains: domainListValue(saved.trustedExternalDomains, defaults.trustedExternalDomains),
-    contactIntentPhrases: phraseListValue(saved.contactIntentPhrases, defaults.contactIntentPhrases),
     updatedAt: saved.updatedAt,
   };
 }
@@ -134,7 +108,6 @@ export async function readAssistantConfig(): Promise<AssistantRuntimeConfig> {
       qaDailyReminderEnabled: booleanValue(saved.qaDailyReminderEnabled, localConfig.qaDailyReminderEnabled),
       answerCacheEnabled: booleanValue(saved.answerCacheEnabled, localConfig.answerCacheEnabled),
       trustedExternalDomains: domainListValue(saved.trustedExternalDomains, localConfig.trustedExternalDomains),
-      contactIntentPhrases: phraseListValue(saved.contactIntentPhrases, localConfig.contactIntentPhrases),
       updatedAt: saved.updatedAt,
     };
   } catch (error) {
@@ -154,7 +127,6 @@ export async function saveAssistantConfig(input: Partial<AssistantRuntimeConfig>
     qaDailyReminderEnabled: booleanValue(input.qaDailyReminderEnabled, current.qaDailyReminderEnabled),
     answerCacheEnabled: booleanValue(input.answerCacheEnabled, current.answerCacheEnabled),
     trustedExternalDomains: domainListValue(input.trustedExternalDomains, current.trustedExternalDomains),
-    contactIntentPhrases: phraseListValue(input.contactIntentPhrases, current.contactIntentPhrases),
     updatedAt: new Date().toISOString(),
   };
 
@@ -178,11 +150,4 @@ export function assistantFeatureEnabled(feature: AssistantRuntimeBooleanFeature)
 
 export async function assistantFeatureEnabledAsync(feature: AssistantRuntimeBooleanFeature) {
   return (await readAssistantConfig())[feature];
-}
-
-export async function matchesConfiguredContactIntent(text: string) {
-  const normalizedText = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (!normalizedText) return false;
-  const phrases = (await readAssistantConfig()).contactIntentPhrases;
-  return phrases.some((phrase) => normalizedText.includes(phrase) || phrase.includes(normalizedText));
 }

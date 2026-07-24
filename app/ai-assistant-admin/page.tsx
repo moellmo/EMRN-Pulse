@@ -12,7 +12,7 @@ import { KnowledgeReviewAdmin } from "@/components/assistant/KnowledgeReviewAdmi
 import { PerformanceReviewedButton } from "@/components/assistant/PerformanceReviewedButton";
 import { PhotoReviewedButton } from "@/components/assistant/PhotoReviewedButton";
 import { SkuConfigAdmin } from "@/components/assistant/SkuConfigAdmin";
-import type { KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
+import type { KnowledgeMemoryItem, KnowledgeMemoryType } from "@/lib/assistant/knowledge-memory";
 import type { AssistantAiUsageEvent, AssistantAnalyticsEvent, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
 import type { CachedAnswer } from "@/lib/assistant/answer-cache";
 
@@ -64,6 +64,7 @@ type AdminPageProps = {
     history?: string | string[];
     teachQuery?: string | string[];
     teachType?: string | string[];
+    teachAnswer?: string | string[];
     teachTerms?: string | string[];
     teachNote?: string | string[];
   }>;
@@ -104,6 +105,7 @@ export default async function AssistantAdminPage({ searchParams }: AdminPageProp
         type: safeKnowledgeType(searchParamValue(params.teachType)) || "alias",
         query: teachQuery,
         correctSearchTerms: searchParamValue(params.teachTerms),
+        answer: safeKnowledgeAnswer(searchParamValue(params.teachAnswer)),
         note: searchParamValue(params.teachNote),
         status: "approved" as const,
       }
@@ -1317,8 +1319,14 @@ function searchParamValue(value?: string | string[]) {
 }
 
 function safeKnowledgeType(value: string): KnowledgeMemoryType | "" {
-  return ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "note"].includes(value)
+  return ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "note", "intent_route"].includes(value)
     ? value as KnowledgeMemoryType
+    : "";
+}
+
+function safeKnowledgeAnswer(value: string): KnowledgeMemoryItem["answer"] {
+  return ["", "confirmed", "not_compatible", "cant_confirm", "route_quote", "route_contact", "route_order_status", "route_availability", "route_support"].includes(value)
+    ? value as KnowledgeMemoryItem["answer"]
     : "";
 }
 
@@ -1348,6 +1356,7 @@ function teachLinkForRow(row: PerformanceRow, token: string, fullHistory: boolea
     ...(fullHistory ? { history: "full" } : {}),
     teachQuery: query,
     teachType: type,
+    ...(intentRouteAnswerForQuery(query) ? { teachAnswer: intentRouteAnswerForQuery(query) } : {}),
     teachTerms: searchUsed,
     teachNote: note,
   });
@@ -1363,11 +1372,21 @@ function retestLinkForRow(row: PerformanceRow, token: string) {
 }
 
 function knowledgeTypeForPerformanceRow(query: string, answerPath: string): KnowledgeMemoryType {
+  if (intentRouteAnswerForQuery(query)) return "intent_route";
   if (/\b(compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that)\b/i.test(query)) return "compatibility";
   if (/\b(replacement|parts?|pads?|padz|electrodes?|airways?|lungs?|batter(?:y|ies)|cables?)\b/i.test(query)) return "replacement_part";
   if (/\b(color|colour|orange|red|blue|black|white|green|yellow|pink|purple)\b/i.test(query)) return "color_option";
   if (/\bapproved_knowledge|emrn_compatibility|catalog_compatibility\b/i.test(answerPath)) return "preferred_product";
   return "alias";
+}
+
+function intentRouteAnswerForQuery(query: string) {
+  if (/\b(quote|quotes|qoute|qoutes|qupte|qutoe|devis|soumission)\b/i.test(query)) return "route_quote";
+  if (/\b(contact|support|agent|agents|agen|agens|representative|representatives|customer service|human)\b/i.test(query)) return "route_contact";
+  if (/\b(order status|track order|tracking|where is my order|has not shipped|not been shipped|commande|suivi)\b/i.test(query)) return "route_order_status";
+  if (/\b(availability|available|in stock|stock|lead time|when will.*ship|disponible)\b/i.test(query)) return "route_availability";
+  if (/\b(return|returns|damaged|wrong item|problem|pickup|pick up|local pickup)\b/i.test(query)) return "route_support";
+  return "";
 }
 
 function formatMs(value: number) {

@@ -80,7 +80,7 @@ export function isMedicalAdviceRequest(text: string) {
 
 export function isQuoteIntent(text: string) {
   text = intentText(text);
-  return /\b(quote|pricing|formal quote|request a quote|special pricing|bulk price|company pricing|purchase order|po\b|b2b|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
+  return /\b(quotes?|pricing|formal quotes?|request (?:a )?quotes?|special pricing|bulk price|company pricing|purchase order|po\b|b2b|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
 }
 
 export function isCartIntent(text: string) {

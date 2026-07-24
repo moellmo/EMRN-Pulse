@@ -17,9 +17,11 @@ export type KnowledgeMemoryType =
   | "compatibility"
   | "replacement_part"
   | "color_option"
-  | "note";
+  | "note"
+  | "intent_route";
 
 export type KnowledgeMemoryStatus = "approved" | "needs_review" | "disabled";
+export type KnowledgeIntentRoute = "contact" | "quote" | "order_status" | "availability" | "support";
 
 export type KnowledgeMemoryItem = {
   id: string;
@@ -28,7 +30,7 @@ export type KnowledgeMemoryItem = {
   correctSearchTerms?: string;
   correctSku?: string;
   relatedSku?: string;
-  answer?: "confirmed" | "not_compatible" | "cant_confirm" | "";
+  answer?: "confirmed" | "not_compatible" | "cant_confirm" | `route_${KnowledgeIntentRoute}` | "";
   sourceUrl?: string;
   note?: string;
   status: KnowledgeMemoryStatus;
@@ -187,6 +189,12 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
     }
     return hasMeaningfulOverlap(normalizedQuery, itemText);
   });
+}
+
+export async function taughtIntentRouteForQuery(query: string): Promise<KnowledgeIntentRoute | null> {
+  const match = (await matchingApprovedKnowledgeForQuery(query)).find((item) => item.type === "intent_route" && /^route_/.test(item.answer || ""));
+  const route = match?.answer?.replace(/^route_/, "") as KnowledgeIntentRoute | undefined;
+  return route && ["contact", "quote", "order_status", "availability", "support"].includes(route) ? route : null;
 }
 
 function hasMeaningfulOverlap(normalizedQuery: string, value: string) {

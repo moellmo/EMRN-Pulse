@@ -18,9 +18,10 @@ type KnowledgeReviewAdminProps = {
   initialDraft?: Partial<typeof emptyDraft>;
 };
 
-const typeOptions: KnowledgeMemoryType[] = ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "note"];
+const typeOptions: KnowledgeMemoryType[] = ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "intent_route", "note"];
 const statusOptions: KnowledgeMemoryStatus[] = ["approved", "needs_review", "disabled"];
 const answerOptions: Array<NonNullable<KnowledgeMemoryItem["answer"]>> = ["", "confirmed", "not_compatible", "cant_confirm"];
+const routeAnswerOptions: Array<NonNullable<KnowledgeMemoryItem["answer"]>> = ["route_quote", "route_contact", "route_order_status", "route_availability", "route_support"];
 
 const typeHelp: Record<KnowledgeMemoryType, { title: string; useWhen: string; example: string; fields: string }> = {
   alias: {
@@ -58,6 +59,12 @@ const typeHelp: Record<KnowledgeMemoryType, { title: string; useWhen: string; ex
     useWhen: "Use this for broad behavior guidance that is not tied to one exact product.",
     example: "Example: training pads should not outrank real AED pads unless customer says training.",
     fields: "Fill Customer Query and Note. Add search terms only if it should also improve search.",
+  },
+  intent_route: {
+    title: "Intent/routing: customer wording means an action, not product search",
+    useWhen: "Use this when Meri searched products but should have routed to quote, contact, order status, availability, or support.",
+    example: "Example: request quotes -> route_quote. speak with agen -> route_contact.",
+    fields: "Fill Customer Query and choose the route in Answer. Leave SKU and search terms blank unless you also need product search help.",
   },
 };
 
@@ -147,7 +154,12 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches, initialDraf
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <Select label="Type" value={draft.type} options={typeOptions} onChange={(value) => setDraft((current) => ({ ...current, type: value as KnowledgeMemoryType }))} />
         <Select label="Status" value={draft.status} options={statusOptions} onChange={(value) => setDraft((current) => ({ ...current, status: value as KnowledgeMemoryStatus }))} />
-        <Select label="Answer" value={draft.answer || ""} options={answerOptions} onChange={(value) => setDraft((current) => ({ ...current, answer: value as KnowledgeMemoryItem["answer"] }))} />
+        <Select
+          label={draft.type === "intent_route" ? "Route To" : "Answer"}
+          value={draft.answer || ""}
+          options={draft.type === "intent_route" ? routeAnswerOptions : answerOptions}
+          onChange={(value) => setDraft((current) => ({ ...current, answer: value as KnowledgeMemoryItem["answer"] }))}
+        />
         <Input label="Correct SKU" value={draft.correctSku || ""} onChange={(value) => setDraft((current) => ({ ...current, correctSku: value }))} placeholder="989803139261" />
         <Input label="Customer Query" value={draft.query} onChange={(value) => setDraft((current) => ({ ...current, query: value }))} placeholder="electrodes pour philips frx" />
         <Input label="Correct Search Terms" value={draft.correctSearchTerms || ""} onChange={(value) => setDraft((current) => ({ ...current, correctSearchTerms: value }))} placeholder="Philips FRx SMART Pads II" />
@@ -206,6 +218,7 @@ export function KnowledgeReviewAdmin({ token, items, failedSearches, initialDraf
 
 function typeLabel(type: KnowledgeMemoryType) {
   if (type === "alias") return "alias / spelling typo";
+  if (type === "intent_route") return "intent / routing";
   return type.replace(/_/g, " ");
 }
 
