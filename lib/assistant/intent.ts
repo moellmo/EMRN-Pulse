@@ -89,7 +89,8 @@ export function isAccountIntent(text: string) {
 }
 
 export function isOrderStatusIntent(text: string) {
-  return /\b(order status|order update|update on my order|update for my order|order tracking|track(?:ing)?|where is my order|shipment update|shipping update|check order|check my order|commande|suivi|statut de commande|ou est ma commande|où est ma commande)\b/i.test(text);
+  return /\b(order status|order update|update on my order|update for my order|order tracking|track(?:ing)?|where is my order|shipment update|shipping update|check order|check my order|commande|suivi|statut de commande|ou est ma commande|où est ma commande)\b/i.test(text) ||
+    /\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30}\b/i.test(text);
 }
 
 export function isContactIntent(text: string) {
@@ -123,6 +124,7 @@ export function isSupportYes(text: string) {
 export function extractSkuCandidates(text: string) {
   const candidates: string[] = [];
   const skuText = text
+    .replace(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30}\b/gi, " ")
     .replace(/\b(?:this|item|product|produit)(?=[A-Z]{1,10}\s*-?\s*\d{2,})/gi, " ")
     .replace(/\b(?:do\s+you\s+have|do\s+u\s+have|have|carry|find|search|show\s+me|looking\s+for|look\s+for|avez[-\s]?vous|cherche)\b/gi, " ")
     .replace(/\b(?:i|we)\s+(?:want|would like|need)\s+to\s+(?:purchase|buy|order)\b/gi, " ")
@@ -546,7 +548,7 @@ export function buildOrderStatusDraft(
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
     directReplyFor(messages, "name");
   const explicitOrderNumber =
-    text.match(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)\s*[:#-]?\s*([A-Z0-9-]{4,30})\b/i)?.[1] ||
+    text.match(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30})\b/i)?.[1] ||
     text.match(/\border\s*#\s*([A-Z0-9-]{4,30})\b/i)?.[1] ||
     text.match(/\bcommande\s*#\s*([A-Z0-9-]{4,30})\b/i)?.[1];
   const standaloneOrderNumber = latest.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9-]{5,30}\b/i)?.[0] || "";
