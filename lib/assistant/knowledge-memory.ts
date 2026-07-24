@@ -56,8 +56,14 @@ function readMemoryFile(): KnowledgeMemoryItem[] {
 }
 
 function writeMemoryFile(items: KnowledgeMemoryItem[]) {
-  mkdirSync(dataDir, { recursive: true });
-  writeFileSync(memoryPath, `${JSON.stringify(items, null, 2)}\n`);
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(memoryPath, `${JSON.stringify(items, null, 2)}\n`);
+    return true;
+  } catch (error) {
+    console.warn("[EMRN Pulse] knowledge memory local write skipped", error);
+    return false;
+  }
 }
 
 export function readKnowledgeMemorySync() {
@@ -86,7 +92,7 @@ export async function approvedKnowledgeMemory() {
 
 export async function saveKnowledgeMemoryItem(input: Partial<KnowledgeMemoryItem>) {
   const now = new Date().toISOString();
-  const items = readMemoryFile();
+  const items = await readKnowledgeMemory();
   const id = cleanText(input.id, 80) || crypto.randomUUID();
   const existing = items.find((item) => item.id === id);
   const next: KnowledgeMemoryItem = {
@@ -109,23 +115,39 @@ export async function saveKnowledgeMemoryItem(input: Partial<KnowledgeMemoryItem
   }
 
   const withoutExisting = items.filter((item) => item.id !== id);
-  writeMemoryFile([next, ...withoutExisting].slice(0, 1000));
-  try {
-    await saveSupabaseKnowledgeMemoryItem(next);
-  } catch (error) {
-    console.warn("[EMRN Pulse] Supabase knowledge memory save skipped", error);
+  let supabaseSaved: KnowledgeMemoryItem | null = null;
+  let supabaseError: unknown = null;
+
+  if (supabaseAdminConfigured()) {
+    try {
+      supabaseSaved = await saveSupabaseKnowledgeMemoryItem(next);
+    } catch (error) {
+      supabaseError = error;
+      console.warn("[EMRN Pulse] Supabase knowledge memory save skipped", error);
+    }
   }
-  return next;
+
+  const localSaved = writeMemoryFile([supabaseSaved || next, ...withoutExisting].slice(0, 1000));
+  if (!supabaseSaved && !localSaved && supabaseError) throw supabaseError;
+  return supabaseSaved || next;
 }
 
 export async function deleteKnowledgeMemoryItem(id: string) {
-  const items = readMemoryFile();
-  writeMemoryFile(items.filter((item) => item.id !== id));
-  try {
-    await deleteSupabaseKnowledgeMemoryItem(id);
-  } catch (error) {
-    console.warn("[EMRN Pulse] Supabase knowledge memory delete skipped", error);
+  const items = await readKnowledgeMemory();
+  let supabaseDeleted = false;
+  let supabaseError: unknown = null;
+
+  if (supabaseAdminConfigured()) {
+    try {
+      supabaseDeleted = await deleteSupabaseKnowledgeMemoryItem(id);
+    } catch (error) {
+      supabaseError = error;
+      console.warn("[EMRN Pulse] Supabase knowledge memory delete skipped", error);
+    }
   }
+
+  const localSaved = writeMemoryFile(items.filter((item) => item.id !== id));
+  if (!supabaseDeleted && !localSaved && supabaseError) throw supabaseError;
   return { deleted: true };
 }
 

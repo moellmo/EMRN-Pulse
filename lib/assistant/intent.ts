@@ -46,6 +46,7 @@ function intentText(text: string) {
     .replace(/\btlak\b/gi, "talk")
     .replace(/\brepresen(?:ta|at|taa|ata)?t(?:a|ai|ia)?ive\b/gi, "representative")
     .replace(/\brep\b/gi, "representative")
+    .replace(/\bagen\b/gi, "agent")
     .replace(/\bagnet\b/gi, "agent")
     .replace(/\bcostumer\b/gi, "customer")
     .replace(/\bsupprot\b/gi, "support")
