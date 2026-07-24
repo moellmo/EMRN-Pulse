@@ -250,11 +250,8 @@ function normalizeIntentRouteText(value: string) {
 }
 
 function intentRouteMatchScore(normalizedQuery: string, item: KnowledgeMemoryItem, route: KnowledgeIntentRoute) {
-  if (!querySupportsRoute(normalizedQuery, route)) return 0;
-
   const normalizedRule = normalizeIntentRouteText(`${item.query} ${item.note || ""}`);
   if (!normalizedRule) return 0;
-  if (routeCoreTerms(route).some((term) => normalizedQuery.includes(term) && normalizedRule.includes(term))) return 90;
   if (normalizedQuery.includes(normalizedRule) || normalizedRule.includes(normalizedQuery)) return 100;
 
   const queryTerms = significantIntentRouteTerms(normalizedQuery);
@@ -262,6 +259,7 @@ function intentRouteMatchScore(normalizedQuery: string, item: KnowledgeMemoryIte
   const matches = ruleTerms.filter((term) => queryTerms.includes(term));
   let score = matches.length * 10;
   if (routeCoreTerms(route).some((term) => queryTerms.includes(term) && ruleTerms.includes(term))) score += 30;
+  if (querySupportsRoute(normalizedQuery, route) && routeCoreTerms(route).some((term) => ruleTerms.includes(term))) score += 25;
   return score >= 30 ? score : 0;
 }
 
