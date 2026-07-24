@@ -118,6 +118,10 @@ function shippingTimingClarifierText(language: "en" | "fr" | "unknown") {
     : "Sure. Is this for an order you already placed, or are you checking when a product can ship?\n\nFor an order: send the order number and the email used for the order.\nFor a product: send the SKU or product name, and I’ll check the availability/lead time.";
 }
 
+function isExistingOrderShippingReply(text: string) {
+  return /\b(i ordered|already ordered|placed an order|my order|has not been shipped|hasn.t shipped|not shipped yet|not been shipped|je l.ai command[eé]|commande d[eé]j[aà]|ma commande|pas encore exp[eé]di[eé]|n.a pas [eé]t[eé] exp[eé]di[eé])\b/i.test(text);
+}
+
 function recentSkuFromConversation(messages: AssistantMessage[]) {
   return messages
     .slice()
@@ -793,12 +797,15 @@ function recentAssistantProductSkus(messages: AssistantMessage[]) {
   for (const message of assistantMessages) {
     const content = message.content || "";
     const looksProductRelated =
-      /products I found|produits que j’ai trouvés|which one would you like added|laquelle voulez-vous ajouter|SKU\s*:/i.test(
+      /products I found|produits que j’ai trouvés|I found this item|J’ai trouvé cet article|which one would you like added|laquelle voulez-vous ajouter|SKU\s*:/i.test(
         content
       );
     if (!looksProductRelated) continue;
 
     for (const match of content.matchAll(/\bSKU:\s*([A-Z0-9+/-]{3,40})/gi)) addSku(match[1] || "");
+    for (const match of content.matchAll(/\bSKU\s+([A-Z0-9+/-]{3,40})\b/gi)) addSku(match[1] || "");
+    for (const match of content.matchAll(/\b(?:item|article)\s+for\s+[“"']?([A-Z0-9+/-]{3,40})[”"']?/gi)) addSku(match[1] || "");
+    for (const match of content.matchAll(/\b(?:for|pour)\s+[“"']([A-Z0-9+/-]{3,40})[”"']/gi)) addSku(match[1] || "");
     for (const match of content.matchAll(/\(([A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9-]*\+?)\)/gi)) addSku(match[1] || "");
     if (skus.length) break;
   }
@@ -1043,6 +1050,7 @@ function searchQueryForLatest(messages: AssistantMessage[], latest: string, prod
   const inferred = inferSearchQuery(messages, products);
   const shouldUseContext =
     /\b(more|another|same|these|those|them|it|this|that|one|ones|compatible|fit|accessor|accessory|accessories)\b/i.test(latest) ||
+    (products.length > 0 && /\b(price|cost|how much|piece|each|unit|single|box|boxes|pack|package|case|count|per box|per pack)\b/i.test(latest)) ||
     /\b(plus|autre|meme|même|ceci|cela|ceux|celles|compatible|accessoire|accessoires)\b/i.test(latest);
 
   if (shouldUseContext && inferred) return cleanProductQuery(inferred) || inferred;
@@ -1195,16 +1203,86 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
       : `${index + 1}. **${product.name}** — SKU: ${product.sku || "unavailable"} — ${price}. ${availability}. ${action}. [View product](${product.url})`;
   });
 
+  const kitQueryLabel = kitQuerySubject(query);
   const intro =
-    language === "fr"
-      ? `Voici les produits que j’ai trouvés pour « ${query} » :`
-      : `Here are the products I found for “${query}”:`;
+    isKitQuery(query) && !hasCompleteKitForQuery(shown, query)
+      ? language === "fr"
+        ? `Je ne vois pas de trousse complète ${kitQueryLabel ? `pour ${kitQueryLabel} ` : ""}dans les résultats EMRN. Voici des articles EMRN liés qui peuvent aider à composer une trousse :`
+        : `I do not see a complete ${kitQueryLabel ? `${kitQueryLabel} ` : ""}kit in the EMRN results. Here are related EMRN items that may help build one:`
+      : language === "fr"
+        ? `Voici les produits que j’ai trouvés pour « ${query} » :`
+        : `Here are the products I found for “${query}”:`;
   const outro =
     language === "fr"
       ? "Si vous me dites la taille, la marque, l’usage ou la quantité souhaitée, je peux réduire la liste ou vous aider à l’ajouter au panier."
       : "If you tell me the size, brand, use, or quantity you need, I can narrow this down or help add the right item to your cart.";
 
   return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
+}
+
+function isKitQuery(query: string) {
+  const normalized = normalizeSearchText(query);
+  return /\b(kits?|trousse|trousses)\b/.test(normalized);
+}
+
+function kitQuerySubject(query: string) {
+  const normalized = normalizeSearchText(query)
+    .replace(/\b(kits?|trousse|trousses)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized;
+}
+
+function kitQueryTokens(query: string) {
+  return kitQuerySubject(query)
+    .split(/\s+/)
+    .filter((token) => token.length >= 3)
+    .filter((token) => !/^(medical|supplies|supply|product|products|item|items|for|with|and|the|pour|avec|les|des)$/.test(token))
+    .slice(0, 6);
+}
+
+function hasCompleteKitForQuery(products: CatalogProduct[], query: string) {
+  const tokens = kitQueryTokens(query);
+  return products.some((product) => {
+    const productNameText = normalizeSearchText([product.name, product.parentName].join(" "));
+    const text = normalizeSearchText([product.name, product.parentName, product.description, product.categories.join(" ")].join(" "));
+    const nameHasKit = /\b(kits?|trousse|trousses)\b/.test(productNameText);
+    const textHasRealKitPhrase = /\b(first aid|nursing|trauma|simulation|moulage|diagnostic|emergency|medical|training|manikin|airway|cpr|aed|oxygen|phlebotomy)\s+(kits?|trousse|trousses)\b/.test(text);
+    const onlyPackageCodeKit = /\b(BT|BX|BOX|PK|PACK|CS|CASE)\s*\/\s*KIT\b/i.test([product.name, product.description].join(" "));
+    if (!/\b(kits?|trousse|trousses)\b/.test(text)) return false;
+    if (!nameHasKit && !textHasRealKitPhrase) return false;
+    if (onlyPackageCodeKit && !nameHasKit) return false;
+    if (/\b(replacement|replacements|skin and vein|repackaging|refill|parts?|accessor(?:y|ies)|not for human|training purposes only)\b/.test(text)) return false;
+    if (!tokens.length) return true;
+    return tokens.some((token) => text.includes(token));
+  });
+}
+
+function rankKitProducts(products: CatalogProduct[], query: string) {
+  const tokens = kitQueryTokens(query);
+  const isPhlebotomy = tokens.includes("phlebotomy") || tokens.includes("venipuncture");
+  const score = (product: CatalogProduct) => {
+    const nameText = normalizeSearchText([product.name, product.parentName].join(" "));
+    const categoryText = normalizeSearchText(product.categories.join(" "));
+    const text = normalizeSearchText([product.name, product.parentName, product.description, product.categories.join(" "), product.sku].join(" "));
+    let value = 0;
+    const tokenMatches = tokens.reduce((sum, token) => sum + (text.includes(token) ? 1 : 0), 0);
+    const nameTokenMatches = tokens.reduce((sum, token) => sum + (nameText.includes(token) ? 1 : 0), 0);
+    const categoryTokenMatches = tokens.reduce((sum, token) => sum + (categoryText.includes(token) ? 1 : 0), 0);
+
+    value += tokenMatches * 700;
+    value += nameTokenMatches * 1200;
+    value += categoryTokenMatches * 350;
+    if (/\b(kits?|trousse|trousses)\b/.test(text)) value += 350;
+    if (tokens.length && tokenMatches === 0) value -= 1000;
+    if (isPhlebotomy && /\b(arm wedge|task trainer|training arm|tote caddy|sharps collector|sharps container|blood collection|multi sample needle)\b/.test(text)) value += 650;
+    if (isPhlebotomy && text.includes("venipuncture")) value += 350;
+    if (isPhlebotomy && /\bneedle|needles\b/.test(nameText) && !nameText.includes("phlebotomy")) value -= 450;
+    if (/\b(replacement|skin and vein|iv hand replacement|veins only|vaccine|mmr|repackaging|geri|keri|refill|accessory only)\b/.test(text)) value -= 900;
+    if (text.includes("not for human or animal use")) value -= 100;
+    return value;
+  };
+  return [...products].sort((a, b) => score(b) - score(a));
 }
 
 const colorTerms = [
@@ -1466,6 +1544,12 @@ function totalUnitsText(product: CatalogProduct, quantity: number, language: "en
   return `${quantity} ${container} / ${total} total ${unit}`;
 }
 
+function packagePriceText(product: CatalogProduct, pack: string, language: "en" | "fr" | "unknown") {
+  const price = product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
+  if (language === "fr") return `Le prix affiché est pour ${pack}, pas pour une seule unité. Prix: ${price}.`;
+  return `The listed price is for the ${pack}, not a single piece. Price: ${price}.`;
+}
+
 function looksLikePackageCode(value: string) {
   return /^(?:BT|BX|BOX|PK|PACK|CS|CASE)\s*\/\s*\d{1,5}$/i.test(String(value || "").trim());
 }
@@ -1656,6 +1740,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
   const wantsAvailability = /\b(availability|available|in stock|stock|ships|lead time)\b/i.test(question);
   const wantsPackage = /\b(how\s+many|box|boxes|pack|package|case|count|per box|per pack)\b/i.test(question);
+  const wantsPackagePrice = wantsPrice && /\b(piece|each|unit|single|box|boxes|pack|package|case|per)\b/i.test(question);
   const wantsSoldBy = /\b(who\s+makes|who\s+sells|sold\s+by|manufacturer|brand)\b/i.test(question);
   const wantsOxygenStorage = /\b(hold|holds|holding|carry|carries|carrying|accommodate|accommodates|fit|fits|oxygen tank|oxygen cylinder|o2 tank|o2 cylinder|tank|cylinder|réservoir d.oxygène|reservoir d.oxygene|cylindre d.oxygène|cylindre d.oxygene|oxygène|oxygene)\b/i.test(question) &&
     /\b(oxygen|o2|tank|cylinder|oxygène|oxygene|réservoir|reservoir|cylindre)\b/i.test(question);
@@ -1664,7 +1749,11 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
     /\b(latex|latex-free|latex free|material|materials|made of|disposable|reusable|single-use|single use|clean|cleaned|wash|washed|disinfect|disinfected|autoclave|autoclaved|sterilize|sterilized|sterilise|sterilised|sans latex|matériau|materiau|jetable|réutilisable|reutilisable|nettoyer|lavable|désinfecter|desinfecter|stériliser|steriliser)\b/i;
   const lines: string[] = [];
 
-  if (wantsPrice && product.price) {
+  const pack = displayPackageInfo(product, language);
+
+  if (wantsPackagePrice && pack) {
+    lines.push(packagePriceText(product, pack, language));
+  } else if (wantsPrice && product.price) {
     lines.push(language === "fr" ? `Prix: $${product.price.toFixed(2)}` : `Price: $${product.price.toFixed(2)}`);
   }
 
@@ -1674,8 +1763,7 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   }
 
   if (wantsPackage) {
-    const pack = displayPackageInfo(product, language);
-    if (pack) lines.push(language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`);
+    if (pack && !wantsPackagePrice) lines.push(language === "fr" ? `Conditionnement: ${pack}` : `Package/quantity: ${pack}`);
   }
 
   if (wantsSoldBy) {
@@ -2435,6 +2523,16 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
     );
   }
 
+  if (
+    /\b(pick[\s-]?up|pickup|local pickup|local pick up|pick it up|collect my order|collect from|will call|curbside)\b/i.test(text) ||
+    /\b(ramassage|ramasser|cueillette|collecte|venir chercher|passer chercher)\b/i.test(text)
+  ) {
+    return answer(
+      `Local pickup depends on the item, quantity, and whether EMRN can arrange it for that order. Send the item name or SKU and quantity, and I can send it to support to check whether local pickup can be arranged.`,
+      `Le ramassage local dépend de l’article, de la quantité et de la possibilité de l’organiser pour cette commande. Envoyez le nom ou SKU de l’article et la quantité, et je peux transmettre la demande au support pour vérifier si un ramassage local est possible.`
+    );
+  }
+
   if (/\b(create.*account|make.*account|register|business account|enterprise account|doctor|doctor.s office|schools|clinics|ems|government|account benefits|purchase history|reorder|compte entreprise|compte d'entreprise|demander un compte|créer un compte|creer un compte)\b/i.test(text)) {
     return answer(
       `You can apply here: ${link("Business account application", businessLink)}. Business or enterprise accounts are useful for clinics, schools, EMS departments, companies, healthcare facilities, government organizations, and larger purchasing teams. You can also review ${link("business medical supplies", businessSolutionsLink)} or ${link("sign in / register", accountLink)}. You do not need to be a doctor’s office or have a business account to purchase many items, though some specialized products may have restrictions.`,
@@ -2550,7 +2648,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 }
 
 function isSiteInfoQuestion(text: string) {
-  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public)\b/i.test(text) ||
+  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher)\b/i.test(text) ||
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
 }
 
@@ -2865,6 +2963,13 @@ async function handleAssistantPost(req: NextRequest) {
     shippingTimingQuestion && (hasOrderReferenceInConversation(messages.slice(0, -1)) || /\b(order|commande|tracking|shipment|suivi)\b/i.test(latest));
   const shippingTimingHasProductContext =
     shippingTimingQuestion && (extractSkuCandidates(latest).length > 0 || Boolean(recentConversationSku) || Boolean(pageContext.sku || pageContext.title));
+  const priorAssistantAskedShippingTimingClarifier = messages
+    .slice(-4, -1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /order you already placed|checking when a product can ship|commande déjà passée|produit sera expédié/i.test(message.content)
+    );
 
   if (
     shippingTimingQuestion &&
@@ -2873,6 +2978,12 @@ async function handleAssistantPost(req: NextRequest) {
     !priorAssistantRequestedOrderStatus
   ) {
     return new Response(textStream(shippingTimingClarifierText(language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  if (priorAssistantAskedShippingTimingClarifier && isExistingOrderShippingReply(latest)) {
+    return new Response(textStream(orderStatusMissingText(["order number", "email"], language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   }
@@ -3929,7 +4040,26 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  const resultsAnswer = productResultsText(products, language, searchQuery);
+  let answerProducts = products;
+  if (isKitQuery(searchQuery) && !hasCompleteKitForQuery(products.slice(0, 5), searchQuery)) {
+    const subject = kitQuerySubject(searchQuery);
+    const kitRecoveryQueries = subject
+      ? [subject, `${subject} kit`, `${subject} supplies`, `${subject} accessories`]
+      : [];
+    if (/\bphlebotomy|venipuncture\b/i.test(subject)) {
+      kitRecoveryQueries.push("Phlebotomy sharps container", "Phlebotomy caddy", "Phlebotomy task trainer");
+    }
+    const broaderKitResults = await Promise.all(
+      Array.from(new Set(kitRecoveryQueries)).map((query) => searchProducts({ query, language, limit: 8 }))
+    );
+    const broaderKitProducts = broaderKitResults.flatMap((result) => result.products);
+    answerProducts = rankKitProducts(
+      dedupeCatalogProductsBySku([...broaderKitProducts, ...products]),
+      searchQuery
+    );
+  }
+
+  const resultsAnswer = productResultsText(answerProducts, language, searchQuery);
   await logPerformance("product_results", { answerPreview: resultsAnswer });
   return new Response(textStream(resultsAnswer), {
     headers: { "Content-Type": "text/plain; charset=utf-8" },

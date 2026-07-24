@@ -937,6 +937,53 @@ function rankCommonProductTypeHits(hits: SearchHit[], originalQuery: string, tra
   return [...hits].sort((a, b) => score(b) - score(a));
 }
 
+function rankPhlebotomyHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  if (!includesAny(query, ["phlebotomy", "venipuncture", "blood draw"])) return hits;
+
+  const phlebotomyTerms = [
+    "phlebotomy",
+    "venipuncture",
+    "blood draw",
+    "blood collection",
+    "injection arm",
+    "arm wedge",
+    "task trainer",
+    "sharps collector",
+    "sharps container",
+    "tote caddy",
+  ];
+  const unrelatedKitTerms = [
+    "vaccine",
+    "mmr",
+    "repackaging",
+    "geri",
+    "keri",
+    "skin and vein replacement",
+    "replacement kit",
+    "iv skin",
+  ];
+
+  const score = (hit: SearchHit) => {
+    const doc = hit.document || {};
+    const name = documentNameText(hit);
+    const categories = documentCategoryText(hit);
+    const haystack = normalizeSearchText([doc.name, doc.parent_name, doc.brand, doc.sold_by, doc.sku, categories].filter(Boolean).join(" "));
+    let value = 0;
+
+    if (includesAny(haystack, phlebotomyTerms)) value += 1800;
+    if (name.includes("phlebotomy")) value += 1200;
+    if (name.includes("venipuncture")) value += 850;
+    if (includesAny(name, ["tote caddy", "task trainer", "arm wedge", "sharps collector", "sharps container"])) value += 450;
+    if (includesAny(name, unrelatedKitTerms) && !name.includes("phlebotomy")) value -= 1600;
+    if (query.includes("kit") && name.includes("kit") && !includesAny(name, ["phlebotomy", "venipuncture"])) value -= 950;
+
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
 function importantQueryTokens(value: string) {
   return normalizeCommonSearchTypos(value)
     .split(/\s+/)
@@ -1428,6 +1475,7 @@ export async function searchProducts(input: ProductSearchInput) {
   mergedHits = rankCprManikinHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankReplacementPartHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankAedHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankPhlebotomyHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankCommonProductTypeHits(mergedHits, rawQuery, smartQuery.search_query);
 
   let products = await withBackorderAvailability(mergedHits.map(mapProduct));
@@ -1438,23 +1486,14 @@ export async function searchProducts(input: ProductSearchInput) {
       result = await searchTypesenseProducts(rawQuery, input);
       typesenseMs += Date.now() - typesenseStartedAt;
       const exactRankedHits = rankExactProductNameHits(result.hits || [], rawQuery, smartQuery.search_query);
-      const rankedHits = rankCommonProductTypeHits(
-        rankAedHits(
-          rankReplacementPartHits(
-            rankCprManikinHits(
-              rankKnownProductFamilyHits(rankBrandModelHits(rankMedicalBagHits(exactRankedHits, rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query), rawQuery, smartQuery.search_query),
-              rawQuery,
-              smartQuery.search_query
-            ),
-            rawQuery,
-            smartQuery.search_query
-          ),
-          rawQuery,
-          smartQuery.search_query
-        ),
-        rawQuery,
-        smartQuery.search_query
-      );
+      let rankedHits = rankMedicalBagHits(exactRankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankBrandModelHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankKnownProductFamilyHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankCprManikinHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankReplacementPartHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankAedHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankPhlebotomyHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankCommonProductTypeHits(rankedHits, rawQuery, smartQuery.search_query);
       products = await withBackorderAvailability(
         rankedHits.map(mapProduct)
       );
