@@ -727,6 +727,7 @@ function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translated
   ];
   const familyTerms = ["little baby", "little junior", "little anne", "little family", "resusci baby", "resusci anne"];
   const requestedFamily = familyTerms.find((familyTerm) => query.includes(familyTerm));
+  const asksTorso = /\btorso\b/.test(query);
 
   const score = (hit: SearchHit) => {
     const name = ` ${documentNameText(hit)} `;
@@ -743,6 +744,8 @@ function rankCprManikinHits(hits: SearchHit[], originalQuery: string, translated
     if (query.includes("prestan") && name.includes("prestan")) value += 450;
     if (query.includes("prestan") && !name.includes("prestan")) value -= 800;
     if (query.includes("adult") && name.includes("adult")) value += 280;
+    if (asksTorso && name.includes("with torso")) value += 8000;
+    if (asksTorso && name.includes("no torso")) value -= 12000;
     if (query.includes("pack") || query.includes("4 pack") || query.includes("4-pack")) {
       if (/\b(4 pack|4-pack|pack)\b/.test(name)) value += 260;
     } else if (/\b(4 pack|4-pack)\b/.test(name)) {
@@ -900,7 +903,9 @@ function rankAedHits(hits: SearchHit[], originalQuery: string, translatedQuery: 
 
     if (asksForAedAccessory) {
       if (includesAny(name, aedAccessoryTerms)) value += 900;
-      if (!query.includes("training") && !query.includes("trainer") && includesAny(name, ["training", "trainer"])) value -= 1500;
+      if (!query.includes("training") && !query.includes("trainer") && includesAny(name, ["training", "trainer"])) value -= 2200;
+      if ((query.includes("training") || query.includes("trainer")) && includesAny(name, ["training", "trainer"])) value += 5000;
+      if ((query.includes("training") || query.includes("trainer")) && includesAny(query, ["pad", "pads", "electrode", "electrodes"]) && !includesAny(name, ["training", "trainer"])) value -= 7000;
       if (includesAny(query, ["pad", "pads", "electrode", "electrodes"]) && includesAny(name, ["pad", "pads", "electrode", "electrodes"])) {
         value += 1200;
       }
@@ -910,8 +915,10 @@ function rankAedHits(hits: SearchHit[], originalQuery: string, translatedQuery: 
       if (includesAny(query, ["pad", "pads", "electrode", "electrodes"]) && includesAny(name, ["defibrillator kit", "defibrillator kits", "defibrillator with", "with training pads", "aed with"])) {
         value -= 900;
       }
-      if (includesAny(query, ["battery", "batteries"]) && includesAny(name, ["battery", "batteries"])) value += 1200;
-      if (includesAny(query, ["battery", "batteries"]) && !includesAny(name, ["battery", "batteries"])) value -= 1000;
+      if (includesAny(query, ["battery", "batteries"]) && includesAny(name, ["battery", "batteries"])) value += 1800;
+      if (includesAny(query, ["battery", "batteries"]) && !includesAny(name, ["battery", "batteries"])) value -= 1600;
+      if (includesAny(query, ["onsite", "heartstart"]) && includesAny(name, ["onsite", "hs1", "heartstart"])) value += 3200;
+      if (includesAny(query, ["onsite", "heartstart"]) && name.includes("fr3")) value -= 3500;
       if (includesAny(query, ["mount", "cabinet", "case"]) && includesAny(name, ["mount", "cabinet", "case"])) value += 900;
     } else {
       if (includesAny(name, aedAccessoryTerms)) value -= 1800;
@@ -931,8 +938,12 @@ function rankCommonProductTypeHits(hits: SearchHit[], originalQuery: string, tra
     { terms: ["glove", "gloves"], positive: ["glove", "gloves"], negative: ["kit", "pouch"] },
     { terms: ["needle", "needles"], positive: ["needle", "needles"], negative: ["kit", "pouch"] },
     { terms: ["gauze", "gauzes"], positive: ["gauze", "dressing", "sponge", "roll"], negative: ["cpr", "training", "manikin", "mannequin", "kit"] },
+    { terms: ["kit", "kits"], positive: ["kit", "kits"], negative: ["poster", "posters", "chart", "charts", "diagram"] },
     { terms: ["electrode", "electrodes"], positive: ["electrode", "electrodes", "pad", "pads"], negative: ["battery", "batteries", "cabinet", "case", "mount", "sign", "trainer"] },
     { terms: ["pad", "pads"], positive: ["pad", "pads", "electrode", "electrodes"], negative: ["battery", "batteries", "cabinet", "case", "mount", "sign", "trainer"] },
+    { terms: ["blood pressure cuff", "bp cuff", "nibp cuff", "cuff", "cuffs"], positive: ["blood pressure cuff", "bp cuff", "nibp cuff", "cuff", "cuffs"], negative: ["monitor", "monitors", "with 3 adult cuffs", "holter"] },
+    { terms: ["regulator", "regulators", "oxygen regulator"], positive: ["regulator", "regulators", "pressure regulator"], negative: ["rack", "cylinder rack", "cylinders", "tank holder", "cart"] },
+    { terms: ["shower chair"], positive: ["shower chair"], negative: ["commode", "transfer bench"] },
     { terms: ["wheelchair", "wheelchairs"], positive: ["wheelchair", "wheelchairs"], negative: ["accessory", "accessories", "anti tippers", "arm rails", "caster", "fork", "hand brake", "iv pole", "holder"] },
   ];
   const type = productTypes.find((item) => includesAny(query, item.terms));
@@ -947,7 +958,156 @@ function rankCommonProductTypeHits(hits: SearchHit[], originalQuery: string, tra
     if (includesAny(name, type.positive)) value += 300;
     if (includesAny(categories, type.positive)) value += 120;
     if (!airwayMaskQuery && includesAny(name, type.negative)) value -= 380;
+    if (includesAny(query, ["kit", "kits"]) && includesAny(name, ["poster", "posters", "chart", "charts", "diagram"])) value -= 2200;
+    if (includesAny(query, ["cuff", "cuffs", "nibp cuff", "bp cuff"]) && includesAny(name, ["monitor", "monitors", "holter"])) value -= 1800;
+    if (includesAny(query, ["regulator", "oxygen regulator"]) && includesAny(name, ["rack", "cylinder", "cart"]) && !includesAny(name, ["regulator"])) value -= 2400;
+    if (includesAny(query, ["shower chair"]) && includesAny(query, ["with back", "backrest", "back rest"])) {
+      if (includesAny(name, ["with back", "with padded back", "backrest", "back rest"])) value += 1800;
+      if (includesAny(name, ["without back", "no back"])) value -= 2600;
+    }
     if (genericMaskQuery && includesAny(name, ["cpr mask", "pocket mask", "rescue mask"])) value -= 520;
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+function rankAnatomyReferenceHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  const asksReferenceVisual = includesAny(query, ["poster", "posters", "chart", "charts", "diagram", "diagrams", "reference", "image", "picture"]);
+  const asksFaceVessels = includesAny(query, ["blood vessel", "blood vessels", "vessel", "vessels", "vascular"]) && includesAny(query, ["face", "facial", "anatomy"]);
+  if (!asksReferenceVisual && !asksFaceVessels) return hits;
+
+  const visualTerms = ["poster", "chart", "image", "illustration", "display"];
+  const faceVesselTerms = ["face", "facial", "blood vessels", "vessels", "vascular", "artery", "arteries", "vein", "veins"];
+  const unrelatedTerms = ["mask", "pocket mask", "gloves", "simulator", "trainer", "manikin", "wheelchair", "bandage", "dressing"];
+  const languagePenaltyTerms = ["russian", "french", "spanish", "german"];
+
+  const score = (hit: SearchHit) => {
+    const doc = hit.document || {};
+    const name = documentNameText(hit);
+    const categories = documentCategoryText(hit);
+    const haystack = normalizeSearchText([doc.name, doc.parent_name, doc.brand, doc.sku, doc.sold_by, categories, doc.description].filter(Boolean).join(" "));
+    let value = 0;
+
+    if (includesAny(name, visualTerms)) value += 1800;
+    if (includesAny(categories, visualTerms)) value += 700;
+    if (includesAny(haystack, faceVesselTerms)) value += 900;
+    if (asksFaceVessels && includesAny(name, ["clinically important blood vessel and nerve pathways"])) value += 12000;
+    if (asksFaceVessels && includesAny(name, ["blood vessel and nerve pathways", "blood vessels and nerve pathways"])) value += 9000;
+    if (asksFaceVessels && includesAny(name, ["head musculature model", "half-head model", "model", "torso"])) value -= 6500;
+    if ((asksReferenceVisual || asksFaceVessels) && includesAny(name, ["english"]) && !includesAny(query, languagePenaltyTerms)) value += 7000;
+    if ((asksReferenceVisual || asksFaceVessels) && includesAny(name, languagePenaltyTerms) && !includesAny(query, languagePenaltyTerms)) value -= 11000;
+    if (asksFaceVessels && includesAny(name, ["vascular system"]) && includesAny(query, ["face", "facial"])) value -= 3200;
+    if (asksFaceVessels && includesAny(name, ["head and neck"])) value -= 1800;
+    if (asksFaceVessels && includesAny(haystack, ["face", "facial"])) value += 1200;
+    if (asksFaceVessels && includesAny(haystack, ["vessel", "vessels", "vascular", "artery", "arteries", "vein", "veins"])) value += 1200;
+    if (includesAny(name, unrelatedTerms) && !includesAny(name, visualTerms)) value -= 2200;
+
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+function rankOtoscopeHits(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  if (!includesAny(query, ["ear", "ears", "earwax", "wax", "otoscope", "ear scope", "inside ears"])) return hits;
+  const asksAccessory = includesAny(query, ["specula", "speculum", "tips", "covers", "replacement", "accessory", "accessories"]);
+
+  const score = (hit: SearchHit) => {
+    const name = documentNameText(hit);
+    const categories = documentCategoryText(hit);
+    let value = 0;
+
+    if (includesAny(name, ["otoscope", "ri-scope", "ear scope"])) value += 2400;
+    if (includesAny(name, ["otoscope with", "ri-scope led", "e-scope"])) value += 1400;
+    if (includesAny(categories, ["otoscope", "otoscopes", "diagnostics"])) value += 600;
+    if (!asksAccessory && includesAny(name, ["accessories for", "accessory for", "connector", "bulb", "pneumatic test"])) value -= 4200;
+    if (includesAny(name, ["earwax with applicator", "simulator", "life/form", "trainer"])) value -= 2600;
+    if (!asksAccessory && includesAny(name, ["specula", "speculum", "disposable", "tips", "covers"])) value -= 3200;
+    if (includesAny(query, ["home", "own", "myself", "self"]) && includesAny(name, ["simulator", "trainer"])) value -= 1200;
+
+    return value;
+  };
+
+  return [...hits].sort((a, b) => score(b) - score(a));
+}
+
+function rankMainProductsBeforeAccessories(hits: SearchHit[], originalQuery: string, translatedQuery: string) {
+  const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
+  const asksMainProduct = includesAny(query, [
+    "bag",
+    "bags",
+    "backpack",
+    "backpacks",
+    "kit",
+    "kits",
+    "monitor",
+    "monitors",
+    "otoscope",
+    "otoscopes",
+    "manikin",
+    "manikins",
+    "mannequin",
+    "mannequins",
+    "wheelchair",
+    "wheelchairs",
+    "poster",
+    "posters",
+    "chart",
+    "charts",
+  ]);
+  const asksAccessory = includesAny(query, [
+    "accessory",
+    "accessories",
+    "replacement",
+    "part",
+    "parts",
+    "case",
+    "strap",
+    "shelving",
+    "module",
+    "holder",
+    "mount",
+    "connector",
+    "bulb",
+    "specula",
+    "speculum",
+    "tips",
+    "covers",
+    "what goes with",
+    "what accessories",
+    "works with",
+    "compatible",
+  ]);
+  if (!asksMainProduct || asksAccessory) return hits;
+
+  const score = (hit: SearchHit) => {
+    const name = documentNameText(hit);
+    const categories = documentCategoryText(hit);
+    const haystack = `${name} ${categories}`;
+    let value = 0;
+
+    if (includesAny(haystack, [
+      "accessories for",
+      "accessory for",
+      "replacement",
+      "parts",
+      "shelving",
+      "strap",
+      "case",
+      "connector",
+      "bulb",
+      "specula",
+      "speculum",
+      "tips",
+      "covers",
+      "holder",
+      "mount",
+    ])) value -= 1800;
+    if (includesAny(haystack, ["module"]) && includesAny(query, ["bag", "backpack", "bags", "backpacks"])) value -= 1200;
+
     return value;
   };
 
@@ -1430,7 +1590,9 @@ export async function searchProducts(input: ProductSearchInput) {
   }
 
   const shouldPreferTranslatedQuery =
-    (smartQuery.language === "fr" || input.language === "fr") && smartQuery.search_query && smartQuery.search_query !== rawQuery;
+    ((smartQuery.language === "fr" || input.language === "fr") || smartQuery.ai_status === "called") &&
+    smartQuery.search_query &&
+    smartQuery.search_query !== rawQuery;
   const typoNormalizedQuery = normalizeCommonSearchTypos([rawQuery, smartQuery.search_query].filter(Boolean).join(" "));
   const primaryQuery =
     typoNormalizedQuery && typoNormalizedQuery !== normalizeSearchText([rawQuery, smartQuery.search_query].filter(Boolean).join(" "))
@@ -1494,6 +1656,9 @@ export async function searchProducts(input: ProductSearchInput) {
   mergedHits = rankAedHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankPhlebotomyHits(mergedHits, rawQuery, smartQuery.search_query);
   mergedHits = rankCommonProductTypeHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankAnatomyReferenceHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankOtoscopeHits(mergedHits, rawQuery, smartQuery.search_query);
+  mergedHits = rankMainProductsBeforeAccessories(mergedHits, rawQuery, smartQuery.search_query);
 
   let products = await withBackorderAvailability(mergedHits.map(mapProduct));
 
@@ -1511,6 +1676,8 @@ export async function searchProducts(input: ProductSearchInput) {
       rankedHits = rankAedHits(rankedHits, rawQuery, smartQuery.search_query);
       rankedHits = rankPhlebotomyHits(rankedHits, rawQuery, smartQuery.search_query);
       rankedHits = rankCommonProductTypeHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankAnatomyReferenceHits(rankedHits, rawQuery, smartQuery.search_query);
+      rankedHits = rankOtoscopeHits(rankedHits, rawQuery, smartQuery.search_query);
       products = await withBackorderAvailability(
         rankedHits.map(mapProduct)
       );

@@ -3,16 +3,17 @@ import { createCart, normalizeCommonSearchTypos, removeMcpCartItem, searchBySKU,
 import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
-import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isOrderStatusIntent, isProductCapabilityIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
+import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isNegativeSearchFeedback, isOrderStatusIntent, isProductCapabilityIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
 import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistant/openai";
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
-import { matchingApprovedKnowledgeForQuery, taughtIntentRouteForQuery } from "@/lib/assistant/knowledge-memory";
+import { matchingApprovedKnowledgeForQuery, saveKnowledgeMemoryItem, taughtIntentRouteForQuery } from "@/lib/assistant/knowledge-memory";
 import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
 import { answerCacheEligibility, getCachedAnswer, saveCachedAnswer, type AnswerCacheEligibility, type CacheSaveResult } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
-import type { AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
+import { buildSmartSearchQuery } from "@/lib/smart-search-translator";
+import type { AssistantLanguage, AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
 import type { ExternalKnowledgeLookup } from "@/lib/assistant/openai";
 
 export const runtime = "nodejs";
@@ -62,6 +63,43 @@ function cacheStatusWithoutSave(answerCacheEnabled: boolean, cacheEligibility: A
   if (!cacheEligibility.eligible) return "not eligible";
   if (!hasAnswerPreview) return "no answer preview";
   return "not attempted";
+}
+
+function stableMemoryId(prefix: string, value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return `${prefix}-${Math.abs(hash).toString(36)}`;
+}
+
+async function saveSuccessfulAiSearchRewrite(input: {
+  latest: string;
+  searchQuery: string;
+  products: CatalogProduct[];
+  openAiMs?: number;
+}) {
+  const normalizedLatest = normalizeSearchText(input.latest);
+  const normalizedSearch = normalizeSearchText(input.searchQuery);
+  if (!input.products.length) return;
+  if (!input.openAiMs || input.openAiMs <= 0) return;
+  if (!normalizedLatest || !normalizedSearch || normalizedLatest === normalizedSearch) return;
+  if (extractSkuCandidates(input.latest).length) return;
+  if (isQuoteIntent(input.latest) || isOrderStatusIntent(input.latest) || isContactIntent(input.latest) || isCartIntent(input.latest) || isNegativeSearchFeedback(input.latest)) return;
+
+  try {
+    await saveKnowledgeMemoryItem({
+      id: stableMemoryId("auto-search", `${normalizedLatest}->${normalizedSearch}`),
+      type: "alias",
+      status: "approved",
+      query: input.latest,
+      correctSearchTerms: input.searchQuery,
+      correctSku: input.products.length === 1 ? input.products[0].sku : "",
+      note: `Auto-saved OpenAI search rewrite after EMRN returned ${input.products.length} product${input.products.length === 1 ? "" : "s"}.`,
+    });
+  } catch (error) {
+    console.warn("[EMRN Pulse] auto search rewrite memory save skipped", error);
+  }
 }
 
 async function streamToText(stream: ReadableStream<Uint8Array>) {
@@ -1172,6 +1210,25 @@ function keywordSuggestionText(
   return `I did not find EMRN results for “${suggestion.originalQuery}”.\n\nDid you mean “${suggestion.suggestedQuery}”?\n\n${preview}\n\nReply yes to see these results, or no and I can send an item-sourcing/quote request to EMRN.`;
 }
 
+function looksLikeSpecificProductSearch(text: string) {
+  const normalized = normalizeSearchText(text);
+  const hasSearchLanguage = /\b(do you have|do u have|looking for|look for|find|search|show me|i need|we need|need|want|poster|chart|diagram|image|picture|photo)\b/i.test(text);
+  const hasProductNoun = /\b(posters?|charts?|diagrams?|images?|pictures?|photos?|vessels?|vascular|arter(?:y|ies)|veins?|gloves?|masks?|gauze|bandage|dressings?|manikins?|mannequins?|pads?|electrodes?|batter(?:y|ies)|regulators?|chairs?|backpacks?|bags?|kits?|cuffs?|otoscopes?|thermometers?|syringes?|needles?)\b/.test(normalized);
+  return hasSearchLanguage && hasProductNoun;
+}
+
+function looksLikePlainCatalogKeywordSearch(text: string) {
+  const normalized = normalizeSearchText(cleanProductQuery(text));
+  if (!normalized) return false;
+  if (extractSkuCandidates(text).length) return false;
+  if (/\b(can|could|does|do|will|would|is|are|what|which|how|why|when|where|compatible|compatibility|fit|fits|work|works|hold|holds|come|comes|include|includes|sold|price|cost|latex[- ]?free|free of latex)\b/.test(normalized)) {
+    return false;
+  }
+  const hasProductNoun = /\b(posters?|charts?|diagrams?|images?|pictures?|photos?|vessels?|vascular|arter(?:y|ies)|veins?|gloves?|masks?|gauze|bandage|dressings?|manikins?|mannequins?|pads?|electrodes?|batter(?:y|ies)|regulators?|chairs?|backpacks?|bags?|kits?|cuffs?|otoscopes?|thermometers?|syringes?|needles?)\b/.test(normalized);
+  const hasModifier = /\b(nitrile|latex|vinyl|exam|sterile|blue|black|purple|white|green|pink|small|medium|large|xlarge|xl|adult|pediatric|paediatric|full|torso|face|blood|vessel|nerve|wall|clinic)\b/.test(normalized);
+  return hasProductNoun && hasModifier;
+}
+
 function escapeRegExp(value: string) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1187,6 +1244,7 @@ function cleanProductQuery(text: string) {
 }
 
 function hasProductWordsBeyondSku(text: string, skuCandidates: string[]) {
+  if (skuCandidates.some((sku) => colorFromSkuSuffix(sku) && familySearchForMissingColorSku(sku))) return false;
   let cleaned = cleanProductQuery(text);
   for (const sku of skuCandidates) {
     cleaned = cleaned.replace(new RegExp(escapeRegExp(sku), "gi"), " ");
@@ -1212,7 +1270,10 @@ function aedAccessorySkuHints(text: string) {
     return ["8900-0800-01", "8900-0810-01"];
   }
 
-  if (/\bphilips\b/.test(normalized) && /\bfrx\b/.test(normalized)) return ["989803139261"];
+  if (/\bphilips\b/.test(normalized) && /\bfrx\b/.test(normalized)) {
+    if (/\b(training|trainer)\b/.test(normalized)) return ["989803139291", "989803139271"];
+    return ["989803139261"];
+  }
 
   return [];
 }
@@ -1422,6 +1483,128 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
       : "If you tell me the size, brand, use, or quantity you need, I can narrow this down or help add the right item to your cart.";
 
   return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
+}
+
+function productIntentText(product: CatalogProduct) {
+  return normalizeSearchText(
+    [
+      product.name,
+      product.parentName,
+      product.sku,
+      product.brand,
+      product.manufacturer,
+      product.categories.join(" "),
+      product.description,
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+function productNameCategoryText(product: CatalogProduct) {
+  return normalizeSearchText(
+    [
+      product.name,
+      product.parentName,
+      product.sku,
+      product.brand,
+      product.manufacturer,
+      product.categories.join(" "),
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+type ProductIntentRequirement = {
+  terms: string[];
+  field?: "any" | "name_category";
+};
+
+function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
+  const normalized = normalizeSearchText(query);
+  const groups: ProductIntentRequirement[] = [];
+
+  if (/\b(posters?|charts?|diagrams?|reference image|anatomy image|anatomical chart)\b/.test(normalized)) {
+    groups.push({ terms: ["poster", "posters", "chart", "charts", "diagram"], field: "name_category" });
+  }
+  if (/\b(face|facial)\b/.test(normalized) && /\b(vessels?|vascular|arter(?:y|ies)|veins?)\b/.test(normalized)) {
+    groups.push({ terms: ["blood vessel", "blood vessels", "vessel", "vessels", "vascular", "artery", "arteries", "vein", "veins", "pathway", "pathways"], field: "name_category" });
+  }
+  if (/\b(otoscope|otoscopes|ear scope|ear scopes|inside ears?|earwax|ear wax)\b/.test(normalized)) {
+    groups.push({ terms: ["otoscope", "otoscopes", "ri-scope", "ear scope"], field: "name_category" });
+  }
+  if (/\b(nitrile|latex|vinyl|exam)\b/.test(normalized) && /\bgloves?\b/.test(normalized)) {
+    groups.push({ terms: ["glove", "gloves"], field: "name_category" });
+  }
+  if (/\b(cushion|cushions|lumbar support)\b/.test(normalized)) {
+    groups.push({ terms: ["cushion", "cushions", "lumbar"], field: "name_category" });
+  }
+  if (/\b(blood pressure cuff|bp cuff|nibp cuff|cuff|cuffs)\b/.test(normalized)) {
+    groups.push({ terms: ["cuff", "cuffs", "nibp", "blood pressure"], field: "name_category" });
+  }
+  if (/\b(backpack|backpacks|medical bag|medic bag|ems bag|trauma bag)\b/.test(normalized)) {
+    groups.push({ terms: ["backpack", "backpacks", "bag", "bags"], field: "name_category" });
+  }
+  if (/\b(first aid)\b/.test(normalized) && /\b(posters?|charts?)\b/.test(normalized)) {
+    groups.push({ terms: ["first aid"], field: "name_category" });
+  }
+
+  return groups;
+}
+
+function productsMatchingExplicitIntent(products: CatalogProduct[], latest: string, searchQuery: string) {
+  const groups = explicitProductTypeGroups(`${latest} ${searchQuery}`);
+  if (!groups.length) return { products, suppressed: false };
+
+  const matching = products.filter((product) => {
+    const haystack = productIntentText(product);
+    const nameCategory = productNameCategoryText(product);
+    return groups.every((group) => {
+      const target = group.field === "name_category" ? nameCategory : haystack;
+      return group.terms.some((term) => target.includes(normalizeSearchText(term)));
+    });
+  });
+
+  if (matching.length) return { products: matching, suppressed: false };
+  return { products: [] as CatalogProduct[], suppressed: true };
+}
+
+async function recoverExplicitIntentProducts(latest: string, searchQuery: string, language: AssistantLanguage) {
+  const smartQuery = await buildSmartSearchQuery(latest);
+  const retryQueries = Array.from(
+    new Set(
+      [
+        smartQuery.search_query,
+        smartQuery.translated_query,
+        ...(smartQuery.assisted_queries || []),
+        ...(smartQuery.fallback_terms || []),
+        searchQuery,
+      ]
+        .map((query) => String(query || "").trim())
+        .filter((query) => query && normalizeSearchText(query) !== normalizeSearchText(latest))
+    )
+  ).slice(0, 8);
+
+  for (const query of retryQueries) {
+    const retryResult = await searchProducts({ query, language, limit: 8 });
+    const filtered = productsMatchingExplicitIntent(retryResult.products, latest, query);
+    if (filtered.products.length) {
+      return {
+        products: filtered.products,
+        searchQuery: query,
+        timings: retryResult.timings,
+        attemptedQueries: retryQueries,
+      };
+    }
+  }
+
+  return {
+    products: [] as CatalogProduct[],
+    searchQuery,
+    timings: undefined,
+    attemptedQueries: retryQueries,
+  };
 }
 
 function isKitQuery(query: string) {
@@ -2243,6 +2426,10 @@ function isPartsOrAccessoryQuestion(text: string) {
   return /\b(part|parts|replacement|replacements|accessory|accessories|go with|goes with|compatible with|fit|fits)\b/i.test(text);
 }
 
+function asksForAccessories(text: string) {
+  return /\b(accessory|accessories|parts?|replacement|replacements|what goes with|what can go with|what accessories|what parts)\b/i.test(text);
+}
+
 function isCompatibilityQuestion(text: string) {
   return /\b(compatible|compatibility|fit|fits|work with|works with|go with|goes with|for this|for that|pour|compatible avec|fonctionne avec|va avec)\b/i.test(text);
 }
@@ -2444,6 +2631,63 @@ function approvedKnowledgeProductSearchQuery(rules: Awaited<ReturnType<typeof ma
   if (!rule) return "";
   if (rule.answer === "not_compatible" || rule.answer === "cant_confirm") return "";
   return rule.correctSearchTerms || rule.query || "";
+}
+
+function productMatchesRequestedKnowledgeSku(query: string, product: CatalogProduct) {
+  const key = requestedProductTypeKey(query);
+  if (!key) return true;
+  const text = `${product.name} ${product.parentName} ${product.categories.join(" ")}`.toLowerCase();
+  if (key === "pad" && !/\b(pads?|padz|electrodes?)\b/i.test(text)) return false;
+  if (key === "battery" && !/\b(batter(?:y|ies))\b/i.test(text)) return false;
+  if (key === "airway" && !/\bairways?\b/i.test(text)) return false;
+  if (key === "lung" && !/\blungs?\b/i.test(text)) return false;
+  const asksTraining = /\b(training|trainer)\b/i.test(query);
+  if (key === "pad" && asksTraining && !/\b(training|trainer)\b/i.test(text)) return false;
+  if (key === "pad" && !asksTraining && /\b(training|trainer)\b/i.test(text)) return false;
+  return true;
+}
+
+function weakProductSearchResult(products: CatalogProduct[], latest: string, searchQuery: string) {
+  if (!products.length || extractSkuCandidates(latest).length) return false;
+  const explicit = productsMatchingExplicitIntent(products, latest, searchQuery);
+  if (explicit.suppressed) return true;
+  const cleaned = cleanProductQuery(latest);
+  const terms = normalizeSearchText(cleaned)
+    .split(/\s+/)
+    .filter((term) => term.length >= 4)
+    .filter((term) => !/^(need|want|have|with|from|that|this|product|products|called|sample|impossible|carry|looking|search|find)$/.test(term));
+  if (!terms.length) return false;
+  const topText = products.slice(0, 3).map(productIntentText).join(" ");
+  const overlap = terms.filter((term) => topText.includes(term));
+  if (/\b(impossible|do not carry|dont carry|don't carry|not carry|xzyq)\b/i.test(latest) && overlap.length < 2) return true;
+  return terms.length >= 3 && overlap.length === 0;
+}
+
+function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
+  const query = normalizeSearchText(latest);
+  const asksTraining = /\b(training|trainer)\b/.test(query);
+  const asksPads = /\b(pads?|padz|electrodes?)\b/.test(query);
+  const asksBattery = /\b(batter(?:y|ies))\b/.test(query);
+  const asksOnsite = /\b(onsite|heartstart|hs1)\b/.test(query);
+  const asksTorso = /\btorso\b/.test(query);
+
+  const score = (product: CatalogProduct) => {
+    const text = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.categories.join(" ")}`);
+    let value = 0;
+    if (asksTraining && /\b(training|trainer)\b/.test(text)) value += 9000;
+    if (asksTraining && asksPads && !/\b(training|trainer)\b/.test(text)) value -= 12000;
+    if (!asksTraining && asksPads && /\b(training|trainer)\b/.test(text)) value -= 5000;
+    if (asksPads && /\b(pads?|padz|electrodes?)\b/.test(text)) value += 2500;
+    if (asksBattery && /\b(batter(?:y|ies))\b/.test(text)) value += 3500;
+    if (asksBattery && !/\b(batter(?:y|ies))\b/.test(text)) value -= 4000;
+    if (asksOnsite && /\b(onsite|heartstart|hs1)\b/.test(text)) value += 3500;
+    if (asksOnsite && /\bfr3\b/.test(text)) value -= 4500;
+    if (asksTorso && /\bwith torso\b/.test(text)) value += 12000;
+    if (asksTorso && /\bno torso\b/.test(text)) value -= 16000;
+    return value;
+  };
+
+  return [...products].sort((a, b) => score(b) - score(a));
 }
 
 function dedupeCatalogProductsBySku(products: CatalogProduct[]) {
@@ -2726,6 +2970,16 @@ function productFamilyForPartsSearch(product: CatalogProduct) {
 function relatedPartQueries(product: CatalogProduct) {
   const family = productFamilyForPartsSearch(product);
   const normalized = `${product.name} ${product.parentName}`.toLowerCase();
+  if (/\b(statpacks?|g3\+?|load[\s-]?n[\s-]?go|g3500[46])\b/i.test(normalized)) {
+    return [
+      "statpacks g3 accessories",
+      "g3 oxygen module",
+      "g3 backup shelving",
+      "g3 pouches",
+      "statpacks module",
+      "load n go accessories",
+    ];
+  }
   if (normalized.includes("little junior") || normalized.includes("little jr")) {
     return ["little junior parts", "little jr qcpr accessories", "little junior qcpr replacement"];
   }
@@ -2738,6 +2992,9 @@ function relatedPartQueries(product: CatalogProduct) {
 function isRelatedPartForProduct(part: CatalogProduct, baseProduct: CatalogProduct) {
   const base = `${baseProduct.name} ${baseProduct.parentName}`.toLowerCase();
   const partText = `${part.name} ${part.parentName} ${part.sku}`.toLowerCase();
+  if (/\b(statpacks?|g3\+?|load[\s-]?n[\s-]?go|g3500[46])\b/i.test(base)) {
+    return /\b(statpacks?|g3\+?|g3500[46]|oxygen module|shelving|module|pouch|insert|divider)\b/i.test(partText);
+  }
   if (base.includes("little junior") || base.includes("little jr")) {
     return /\b(little\s+jr|little\s+junior|lb\s+qcpr)\b/i.test(partText);
   }
@@ -2745,6 +3002,18 @@ function isRelatedPartForProduct(part: CatalogProduct, baseProduct: CatalogProdu
     return /\b(little\s+anne)\b/i.test(partText);
   }
   return true;
+}
+
+function isAccessoryLikeProduct(product: CatalogProduct) {
+  const text = `${product.name} ${product.parentName} ${product.sku} ${product.categories.join(" ")}`.toLowerCase();
+  return /\b(accessor(?:y|ies)|replacement|parts?|module|shelving|shelf|pouch|insert|divider|strap|case|holder|mount|bracket|adapter|connector|refill|tube|tubing|key|cartridge)\b/i.test(text);
+}
+
+function isSameMainProductFamily(product: CatalogProduct, baseProduct: CatalogProduct) {
+  const baseFamily = productFamilyForPartsSearch(baseProduct).toLowerCase();
+  if (!baseFamily) return false;
+  const productText = `${product.name} ${product.parentName}`.toLowerCase();
+  return productText.includes(baseFamily) && !isAccessoryLikeProduct(product);
 }
 
 function siteSearchUrl(query: string) {
@@ -2833,8 +3102,8 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
   }
 
   if (
-    /\b(sell|selling|sell to|sell directly|public|individuals?|individual customers?|personal customers?|consumers?|retail customers?|do you sell to people|can i buy|can individuals buy)\b/i.test(text) ||
-    /\b(vendez[-\s]?vous|vente|vendre|particuliers?|clients? individuels?|grand public|consommateurs?|clientele individuelle|clientèle individuelle|acheter comme particulier)\b/i.test(text)
+    /\b(sell to|selling to|sell directly to|public|individuals?|individual customers?|personal customers?|consumers?|retail customers?|do you sell to people|can i buy from (?:you|emrn)|can individuals buy|can the public buy|open to the public)\b/i.test(text) ||
+    /\b(vendez[-\s]?vous\s+(?:aux?\s+)?particuliers?|vente\s+(?:aux?\s+)?particuliers?|vendre\s+(?:aux?\s+)?particuliers?|clients? individuels?|grand public|consommateurs?|clientele individuelle|clientèle individuelle|acheter comme particulier)\b/i.test(text)
   ) {
     return answer(
       `Yes. EMRN sells to individuals as well as businesses, clinics, EMS, healthcare facilities, schools, government organizations, and other professional buyers. Many items can be ordered online without a business account, though some specialized products may have restrictions or require review. You can browse products on EMRN.ca or contact the team here: ${link("Contact EMRN", contactLink)}`,
@@ -2901,14 +3170,14 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
     );
   }
 
-  if (/\b(home medical supplies|home care|homecare|home product|home products|home health|home patient|dme|mobility aids|bathroom safety|wheelchair|walker|rollator|commode|shower chair)\b/i.test(text)) {
+  if (/\b(home medical supplies|home care|homecare|home product|home products|home health|home patient|dme|mobility aids|bathroom safety)\b/i.test(text)) {
     return answer(
       `EMRN has home medical supplies and home-care products here: ${link("Home medical supplies", homeMedicalSuppliesLink)}. You can search by product name, category, brand, size, or SKU, and I can help narrow options if you tell me what the item is for.`,
       `EMRN propose des fournitures médicales pour la maison et soins à domicile ici: ${link("Fournitures médicales à domicile", homeMedicalSuppliesLink)}. Vous pouvez chercher par nom, catégorie, marque, taille ou SKU, et je peux aider à réduire les options si vous me dites l’usage prévu.`
     );
   }
 
-  if (/\b(return|exchange|returnable|wrong item|damaged|damage|opened|used|sterile|special order|non-returnable)\b/i.test(text)) {
+  if (/\b(return|returns|exchange|returnable|wrong item|damaged|damage|opened|used|special order|non-returnable)\b/i.test(text)) {
     return answer(
       `Returns require a return merchandise authorization number from Customer Service, and the RMA must be clearly written on the outside of the carton. Items are not returnable after 15 days from the date received. Shipping and handling are non-refundable, and return transport may be at your expense when the return is due to preference or customer error. Returns are not authorized for non-returnable website items, special/custom orders, discontinued items, items not in original packaging, damaged or non-saleable items, and injectable medication or pharmaceutical products. An 18% restocking fee may apply. If a shipment arrives damaged, note the damage on the delivery bill, have the driver sign it, take a photo, and contact EMRN. Details: ${link("Shipping and returns", shippingReturnsLink)}`,
       `Les retours nécessitent un numéro d’autorisation de retour du service client, et le RMA doit être clairement inscrit à l’extérieur de la boîte. Les articles ne sont pas retournables après 15 jours suivant la réception. Les frais de livraison/manutention ne sont pas remboursables, et le transport de retour peut être à vos frais si le retour est dû à une préférence ou erreur du client. Les retours ne sont pas autorisés pour les articles indiqués non retournables, commandes spéciales/personnalisées, articles discontinués, articles hors emballage original, endommagés ou non revendables, ni médicaments injectables ou produits pharmaceutiques. Des frais de restockage de 18 % peuvent s’appliquer. Si l’expédition arrive endommagée, notez les dommages sur le bon de livraison, faites signer le chauffeur, prenez une photo et contactez EMRN. Détails: ${link("Livraison et retours", shippingReturnsLink)}`
@@ -3043,6 +3312,18 @@ async function handleAssistantPost(req: NextRequest) {
         language === "fr"
           ? "EMRN fournit de l’équipement et des fournitures médicales, mais nous ne pouvons pas donner de conseils médicaux, poser un diagnostic ou recommander un traitement. Pour votre sécurité, veuillez consulter un professionnel de la santé. Voulez-vous que j’envoie votre question à notre équipe de support?"
           : "EMRN supplies medical equipment and supplies, but we cannot provide medical advice, diagnose, or recommend treatment. For your safety, please consult a qualified healthcare professional. Would you like me to send this to our support team?"
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (isNegativeSearchFeedback(latest)) {
+    await logAnalyticsEvent({ type: "unanswered_question", sessionId, language, query: latest, createdAt });
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Désolé, ce n’était pas le bon résultat. Je ne vais pas relancer une recherche avec ce message. Envoyez-moi un détail de plus: nom du produit, SKU/numéro de pièce, marque, modèle, usage, ou une photo, et je chercherai de nouveau. Je peux aussi l’envoyer à l’équipe EMRN pour vérification ou devis."
+          : "Sorry, that was not the right result. I will not run a new product search from that message. Send me one more detail: product name, SKU/part number, brand, model, use, or a photo, and I’ll search again. I can also send it to the EMRN team to check or quote."
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -3390,7 +3671,9 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (!extractSkuCandidates(latest).length && !isProductDetailIntent(latest) && (!isAvailabilityIntent(latest) || isSiteInfoQuestion(latest))) {
+  const shouldUseProductDetailIntent = isProductDetailIntent(latest) && !looksLikePlainCatalogKeywordSearch(latest);
+
+  if (!extractSkuCandidates(latest).length && !shouldUseProductDetailIntent && !isProductSearchIntent(latest) && !looksLikeSpecificProductSearch(latest) && (!isAvailabilityIntent(latest) || isSiteInfoQuestion(latest))) {
     const faqAnswer = faqAnswerText(latest, language);
     if (faqAnswer) {
       return new Response(textStream(faqAnswer), {
@@ -3584,7 +3867,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (isContactIntent(latest) || taughtContactIntent) {
+  if ((isContactIntent(latest) || taughtContactIntent) && !looksLikeSpecificProductSearch(latest)) {
     return new Response(textStream(contactHelpText(language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
@@ -3625,13 +3908,13 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   const pageProductsForCart =
-    (isCartIntent(latest) || isQuoteIntent(latest) || taughtQuoteIntent || isProductDetailIntent(latest)) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
+    (isCartIntent(latest) || isQuoteIntent(latest) || taughtQuoteIntent || shouldUseProductDetailIntent) && /\b(this|it|this item|the product|ce produit|cet article)\b/i.test(latest)
       ? await productsFromPageContext(pageContext, language)
       : [];
   const skuCandidates = extractSkuCandidates(latest);
   const aedAccessorySkus = !skuCandidates.length ? aedAccessorySkuHints(latest) : [];
   const replyingToCartChoice =
-    priorAssistantAskedCartChoice(messages) && !isProductDetailIntent(latest) && !isQuickActionPrompt(latest);
+    priorAssistantAskedCartChoice(messages) && !shouldUseProductDetailIntent && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
   const replyingToCartQuantityChange = priorAssistantAskedCartQuantity(messages) && quantityFromChangeReply(latest) > 0;
   const shouldCompareRememberedProducts = isCompareIntent(latest);
@@ -3657,7 +3940,7 @@ async function handleAssistantPost(req: NextRequest) {
     taughtQuoteIntent ||
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
-    (isProductDetailIntent(latest) && isContextProductSelectionReply(latest)) ||
+    (shouldUseProductDetailIntent && isContextProductSelectionReply(latest)) ||
     shouldCompareRememberedProducts ||
     shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
@@ -3738,10 +4021,12 @@ async function handleAssistantPost(req: NextRequest) {
   const preSearchRuleSearchQuery = approvedKnowledgeProductSearchQuery(preSearchKnowledgeMatches);
   const preSearchSkuStartedAt = Date.now();
   const preSearchSkuProducts = preSearchSkus.length
-    ? (await Promise.all(preSearchSkus.map((sku) => searchBySKU(sku)))).flat()
+    ? (await Promise.all(preSearchSkus.map((sku) => searchBySKU(sku))))
+        .flat()
+        .filter((product) => productMatchesRequestedKnowledgeSku(latest, product))
     : [];
   const preSearchSkuMs = Date.now() - preSearchSkuStartedAt;
-  const earlyApprovedRuleAnswer = isProductDetailIntent(latest) && !isDirectCatalogDetailQuestion(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
+  const earlyApprovedRuleAnswer = shouldUseProductDetailIntent && !isDirectCatalogDetailQuestion(latest) && !preSearchSkuProducts.length && !preSearchRuleSearchQuery
     ? approvedKnowledgeAnswer(preSearchKnowledgeMatches, [], language, latest)
     : "";
   if (earlyApprovedRuleAnswer) {
@@ -3884,6 +4169,29 @@ async function handleAssistantPost(req: NextRequest) {
   } else {
     products = rankRequestedColorProducts(products, `${latest} ${searchQuery}`);
   }
+  const intentFilteredProducts = productsMatchingExplicitIntent(products, latest, searchQuery);
+  let suppressedLowConfidenceProducts = intentFilteredProducts.suppressed;
+  products = intentFilteredProducts.products;
+  if (suppressedLowConfidenceProducts && isProductSearchIntent(latest) && !skuCandidates.length) {
+    const recovered = await recoverExplicitIntentProducts(latest, searchQuery, language);
+    if (recovered.products.length) {
+      products = recovered.products;
+      searchQuery = recovered.searchQuery;
+      suppressedLowConfidenceProducts = false;
+      searchTiming = {
+        totalMs: (searchTiming.totalMs || 0) + (recovered.timings?.totalMs || 0),
+        supabaseMs: (searchTiming.supabaseMs || 0) + (recovered.timings?.supabaseMs || 0),
+        openAiMs: (searchTiming.openAiMs || 0) + (recovered.timings?.openAiMs || 0),
+        typesenseMs: (searchTiming.typesenseMs || 0) + (recovered.timings?.typesenseMs || 0),
+        fallbackMs: (searchTiming.fallbackMs || 0) + (recovered.timings?.fallbackMs || 0),
+      };
+    }
+  }
+  if (weakProductSearchResult(products, latest, searchQuery)) {
+    products = [];
+    suppressedLowConfidenceProducts = true;
+  }
+  products = rankProductsForAnswer(products, latest);
   const missingColorFallback = colorFallback || missingRequestedColorProducts(products, latest);
 
   await logAnalyticsEvent({
@@ -3964,7 +4272,10 @@ async function handleAssistantPost(req: NextRequest) {
         proofSourceType: extra?.proofSourceType,
         proofSourceUrls: extra?.proofSourceUrls?.slice(0, 8),
         proofPartNumbers: extra?.proofPartNumbers?.slice(0, 12),
-        proofSearchTerms: extra?.proofSearchTerms?.slice(0, 12),
+        proofSearchTerms: [
+          ...(extra?.proofSearchTerms || []),
+          ...(suppressedLowConfidenceProducts ? ["suppressed low-confidence product matches"] : []),
+        ].slice(0, 12),
         emrnMatchCount: extra?.emrnMatchCount,
         emrnMatchedSkus: extra?.emrnMatchedSkus?.slice(0, 12),
         answerCacheEligible: canUseAnswerCache,
@@ -3982,7 +4293,7 @@ async function handleAssistantPost(req: NextRequest) {
     });
   };
 
-  if (isAccountIntent(latest)) {
+  if (isAccountIntent(latest) && !looksLikeSpecificProductSearch(latest)) {
     const accountAnswer = language === "fr"
       ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
       : "You can create or use an EMRN account from the account area of the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question.";
@@ -4256,7 +4567,7 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isProductDetailIntent(latest)) {
+  if (shouldUseProductDetailIntent) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const shouldUseRememberedDetailProducts =
       rememberedDetailProducts.length > 0 &&
@@ -4331,7 +4642,7 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
 
-    if (isPartsOrAccessoryQuestion(latest) && !isCompatibilityQuestion(latest) && detailProducts.length) {
+    if (isPartsOrAccessoryQuestion(latest) && (!isCompatibilityQuestion(latest) || asksForAccessories(latest)) && detailProducts.length) {
       const [selectedProduct] = selectedDetailProducts;
       const baseProduct = selectedProduct || detailProducts[0];
       const partsQueries = relatedPartQueries(baseProduct);
@@ -4341,6 +4652,7 @@ async function handleAssistantPost(req: NextRequest) {
         .flatMap((result) => result.products)
         .filter((product) => product.sku !== baseProduct.sku)
         .filter((product) => isRelatedPartForProduct(product, baseProduct))
+        .filter((product) => !asksForAccessories(latest) || (isAccessoryLikeProduct(product) && !isSameMainProductFamily(product, baseProduct)))
         .filter((product) => {
           const key = product.sku || `${product.productId}:${product.variantId}`;
           if (seenPartSkus.has(key)) return false;
@@ -4491,6 +4803,7 @@ async function handleAssistantPost(req: NextRequest) {
     const exactProduct = products[0];
     const substitutes = await closeInStockSubstitutes(exactProduct, language);
     const singleProductAnswer = `${exactProductFoundText(exactProduct, language, skuCandidates[0] || searchQuery)}${substitutesText(substitutes, language)}`;
+    await saveSuccessfulAiSearchRewrite({ latest, searchQuery, products, openAiMs: searchTiming.openAiMs });
     await logPerformance("single_product", { answerPreview: singleProductAnswer });
     return new Response(textStream(singleProductAnswer), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -4517,6 +4830,7 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   const resultsAnswer = productResultsText(answerProducts, language, searchQuery);
+  await saveSuccessfulAiSearchRewrite({ latest, searchQuery, products: answerProducts, openAiMs: searchTiming.openAiMs });
   await logPerformance("product_results", { answerPreview: resultsAnswer });
   return new Response(textStream(resultsAnswer), {
     headers: { "Content-Type": "text/plain; charset=utf-8" },

@@ -66,6 +66,7 @@ function intentText(text: string) {
     .replace(/\bqoute\b/gi, "quote")
     .replace(/\bqupte\b/gi, "quote")
     .replace(/\bqutoe\b/gi, "quote")
+    .replace(/\bsquote\b/gi, "quote")
     .replace(/\bavailvilty\b/gi, "availability")
     .replace(/\bavailablity\b/gi, "availability")
     .replace(/\bavail(?:a|i)?b(?:i|l)?l?ity\b/gi, "availability")
@@ -76,6 +77,16 @@ function intentText(text: string) {
 export function isMedicalAdviceRequest(text: string) {
   text = intentText(text);
   return /\b(should i use|what treatment|diagnose|diagnosis|symptoms|medication|dose|dosage|prescribe|wound infected|is this safe for my condition)\b/i.test(text);
+}
+
+export function isNegativeSearchFeedback(text: string) {
+  text = intentText(text);
+  const normalized = text.toLowerCase().replace(/[’']/g, "").replace(/[.!?]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (/^(this is wrong|that is wrong|thats wrong|thats not it|that is not it|not it|wrong|wrong one|wrong item|wrong product|incorrect|not correct|no that is not it|no thats not it|nope thats not it|nope not it|not what i need|not what i asked|not helpful|does not help|doesnt help|useless|meri useless|meringue useless)$/.test(normalized)) {
+    return true;
+  }
+  return /\b(this is wrong|that is wrong|thats wrong|thats not it|that is not it|wrong item|wrong product|not what i need|not what i asked|not helpful|doesnt help|does not help|meri useless|meringue useless)\b/i.test(normalized);
 }
 
 export function isQuoteIntent(text: string) {
@@ -158,7 +169,7 @@ export function isProductSearchIntent(text: string) {
     return false;
   }
 
-  return /\b(do you have|do have|do u have|so you have|you have|do you carry|carry|find|search|show me|looking for|look for|i need|we need|i want|we want|need|want|je cherche|cherche|avez-vous|avez vous|as-tu|as tu)\b/i.test(text);
+  return /\b(do you have|do have|do u have|so you have|you have|do you carry|carry|find|search|show me|looking for|look for|i need|we need|i want|we want|need|want|image of|picture of|photo of|poster of|chart of|diagram of|reference for|reference image|je cherche|cherche|avez-vous|avez vous|as-tu|as tu)\b/i.test(text);
 }
 
 export function isQuickActionPrompt(text: string) {

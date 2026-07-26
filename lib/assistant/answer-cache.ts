@@ -40,6 +40,7 @@ export type AnswerCacheEligibility = {
 const cache = new Map<string, CachedAnswer>();
 const MAX_CACHE_ROWS = 250;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
+const CACHE_KEY_VERSION = "v2";
 let lastDurableReadError = "";
 let lastDurableWriteError = "";
 
@@ -49,7 +50,7 @@ function ttlMs() {
 }
 
 export function answerCacheKey(query: string, language: AssistantLanguage) {
-  return `${language}:${normalizeCacheQuery(query)}`;
+  return `${CACHE_KEY_VERSION}:${language}:${normalizeCacheQuery(query)}`;
 }
 
 export async function getCachedAnswer(query: string, language: AssistantLanguage) {

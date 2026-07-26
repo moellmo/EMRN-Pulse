@@ -38,6 +38,17 @@ export type KnowledgeMemoryItem = {
   updatedAt: string;
 };
 
+function normalizeMemoryType(value: unknown): KnowledgeMemoryType {
+  const normalized = normalizeSearchText(String(value || "")).replace(/\s*\/\s*/g, " ").replace(/[\s-]+/g, "_");
+  if (normalized === "intent_routing" || normalized === "intent_route" || normalized === "routing") return "intent_route";
+  if (normalized === "preferred_product") return "preferred_product";
+  if (normalized === "replacement_part") return "replacement_part";
+  if (normalized === "color_option") return "color_option";
+  if (normalized === "compatibility") return "compatibility";
+  if (normalized === "note") return "note";
+  return "alias";
+}
+
 function cleanText(value: unknown, max = 500) {
   return String(value || "").trim().slice(0, max);
 }
@@ -69,7 +80,7 @@ function writeMemoryFile(items: KnowledgeMemoryItem[]) {
 }
 
 export function readKnowledgeMemorySync() {
-  return readMemoryFile().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return readMemoryFile().map(normalizeMemoryItem).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function readKnowledgeMemory() {
@@ -77,7 +88,7 @@ export async function readKnowledgeMemory() {
   if (!supabaseAdminConfigured()) return localRows;
   try {
     const rows = await readSupabaseKnowledgeMemory();
-    if (rows) return dedupeKnowledgeRows([...rows, ...localRows]).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (rows) return dedupeKnowledgeRows([...rows, ...localRows].map(normalizeMemoryItem)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   } catch (error) {
     console.warn("[EMRN Pulse] Supabase knowledge memory read skipped", error);
   }
@@ -89,7 +100,11 @@ export function approvedKnowledgeMemorySync() {
 }
 
 export async function approvedKnowledgeMemory() {
-  return (await readKnowledgeMemory()).filter((item) => item.status === "approved");
+  return (await readKnowledgeMemory()).map(normalizeMemoryItem).filter((item) => item.status === "approved");
+}
+
+function normalizeMemoryItem(item: KnowledgeMemoryItem): KnowledgeMemoryItem {
+  return { ...item, type: normalizeMemoryType(item.type) };
 }
 
 export async function saveKnowledgeMemoryItem(input: Partial<KnowledgeMemoryItem>) {
@@ -99,7 +114,7 @@ export async function saveKnowledgeMemoryItem(input: Partial<KnowledgeMemoryItem
   const existing = items.find((item) => item.id === id);
   const next: KnowledgeMemoryItem = {
     id,
-    type: (input.type || existing?.type || "alias") as KnowledgeMemoryType,
+    type: normalizeMemoryType(input.type || existing?.type || "alias"),
     query: cleanText(input.query ?? existing?.query, 240),
     correctSearchTerms: cleanText(input.correctSearchTerms ?? existing?.correctSearchTerms, 240),
     correctSku: normalizeSku(input.correctSku ?? existing?.correctSku),
@@ -186,6 +201,7 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
   return (await approvedKnowledgeMemory()).filter((item) => {
     const itemText = `${item.query} ${item.correctSearchTerms || ""} ${item.note || ""}`;
     if (hasFamilyConflict(normalizedQuery, itemText)) return false;
+    if (hasProductFormatConflict(normalizedQuery, itemText)) return false;
 
     const normalizedItemQuery = normalizeSearchText(item.query);
     if (normalizedItemQuery && (normalizedQuery.includes(normalizedItemQuery) || normalizedItemQuery.includes(normalizedQuery))) {
@@ -200,7 +216,7 @@ export async function taughtIntentRouteForQuery(query: string): Promise<Knowledg
   if (!normalizedQuery) return null;
 
   const matches = (await approvedKnowledgeMemory())
-    .filter((item) => item.type === "intent_route")
+    .filter((item) => normalizeMemoryType(item.type) === "intent_route")
     .map((item) => {
       const route = routeFromKnowledgeItem(item);
       return {
@@ -238,8 +254,8 @@ function inferIntentRouteFromText(value: string): KnowledgeIntentRoute | null {
 
 function normalizeIntentRouteText(value: string) {
   return normalizeSearchText(value)
-    .replace(/\b(?:qutoes|qoutes|qoute|qute|qutes|quot|quote|quotes|quotation|quotations|devis)\b/g, "quote")
-    .replace(/\b(?:agen|agent|agentt|agnt|agents|representative|representatives|represenattive|represenative|rep|staff|human)\b/g, "agent")
+    .replace(/\b(?:squote|squotes|qutoes|qoutes|qoute|qute|qutes|quot|quote|quotes|quotation|quotations|devis)\b/g, "quote")
+    .replace(/\b(?:agen|agent|agentt|agnt|agents|representative|representatives|represenattive|represenative|rep|human)\b/g, "agent")
     .replace(/\b(?:speak|talk|chat|contact|connect|reach|call|email|message)\b/g, "contact")
     .replace(/\b(?:support|help|problem|issue|team)\b/g, "support")
     .replace(/\b(?:order|orders|commande|commandes)\b/g, "order")
@@ -250,7 +266,7 @@ function normalizeIntentRouteText(value: string) {
 }
 
 function intentRouteMatchScore(normalizedQuery: string, item: KnowledgeMemoryItem, route: KnowledgeIntentRoute) {
-  const normalizedRule = normalizeIntentRouteText(`${item.query} ${item.note || ""}`);
+  const normalizedRule = normalizeIntentRouteText(`${item.query} ${item.correctSearchTerms || ""}`);
   if (!normalizedRule) return 0;
   if (normalizedQuery.includes(normalizedRule) || normalizedRule.includes(normalizedQuery)) return 100;
 
@@ -258,9 +274,45 @@ function intentRouteMatchScore(normalizedQuery: string, item: KnowledgeMemoryIte
   const ruleTerms = significantIntentRouteTerms(normalizedRule);
   const matches = ruleTerms.filter((term) => queryTerms.includes(term));
   let score = matches.length * 10;
+  if (routeTermsMatchFuzzily(queryTerms, ruleTerms, route)) score += 45;
+  if (querySupportsRoute(normalizedQuery, route)) score += 35;
   if (routeCoreTerms(route).some((term) => queryTerms.includes(term) && ruleTerms.includes(term))) score += 30;
   if (querySupportsRoute(normalizedQuery, route) && routeCoreTerms(route).some((term) => ruleTerms.includes(term))) score += 25;
+  if (!routeCoreTerms(route).some((term) => ruleTerms.includes(term))) score -= 30;
   return score >= 30 ? score : 0;
+}
+
+function routeTermsMatchFuzzily(queryTerms: string[], ruleTerms: string[], route: KnowledgeIntentRoute) {
+  const coreTerms = routeCoreTerms(route);
+  return coreTerms.some((core) => {
+    const ruleHasCore = ruleTerms.some((term) => term === core || editDistanceAtMostOne(term, core));
+    const queryHasCore = queryTerms.some((term) => term === core || editDistanceAtMostOne(term, core));
+    return ruleHasCore && queryHasCore;
+  });
+}
+
+function editDistanceAtMostOne(a: string, b: string) {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let edits = 0;
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (b.length > a.length) j += 1;
+    else {
+      i += 1;
+      j += 1;
+    }
+  }
+  return true;
 }
 
 function querySupportsRoute(normalizedQuery: string, route: KnowledgeIntentRoute) {
@@ -318,6 +370,34 @@ function hasFamilyConflict(normalizedQuery: string, value: string) {
   const queryAedBrands = aedBrands.filter((brand) => queryFamilies.has(brand));
   const itemAedBrands = aedBrands.filter((brand) => itemFamilies.has(brand));
   return Boolean(queryAedBrands.length && itemAedBrands.length && !queryAedBrands.some((brand) => itemFamilies.has(brand)));
+}
+
+function hasProductFormatConflict(normalizedQuery: string, value: string) {
+  const normalizedValue = normalizeSearchText(value);
+  const queryAsksKit = /\bkits?\b/.test(normalizedQuery);
+  const itemIsVisual = /\b(posters?|charts?|diagrams?|anatomical chart|reference image)\b/.test(normalizedValue);
+  if (queryAsksKit && itemIsVisual) return true;
+
+  const queryAsksVisual = /\b(posters?|charts?|diagrams?|reference image|anatomy image|anatomical chart)\b/.test(normalizedQuery);
+  const itemIsKit = /\bkits?\b/.test(normalizedValue);
+  if (queryAsksVisual && itemIsKit) return true;
+
+  const queryAsksCuff = /\b(?:blood pressure cuff|bp cuff|nibp cuff|cuffs?)\b/.test(normalizedQuery);
+  const itemIsMonitor = /\bmonitors?\b/.test(normalizedValue) && !/\bcuffs?\b/.test(normalizedValue);
+  if (queryAsksCuff && itemIsMonitor) return true;
+
+  const queryAsksBattery = /\b(?:battery|batteries)\b/.test(normalizedQuery);
+  const queryAsksTraining = /\b(?:training|trainer)\b/.test(normalizedQuery);
+  const queryAsksPad = /\b(?:pads?|padz|electrodes?)\b/.test(normalizedQuery);
+  const itemHasPad = /\b(?:pads?|padz|electrodes?)\b/.test(normalizedValue);
+  const itemHasBattery = /\b(?:battery|batteries)\b/.test(normalizedValue);
+  const itemHasTraining = /\b(?:training|trainer)\b/.test(normalizedValue);
+  if (queryAsksBattery && itemHasPad && !itemHasBattery) return true;
+  if (queryAsksPad && itemHasBattery && !itemHasPad) return true;
+  if (queryAsksTraining && queryAsksPad && itemHasPad && !itemHasTraining) return true;
+  if (!queryAsksTraining && queryAsksPad && itemHasTraining) return true;
+
+  return false;
 }
 
 function familyTokens(value: string) {

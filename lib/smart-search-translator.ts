@@ -113,6 +113,33 @@ function preserveModifiers(original: string) {
   return Array.from(pieces).join(" ");
 }
 
+function domainAssistedQueries(original: string) {
+  const normalized = normalizeSearchText(original);
+  const queries: string[] = [];
+
+  if (
+    /\b(face|facial)\b/.test(normalized) &&
+    /\b(vessels?|vascular|arter(?:y|ies)|veins?|blood vessels?)\b/.test(normalized) &&
+    /\b(posters?|charts?|diagram|reference|clinic|anatomy|anatomical)\b/.test(normalized)
+  ) {
+    queries.push("blood vessel nerve pathways chart", "clinically important blood vessel and nerve pathways chart");
+  }
+
+  if (/\b(inside ears?|ear wax|earwax|wax)\b/.test(normalized) && /\b(home|own|myself|see|look|view)\b/.test(normalized)) {
+    queries.push("otoscope ear scope");
+  }
+
+  if (/\b(nitrile|latex|vinyl|exam)\b/.test(normalized) && /\bgloves?\b/.test(normalized)) {
+    const material = normalized.match(/\b(nitrile|latex|vinyl)\b/)?.[1] || "exam";
+    const size = normalized.match(/\b(xs|small|medium|large|xl|x-large|extra large)\b/)?.[1] || "";
+    const color = normalized.match(/\b(blue|black|purple|white|green|pink)\b/)?.[1] || "";
+    queries.push([material, "exam gloves", color, size].filter(Boolean).join(" "));
+    queries.push(["gloves", color, size].filter(Boolean).join(" "));
+  }
+
+  return queries;
+}
+
 function buildManualQuery(original: string, expansions: string[], language: "en" | "fr") {
   if (!expansions.length) return "";
   const modifiers = preserveModifiers(original);
@@ -127,7 +154,9 @@ async function aiSearchHelperEnabled() {
 function shouldUseAiSearchHelper(original: string, language: "en" | "fr", looksNaturalLanguage: boolean, aiEnabled: boolean) {
   if (!aiEnabled || language !== "en" || !looksNaturalLanguage) return false;
   if (/\b[A-Z]{1,8}[-\s]?\d{3,}[A-Z0-9-]*\+?\b/.test(original)) return false;
-  return /\b(what|which|does|do|work|works|fit|fits|compatible|compatibility|replacement|part|accessory|pads?|battery|batteries|for|need|looking|find|show)\b/i.test(original);
+  const wordCount = original.trim().split(/\s+/).filter(Boolean).length;
+  const productLanguage = /\b(poster|chart|diagram|reference|clinic|image|picture|photo|anatomy|anatomical|vessels?|blood|face|ear|ears|wax|otoscope|scope)\b/i.test(original);
+  return wordCount >= 7 || productLanguage || /\b(what|which|does|do|work|works|fit|fits|compatible|compatibility|replacement|part|accessory|pads?|battery|batteries|for|need|looking|find|show)\b/i.test(original);
 }
 
 function shouldUseFrenchAiSearchHelper(original: string, looksNaturalLanguage: boolean, aiEnabled: boolean) {
@@ -145,7 +174,7 @@ async function translateWithOpenAI(query: string, language: "en" | "fr") {
     {
       role: "system",
       content:
-        "You rewrite healthcare ecommerce search queries into concise English search keywords for a Canadian medical supply website. Return ONLY JSON with keys english_query and alternatives. Preserve brand names, SKU-like strings, model numbers, sizes, quantities, and medical category meaning. Include likely manufacturer model names, part numbers, accessory names, and common catalog terms when relevant, but keep each alternative short. Use common terms: manikin not mannequin, AED, CPR, blood pressure cuff, oxygen mask, wound dressing, syringe, catheter, gloves, shower chair.",
+        "You rewrite healthcare ecommerce search queries into concise English search keywords for a Canadian medical supply website. Return ONLY JSON with keys english_query and alternatives. Preserve brand names, SKU-like strings, model numbers, sizes, quantities, and medical category meaning. Strip conversational words and keep the actual product noun, body area, clinical use, and format. For posters/charts/reference images, include poster/chart/anatomy terms. For home ear-wax viewing questions, search for otoscope/ear scope, not simulator wax. Include likely manufacturer model names, part numbers, accessory names, and common catalog terms when relevant, but keep each alternative short. Examples: 'poster that shows all blood vessels of face for clinic reference' -> 'face blood vessels anatomy poster chart'; 'how can I see inside my ears for wax at home' -> 'otoscope ear scope'; 'teh g3 load n go' -> 'G3 Load N Go Medic Backpack'. Use common terms: manikin not mannequin, AED, CPR, blood pressure cuff, oxygen mask, wound dressing, syringe, catheter, gloves, shower chair.",
     },
     {
       role: "user",
@@ -232,7 +261,7 @@ export async function buildSmartSearchQuery(query: string): Promise<SmartQueryRe
       assistedQueries = Array.from(new Set([ai.query, ...ai.alternatives].map(cleanSearchQuery).filter(Boolean))).slice(0, 8);
       translated = language === "fr"
         ? cleanSearchQuery([ai.query, translated, ...ai.alternatives.slice(0, 6)].filter(Boolean).join(" "))
-        : translated;
+        : cleanSearchQuery([ai.query, preserveModifiers(original)].filter(Boolean).join(" "));
       translator = translator === "manual" ? "manual+openai" : "openai";
     }
   }
@@ -240,6 +269,7 @@ export async function buildSmartSearchQuery(query: string): Promise<SmartQueryRe
   const fallbackTerms = Array.from(
     new Set([
       ...getFallbackTerms(original),
+      ...domainAssistedQueries(original),
       ...assistedQueries,
     ])
   ).slice(0, 8);
