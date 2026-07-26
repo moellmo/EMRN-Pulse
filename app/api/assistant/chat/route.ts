@@ -1224,8 +1224,8 @@ function looksLikePlainCatalogKeywordSearch(text: string) {
   if (/\b(can|could|does|do|will|would|is|are|what|which|how|why|when|where|compatible|compatibility|fit|fits|work|works|hold|holds|come|comes|include|includes|sold|price|cost|latex[- ]?free|free of latex)\b/.test(normalized)) {
     return false;
   }
-  const hasProductNoun = /\b(posters?|charts?|diagrams?|images?|pictures?|photos?|vessels?|vascular|arter(?:y|ies)|veins?|gloves?|masks?|gauze|bandage|dressings?|manikins?|mannequins?|pads?|electrodes?|batter(?:y|ies)|regulators?|chairs?|backpacks?|bags?|kits?|cuffs?|otoscopes?|thermometers?|syringes?|needles?)\b/.test(normalized);
-  const hasModifier = /\b(nitrile|latex|vinyl|exam|sterile|blue|black|purple|white|green|pink|small|medium|large|xlarge|xl|adult|pediatric|paediatric|full|torso|face|blood|vessel|nerve|wall|clinic)\b/.test(normalized);
+  const hasProductNoun = /\b(posters?|charts?|diagrams?|images?|pictures?|photos?|vessels?|vascular|arter(?:y|ies)|veins?|gloves?|gants?|masks?|masques?|gauze|gazes?|bandage|bandages?|dressings?|pansements?|manikins?|mannequins?|pads?|electrodes?|batter(?:y|ies)|batteries?|regulators?|regulateurs?|chairs?|chaises?|backpacks?|bags?|sacs?|kits?|trousses?|cuffs?|brassards?|otoscopes?|thermometers?|thermometres?|syringes?|seringues?|needles?|aiguilles?)\b/.test(normalized);
+  const hasModifier = /\b(nitrile|latex|vinyl|exam|sterile|blue|black|purple|white|green|pink|small|medium|large|xlarge|xl|adult|pediatric|paediatric|full|torso|face|blood|vessel|nerve|wall|clinic|moyen|moyenne|grand|grande|petit|petite|bleu|noir|blanc|vert|rouge|visage|sang|sanguin|vaisseau|vaisseaux|nerf|nerfs|mur|clinique)\b/.test(normalized);
   return hasProductNoun && hasModifier;
 }
 
@@ -1528,13 +1528,13 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   if (/\b(posters?|charts?|diagrams?|reference image|anatomy image|anatomical chart)\b/.test(normalized)) {
     groups.push({ terms: ["poster", "posters", "chart", "charts", "diagram"], field: "name_category" });
   }
-  if (/\b(face|facial)\b/.test(normalized) && /\b(vessels?|vascular|arter(?:y|ies)|veins?)\b/.test(normalized)) {
+  if (/\b(face|facial|visage)\b/.test(normalized) && /\b(vessels?|vascular|arter(?:y|ies)|veins?|vaisseaux?|sanguins?|nerfs?)\b/.test(normalized)) {
     groups.push({ terms: ["blood vessel", "blood vessels", "vessel", "vessels", "vascular", "artery", "arteries", "vein", "veins", "pathway", "pathways"], field: "name_category" });
   }
   if (/\b(otoscope|otoscopes|ear scope|ear scopes|inside ears?|earwax|ear wax)\b/.test(normalized)) {
     groups.push({ terms: ["otoscope", "otoscopes", "ri-scope", "ear scope"], field: "name_category" });
   }
-  if (/\b(nitrile|latex|vinyl|exam)\b/.test(normalized) && /\bgloves?\b/.test(normalized)) {
+  if (/\b(nitrile|latex|vinyl|exam)\b/.test(normalized) && /\b(gloves?|gants?)\b/.test(normalized)) {
     groups.push({ terms: ["glove", "gloves"], field: "name_category" });
   }
   if (/\b(cushion|cushions|lumbar support)\b/.test(normalized)) {
@@ -1575,6 +1575,7 @@ async function recoverExplicitIntentProducts(latest: string, searchQuery: string
   const retryQueries = Array.from(
     new Set(
       [
+        ...assistantRecoveryQueries(latest),
         smartQuery.search_query,
         smartQuery.translated_query,
         ...(smartQuery.assisted_queries || []),
@@ -1605,6 +1606,82 @@ async function recoverExplicitIntentProducts(latest: string, searchQuery: string
     timings: undefined,
     attemptedQueries: retryQueries,
   };
+}
+
+function assistantRecoveryQueries(query: string) {
+  const normalized = normalizeSearchText(query);
+  const queries: string[] = [];
+
+  if (
+    /\b(face|facial|visage)\b/.test(normalized) &&
+    /\b(vessels?|vascular|arter(?:y|ies)|veins?|blood vessels?|vaisseaux?|sanguins?|nerfs?)\b/.test(normalized) &&
+    /\b(posters?|charts?|diagram|reference|clinic|clinique|anatomy|anatomical|affiche|affiches|tableau|schema)\b/.test(normalized)
+  ) {
+    queries.push("face blood vessels anatomy poster chart", "blood vessel nerve pathways chart", "clinically important blood vessel and nerve pathways chart");
+  }
+
+  if (/\b(gants?|gloves?)\b/.test(normalized) && /\b(latex|nitrile|vinyl)\b/.test(normalized)) {
+    const material = normalized.match(/\b(latex|nitrile|vinyl)\b/)?.[1] || "exam";
+    const sizeMatch = normalized.match(/\b(xs|small|medium|large|xl|x-large|extra large|petit(?:e|s|es)?|moyen(?:ne|s|nes)?|grand(?:e|s|es)?)\b/)?.[1] || "";
+    const colorMatch = normalized.match(/\b(blue|black|purple|white|green|pink|bleu(?:e|s|es)?|noir(?:e|s|es)?|blanc(?:he|s|hes)?)\b/)?.[1] || "";
+    const sizeMap: Record<string, string> = {
+      petite: "small",
+      petit: "small",
+      petites: "small",
+      petits: "small",
+      moyen: "medium",
+      moyenne: "medium",
+      moyens: "medium",
+      moyennes: "medium",
+      grand: "large",
+      grande: "large",
+      grands: "large",
+      grandes: "large",
+    };
+    const colorMap: Record<string, string> = {
+      bleu: "blue",
+      bleue: "blue",
+      bleus: "blue",
+      bleues: "blue",
+      noir: "black",
+      noire: "black",
+      noirs: "black",
+      noires: "black",
+      blanc: "white",
+      blanche: "white",
+      blancs: "white",
+      blanches: "white",
+    };
+    const size = sizeMap[sizeMatch] || sizeMatch;
+    const color = colorMap[colorMatch] || colorMatch;
+    queries.push([material, "exam gloves", color, size].filter(Boolean).join(" "));
+    queries.push(["gloves", color, size].filter(Boolean).join(" "));
+  }
+
+  return queries;
+}
+
+function autoKeywordMemoryId(query: string) {
+  const normalized = normalizeSearchText(query).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `ai-keyword-${normalized.slice(0, 80) || crypto.randomUUID()}`;
+}
+
+function shouldUseAiKeywordRecovery(input: {
+  latest: string;
+  skuCandidates: string[];
+  taughtQuoteIntent: boolean;
+  taughtOrderStatusIntent: boolean;
+  taughtContactIntent: boolean;
+  taughtAvailabilityIntent: boolean;
+}) {
+  if (input.skuCandidates.length) return false;
+  if (isQuoteIntent(input.latest) || input.taughtQuoteIntent) return false;
+  if (isOrderStatusIntent(input.latest) || input.taughtOrderStatusIntent) return false;
+  if (isContactIntent(input.latest) || input.taughtContactIntent) return false;
+  if (isCartIntent(input.latest)) return false;
+  if (isAvailabilityIntent(input.latest) || input.taughtAvailabilityIntent) return false;
+  if (assistantRecoveryQueries(input.latest).length) return true;
+  return isProductSearchIntent(input.latest) || looksLikeSpecificProductSearch(input.latest) || looksLikePlainCatalogKeywordSearch(input.latest);
 }
 
 function isKitQuery(query: string) {
@@ -4172,24 +4249,87 @@ async function handleAssistantPost(req: NextRequest) {
   const intentFilteredProducts = productsMatchingExplicitIntent(products, latest, searchQuery);
   let suppressedLowConfidenceProducts = intentFilteredProducts.suppressed;
   products = intentFilteredProducts.products;
-  if (suppressedLowConfidenceProducts && isProductSearchIntent(latest) && !skuCandidates.length) {
-    const recovered = await recoverExplicitIntentProducts(latest, searchQuery, language);
-    if (recovered.products.length) {
-      products = recovered.products;
-      searchQuery = recovered.searchQuery;
-      suppressedLowConfidenceProducts = false;
-      searchTiming = {
-        totalMs: (searchTiming.totalMs || 0) + (recovered.timings?.totalMs || 0),
-        supabaseMs: (searchTiming.supabaseMs || 0) + (recovered.timings?.supabaseMs || 0),
-        openAiMs: (searchTiming.openAiMs || 0) + (recovered.timings?.openAiMs || 0),
-        typesenseMs: (searchTiming.typesenseMs || 0) + (recovered.timings?.typesenseMs || 0),
-        fallbackMs: (searchTiming.fallbackMs || 0) + (recovered.timings?.fallbackMs || 0),
-      };
+
+  let aiKeywordRecoveryReason = "";
+  let aiKeywordRecoverySaved = false;
+  let aiKeywordRecoveryAttemptedQueries: string[] = [];
+  const canTryAiKeywordRecovery = shouldUseAiKeywordRecovery({
+    latest,
+    skuCandidates,
+    taughtQuoteIntent,
+    taughtOrderStatusIntent,
+    taughtContactIntent,
+    taughtAvailabilityIntent,
+  });
+  const saveAiKeywordMappingForReview = async (
+    reason: string,
+    resolvedSearchQuery: string,
+    resolvedProducts: CatalogProduct[],
+    attemptedQueries: string[]
+  ) => {
+    if (normalizeSearchText(resolvedSearchQuery) === normalizeSearchText(latest)) return;
+    try {
+      await saveKnowledgeMemoryItem({
+        id: autoKeywordMemoryId(latest),
+        type: "alias",
+        status: "needs_review",
+        query: latest,
+        correctSearchTerms: resolvedSearchQuery,
+        correctSku: resolvedProducts.length <= 3 ? resolvedProducts[0]?.sku || "" : "",
+        note: `Auto-suggested from OpenAI keyword recovery (${reason}). Review before approving. Tried: ${attemptedQueries.join(" | ")}`,
+      });
+      aiKeywordRecoverySaved = true;
+    } catch (error) {
+      console.warn("[EMRN Pulse] AI keyword memory save skipped", error);
     }
+  };
+  const tryAiKeywordRecovery = async (reason: string) => {
+    if (!canTryAiKeywordRecovery) return false;
+    const recovered = await recoverExplicitIntentProducts(latest, searchQuery, language);
+    aiKeywordRecoveryAttemptedQueries = recovered.attemptedQueries || [];
+    searchTiming = {
+      totalMs: (searchTiming.totalMs || 0) + (recovered.timings?.totalMs || 0),
+      supabaseMs: (searchTiming.supabaseMs || 0) + (recovered.timings?.supabaseMs || 0),
+      openAiMs: (searchTiming.openAiMs || 0) + (recovered.timings?.openAiMs || 0),
+      typesenseMs: (searchTiming.typesenseMs || 0) + (recovered.timings?.typesenseMs || 0),
+      fallbackMs: (searchTiming.fallbackMs || 0) + (recovered.timings?.fallbackMs || 0),
+    };
+    const assistantRecoveryMatched = assistantRecoveryQueries(latest)
+      .map((query) => normalizeSearchText(query))
+      .includes(normalizeSearchText(recovered.searchQuery));
+    if (!recovered.products.length || (!assistantRecoveryMatched && weakProductSearchResult(recovered.products, latest, recovered.searchQuery))) {
+      return false;
+    }
+    products = recovered.products;
+    searchQuery = recovered.searchQuery;
+    suppressedLowConfidenceProducts = false;
+    aiKeywordRecoveryReason = reason;
+    await saveAiKeywordMappingForReview(reason, recovered.searchQuery, recovered.products, aiKeywordRecoveryAttemptedQueries);
+    return true;
+  };
+
+  if (suppressedLowConfidenceProducts) {
+    await tryAiKeywordRecovery("suppressed low-confidence product matches");
   }
   if (weakProductSearchResult(products, latest, searchQuery)) {
     products = [];
     suppressedLowConfidenceProducts = true;
+    await tryAiKeywordRecovery("weak product search result");
+  }
+  if (!products.length) {
+    await tryAiKeywordRecovery("no product search result");
+  }
+  const shouldRememberAiSearch =
+    canTryAiKeywordRecovery &&
+    !aiKeywordRecoveryReason &&
+    (searchTiming.openAiMs || 0) > 0 &&
+    products.length > 0 &&
+    !weakProductSearchResult(products, latest, searchQuery) &&
+    normalizeSearchText(searchQuery) !== normalizeSearchText(latest);
+  if (shouldRememberAiSearch) {
+    aiKeywordRecoveryReason = "OpenAI search helper";
+    aiKeywordRecoveryAttemptedQueries = [searchQuery];
+    await saveAiKeywordMappingForReview("OpenAI search helper", searchQuery, products, aiKeywordRecoveryAttemptedQueries);
   }
   products = rankProductsForAnswer(products, latest);
   const missingColorFallback = colorFallback || missingRequestedColorProducts(products, latest);
@@ -4274,6 +4414,9 @@ async function handleAssistantPost(req: NextRequest) {
         proofPartNumbers: extra?.proofPartNumbers?.slice(0, 12),
         proofSearchTerms: [
           ...(extra?.proofSearchTerms || []),
+          ...(aiKeywordRecoveryReason ? [`AI keyword recovery: ${aiKeywordRecoveryReason}`] : []),
+          ...(aiKeywordRecoverySaved ? ["AI keyword mapping saved for review"] : []),
+          ...aiKeywordRecoveryAttemptedQueries,
           ...(suppressedLowConfidenceProducts ? ["suppressed low-confidence product matches"] : []),
         ].slice(0, 12),
         emrnMatchCount: extra?.emrnMatchCount,
