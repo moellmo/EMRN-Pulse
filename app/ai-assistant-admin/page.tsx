@@ -1447,6 +1447,7 @@ function humanAnswerPath(value: string) {
 function humanFeature(value: string) {
   const labels: Record<string, string> = {
     search_translator: "Search helper",
+    catalog_search_planner: "Catalog keyword planner",
     assistant_response: "Assistant answer",
     trusted_web_search: "Trusted web check",
   };

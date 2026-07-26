@@ -258,7 +258,7 @@ export type AssistantAnalyticsEvent =
 
 export type AssistantAiUsageEvent = {
   createdAt: string;
-  feature: "search_translator" | "assistant_response" | "trusted_web_search";
+  feature: "search_translator" | "catalog_search_planner" | "assistant_response" | "trusted_web_search";
   model: string;
   inputTokens: number;
   outputTokens: number;

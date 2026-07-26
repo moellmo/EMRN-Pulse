@@ -13,6 +13,15 @@ export type ExternalKnowledgeLookup = {
   sourceUrls: string[];
 };
 
+export type CatalogSearchPlan = {
+  intent: "product_search" | "product_question" | "quote" | "order_status" | "contact" | "support" | "not_shopping";
+  searchTerms: string[];
+  mustInclude: string[];
+  avoid: string[];
+  confidence: number;
+  reason: string;
+};
+
 const trustedProductSourceDomains = [
   "emrn.ca",
   "laerdal.com",
@@ -592,6 +601,28 @@ function cleanLookupArray(value: unknown, max = 8) {
     : [];
 }
 
+function parseCatalogSearchPlan(value: unknown): CatalogSearchPlan | null {
+  const rawText = outputTextFromResponse(value).replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const text = rawText.match(/\{[\s\S]*\}/)?.[0] || rawText;
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const intent = String(parsed.intent || "").trim();
+    if (!["product_search", "product_question", "quote", "order_status", "contact", "support", "not_shopping"].includes(intent)) return null;
+    return {
+      intent: intent as CatalogSearchPlan["intent"],
+      searchTerms: cleanLookupArray(parsed.searchTerms, 6),
+      mustInclude: cleanLookupArray(parsed.mustInclude, 8),
+      avoid: cleanLookupArray(parsed.avoid, 8),
+      confidence: Math.max(0, Math.min(1, Number(parsed.confidence || 0))),
+      reason: String(parsed.reason || "").trim().slice(0, 300),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseExternalLookup(value: unknown): ExternalKnowledgeLookup | null {
   const rawText = outputTextFromResponse(value).replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const text = rawText.match(/\{[\s\S]*\}/)?.[0] || rawText;
@@ -615,6 +646,107 @@ function parseExternalLookup(value: unknown): ExternalKnowledgeLookup | null {
   } catch {
     return null;
   }
+}
+
+export async function planCatalogSearch({
+  messages,
+  language,
+  sessionId,
+  query,
+}: {
+  messages: AssistantMessage[];
+  language: AssistantLanguage;
+  sessionId?: string;
+  query: string;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  const model = process.env.OPENAI_SEARCH_HELPER_MODEL || process.env.OPENAI_ASSISTANT_MODEL || "gpt-4.1-nano";
+  const requestBody = {
+    model,
+    stream: false,
+    instructions: [
+      "You are EMRN Pulse's catalog search planner.",
+      "Return structured JSON only. Do not answer the customer.",
+      "Classify the latest customer message and, for product searches, rewrite it into short EMRN catalog search terms.",
+      "Prefer concrete product nouns, medical use, brand/family, material, size, body area, anatomy subject, and item type.",
+      "Remove conversational filler. Correct obvious spelling mistakes and missing spaces.",
+      "For long requests, identify what product the customer is actually trying to buy.",
+      "If the customer asks for home, clinic, patient, personal, or reference use, avoid simulator/training-only items unless they explicitly ask for training, teaching, simulation, manikin, or practice.",
+      "Put unwanted item classes in avoid, for example training simulator, manikin, replacement wax, refill, accessory, poster if they do not match the requested item.",
+      "Do not include competitor/store names unless they are product brands.",
+      "If the message is quote/contact/order/support/not shopping, set that intent and leave searchTerms empty.",
+      "Use English product-search terms even when the customer writes French, because EMRN catalog product names are mostly English.",
+    ].join("\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "catalog_search_plan",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            intent: { type: "string", enum: ["product_search", "product_question", "quote", "order_status", "contact", "support", "not_shopping"] },
+            searchTerms: { type: "array", items: { type: "string" } },
+            mustInclude: { type: "array", items: { type: "string" } },
+            avoid: { type: "array", items: { type: "string" } },
+            confidence: { type: "number" },
+            reason: { type: "string" },
+          },
+          required: ["intent", "searchTerms", "mustInclude", "avoid", "confidence", "reason"],
+        },
+      },
+    },
+    input: [
+      "Conversation:",
+      ...messages.slice(-8).map((message) => `${message.role.toUpperCase()}: ${message.content}`),
+      "",
+      `Latest customer message: ${query}`,
+      "",
+      "Return JSON:",
+      "{",
+      "  \"intent\": \"product_search | product_question | quote | order_status | contact | support | not_shopping\",",
+      "  \"searchTerms\": [\"short EMRN searches\"],",
+      "  \"mustInclude\": [\"terms that matching products should contain\"],",
+      "  \"avoid\": [\"terms/products that should not win\"],",
+      "  \"confidence\": 0.0,",
+      "  \"reason\": \"brief explanation\"",
+      "}",
+    ].join("\n"),
+    max_output_tokens: 450,
+  };
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    console.error("[EMRN Pulse] OpenAI catalog search planner failed", response.status, await response.text());
+    return null;
+  }
+
+  const json = await response.json();
+  const plan = parseCatalogSearchPlan(json);
+  const usage = (json as { usage?: Record<string, unknown> }).usage;
+  await logAiUsage({
+    feature: "catalog_search_planner",
+    model,
+    inputTokens: Number(usage?.input_tokens || 0),
+    outputTokens: Number(usage?.output_tokens || 0),
+    sessionId,
+    language,
+    query,
+    status: plan ? "called" : "error",
+  });
+
+  return plan;
 }
 
 export async function lookupExternalKnowledge({

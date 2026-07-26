@@ -6,7 +6,7 @@ import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSu
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isNegativeSearchFeedback, isOrderStatusIntent, isProductCapabilityIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
-import { lookupExternalKnowledge, streamAssistantResponse } from "@/lib/assistant/openai";
+import { lookupExternalKnowledge, planCatalogSearch, streamAssistantResponse } from "@/lib/assistant/openai";
 import { buildKnowledgeEvidence, knowledgeShadowEnabled, shouldCheckKnowledgeEvidence } from "@/lib/assistant/knowledge";
 import { matchingApprovedKnowledgeForQuery, saveKnowledgeMemoryItem, taughtIntentRouteForQuery } from "@/lib/assistant/knowledge-memory";
 import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
@@ -14,7 +14,7 @@ import { answerCacheEligibility, getCachedAnswer, saveCachedAnswer, type AnswerC
 import { normalizeSearchText } from "@/lib/search-language";
 import { buildSmartSearchQuery } from "@/lib/smart-search-translator";
 import type { AssistantLanguage, AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
-import type { ExternalKnowledgeLookup } from "@/lib/assistant/openai";
+import type { CatalogSearchPlan, ExternalKnowledgeLookup } from "@/lib/assistant/openai";
 
 export const runtime = "nodejs";
 
@@ -2740,6 +2740,79 @@ function weakProductSearchResult(products: CatalogProduct[], latest: string, sea
   return terms.length >= 3 && overlap.length === 0;
 }
 
+function searchPlanTerms(value: string[]) {
+  return value
+    .map((term) => normalizeSearchText(term))
+    .flatMap((term) => [term, ...term.split(/\s+/)])
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3);
+}
+
+function asksForTrainingUse(query: string, plan?: CatalogSearchPlan) {
+  const text = normalizeSearchText([
+    query,
+    ...(plan?.searchTerms || []),
+    ...(plan?.mustInclude || []),
+  ].join(" "));
+  return /\b(training|trainer|simulation|simulator|manikin|mannequin|teaching|education|practice|demo)\b/.test(text);
+}
+
+function asksForCustomerClinicalUse(query: string) {
+  const text = normalizeSearchText(query);
+  return /\b(home|clinic|patient|own|myself|self|personal|use|reference|office)\b/.test(text);
+}
+
+function scoreProductForSearchPlan(product: CatalogProduct, plan: CatalogSearchPlan) {
+  const text = productIntentText(product);
+  const must = searchPlanTerms(plan.mustInclude);
+  const avoid = searchPlanTerms(plan.avoid);
+  let score = 0;
+
+  for (const term of must) {
+    if (text.includes(term)) score += term.includes(" ") ? 6 : 2;
+  }
+  for (const term of avoid) {
+    if (text.includes(term)) score -= term.includes(" ") ? 8 : 3;
+  }
+  return score;
+}
+
+function productsMatchingSearchPlan(products: CatalogProduct[], plan: CatalogSearchPlan, latest: string) {
+  if (!products.length) return [];
+  const wantsTraining = asksForTrainingUse(latest, plan);
+  const wantsClinicalUse = asksForCustomerClinicalUse(latest);
+  const mustTerms = searchPlanTerms(plan.mustInclude);
+  const scored = [...products]
+    .map((product, index) => {
+      const text = productIntentText(product);
+      let score = scoreProductForSearchPlan(product, plan);
+      const trainingOnly = /\b(training|trainer|simulator|simulation|manikin|mannequin|life\/form|life form|not for human|for training purposes only)\b/.test(text);
+      const realClinicalItem = /\b(otoscope|diagnostic|chart|poster|glove|mask|bandage|dressing|pads?|battery|bag|backpack|monitor|instrument)\b/.test(text);
+      if (!wantsTraining && trainingOnly) score -= wantsClinicalUse ? 18 : 10;
+      if (!wantsTraining && wantsClinicalUse && realClinicalItem && !trainingOnly) score += 8;
+      return { product, index, score };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  if (!mustTerms.length) return scored.map((item) => item.product);
+  if (scored[0]?.score <= 0) return [];
+  return scored.filter((item) => item.score > 0).map((item) => item.product);
+}
+
+function catalogPlanQueries(plan: CatalogSearchPlan, latest: string) {
+  const base = Array.from(new Set(plan.searchTerms.map((query) => query.trim()).filter(Boolean))).slice(0, 5);
+  const text = normalizeSearchText([latest, ...base, ...plan.mustInclude].join(" "));
+  const expanded = [...base];
+  const asksReferenceVisual = /\b(poster|affiche|chart|diagram|reference|wall|anatomical|anatomy)\b/.test(text);
+  const asksVessels = /\b(vessel|vessels|vein|veins|artery|arteries|vascular|sanguin|sanguins|sanguine|nerve|nerves|visage|face)\b/.test(text);
+  if (asksReferenceVisual && asksVessels) {
+    expanded.push("blood vessels chart", "nerve pathways chart", "anatomical blood vessels chart", "vessel chart");
+  } else if (asksReferenceVisual && /\b(anatomy|anatomical|body|organ|system|muscle|skeletal|heart|lung|brain)\b/.test(text)) {
+    expanded.push(...base.map((query) => query.replace(/\bposter\b/g, "chart")).filter((query) => query !== query.replace(/\bposter\b/g, "chart")));
+  }
+  return Array.from(new Set(expanded.map((query) => query.trim()).filter(Boolean))).slice(0, 8);
+}
+
 function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
   const query = normalizeSearchText(latest);
   const asksTraining = /\b(training|trainer)\b/.test(query);
@@ -4253,6 +4326,9 @@ async function handleAssistantPost(req: NextRequest) {
   let aiKeywordRecoveryReason = "";
   let aiKeywordRecoverySaved = false;
   let aiKeywordRecoveryAttemptedQueries: string[] = [];
+  let aiKeywordPlannerMs = 0;
+  let aiKeywordPlannerReason = "";
+  let aiKeywordPlan: CatalogSearchPlan | null | undefined;
   const canTryAiKeywordRecovery = shouldUseAiKeywordRecovery({
     latest,
     skuCandidates,
@@ -4285,6 +4361,38 @@ async function handleAssistantPost(req: NextRequest) {
   };
   const tryAiKeywordRecovery = async (reason: string) => {
     if (!canTryAiKeywordRecovery) return false;
+    if (aiKeywordPlan === undefined) {
+      const plannerStartedAt = Date.now();
+      aiKeywordPlan = await planCatalogSearch({ messages, language, sessionId, query: latest });
+      aiKeywordPlannerMs += Date.now() - plannerStartedAt;
+    }
+    const plan = aiKeywordPlan;
+    if (plan && ["product_search", "product_question"].includes(plan.intent) && plan.searchTerms.length) {
+      aiKeywordPlannerReason = plan.reason;
+      const plannedQueries = catalogPlanQueries(plan, latest);
+      aiKeywordRecoveryAttemptedQueries = plannedQueries;
+      for (const plannedQuery of plannedQueries) {
+        const plannedResult = await searchProducts({ query: plannedQuery, language, limit: 8 });
+        searchTiming = {
+          totalMs: (searchTiming.totalMs || 0) + (plannedResult.timings?.totalMs || 0),
+          supabaseMs: (searchTiming.supabaseMs || 0) + (plannedResult.timings?.supabaseMs || 0),
+          openAiMs: (searchTiming.openAiMs || 0) + (plannedResult.timings?.openAiMs || 0),
+          typesenseMs: (searchTiming.typesenseMs || 0) + (plannedResult.timings?.typesenseMs || 0),
+          fallbackMs: (searchTiming.fallbackMs || 0) + (plannedResult.timings?.fallbackMs || 0),
+        };
+        const plannedProducts = productsMatchingSearchPlan(plannedResult.products, plan, latest);
+        const filtered = productsMatchingExplicitIntent(plannedProducts, latest, plannedQuery);
+        const candidateProducts = filtered.products.length ? filtered.products : plannedProducts;
+        if (candidateProducts.length) {
+          products = candidateProducts;
+          searchQuery = plannedQuery;
+          suppressedLowConfidenceProducts = false;
+          aiKeywordRecoveryReason = `OpenAI planner: ${reason}`;
+          await saveAiKeywordMappingForReview(aiKeywordRecoveryReason, plannedQuery, candidateProducts, plannedQueries);
+          return true;
+        }
+      }
+    }
     const recovered = await recoverExplicitIntentProducts(latest, searchQuery, language);
     aiKeywordRecoveryAttemptedQueries = recovered.attemptedQueries || [];
     searchTiming = {
@@ -4403,7 +4511,7 @@ async function handleAssistantPost(req: NextRequest) {
         totalMs,
         searchMs: searchTiming.totalMs || 0,
         supabaseMs: searchTiming.supabaseMs || 0,
-        openAiMs: (searchTiming.openAiMs || 0) + (extra?.openAiMs || 0),
+        openAiMs: (searchTiming.openAiMs || 0) + aiKeywordPlannerMs + (extra?.openAiMs || 0),
         knowledgeMs,
         productCount: products.length,
         searchQuery,
@@ -4415,6 +4523,7 @@ async function handleAssistantPost(req: NextRequest) {
         proofSearchTerms: [
           ...(extra?.proofSearchTerms || []),
           ...(aiKeywordRecoveryReason ? [`AI keyword recovery: ${aiKeywordRecoveryReason}`] : []),
+          ...(aiKeywordPlannerReason ? [`AI planner reason: ${aiKeywordPlannerReason}`] : []),
           ...(aiKeywordRecoverySaved ? ["AI keyword mapping saved for review"] : []),
           ...aiKeywordRecoveryAttemptedQueries,
           ...(suppressedLowConfidenceProducts ? ["suppressed low-confidence product matches"] : []),
@@ -4428,8 +4537,8 @@ async function handleAssistantPost(req: NextRequest) {
         answerCacheSkipReason: cacheSave?.skipReason || cacheEligibility.reason,
         answerCacheError: cacheSave?.durableError,
         deployVersion: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "local",
-        slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + (extra?.openAiMs || 0)) >= 1200,
-        openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0),
+        slow: totalMs >= 2500 || (searchTiming.totalMs || 0) >= 1500 || ((searchTiming.openAiMs || 0) + aiKeywordPlannerMs + (extra?.openAiMs || 0)) >= 1200,
+        openAiUsed: Boolean(extra?.openAiUsed || (searchTiming.openAiMs || 0) > 0 || aiKeywordPlannerMs > 0),
         supabaseUsed: Boolean((searchTiming.supabaseMs || 0) > 0),
       },
       createdAt: new Date().toISOString(),
