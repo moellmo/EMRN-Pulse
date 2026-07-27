@@ -70,6 +70,15 @@ function directReplyFor(messages: AssistantMessage[], field: "name" | "company" 
   if (!assistantAskedFor(messages, field)) return "";
   const latest = userMessages(messages).at(-1) || "";
   if (field === "email") return latest.match(emailPattern)?.[0] || "";
+  if (field === "name" && emailPattern.test(latest)) {
+    const parts = latest.split(/[,;\n]/).map((part) => part.trim()).filter(Boolean);
+    const emailIndex = parts.findIndex((part) => emailPattern.test(part));
+    if (emailIndex > 0) {
+      const candidate = plainNameCandidate(parts[emailIndex - 1]);
+      if (candidate) return candidate;
+    }
+    return "";
+  }
 
   const cleaned = cleanDirectReply(latest);
   if (!cleaned || cleaned.length > 80 || /\b(quote|devis|cart|checkout|availability|available)\b/i.test(cleaned)) return "";
@@ -578,10 +587,23 @@ function quoteRelevantSkuText(messages: AssistantMessage[]) {
 
       const text = message.content.trim();
       if (/^(yes|yeah|yep|sure|ok|okay|please|send|send it|go ahead|oui|envoyer|d'accord|vas-y)$/i.test(text)) return false;
+      if (isGenericQuoteOnlyText(text)) return false;
       if (emailPattern.test(text) && text.length < 90 && !extractSkuCandidates(text).length) return false;
       return isQuoteIntent(text) || priorAssistantRequestedQuoteDetails(messages) || extractSkuCandidates(text).length > 0;
     })
-    .map((message) => message.content)
+    .map((message) => {
+      if (message.role === "assistant") return message.content;
+
+      const text = message.content.trim();
+      if (!emailPattern.test(text)) return text;
+
+      const parts = text.split(/[,;\n]/).map((part) => part.trim()).filter(Boolean);
+      const emailIndex = parts.findIndex((part) => emailPattern.test(part));
+      const partsAfterEmail = emailIndex >= 0 ? parts.slice(emailIndex + 1).filter((part) => !emailPattern.test(part)) : [];
+
+      if (parts.length >= 3 && partsAfterEmail.length) return partsAfterEmail.join("\n");
+      return parts.filter((part) => !emailPattern.test(part)).join("\n");
+    })
     .join("\n");
 }
 

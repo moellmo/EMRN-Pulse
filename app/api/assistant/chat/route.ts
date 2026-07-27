@@ -4195,6 +4195,34 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
+  if (
+    priorAssistantAskedSupport &&
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) &&
+    !isQuickActionPrompt(latest)
+  ) {
+    const draft = buildSupportDraft(messages, language);
+    if (draft.request) {
+      const supportRequest = {
+        ...draft.request,
+        category: supportCategoryFromMessages(messages),
+        summary: supportSummaryFromMessages(messages),
+      };
+      await runAssistantSideEffects("support request", [
+        logSupportRequest(supportRequest),
+        sendSupportEmail(supportRequest),
+        logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
+      ]);
+      return new Response(
+        textStream(
+          language === "fr"
+            ? "Merci. Votre question a été envoyée à notre équipe de support. Quelqu’un vous répondra sous peu."
+            : "Thank you. Your question has been sent to our support team. Someone will respond shortly."
+        ),
+        { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+  }
+
   if ((isContactIntent(latest) || taughtContactIntent) && !looksLikeSpecificProductSearch(latest)) {
     return new Response(textStream(contactHelpText(language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },

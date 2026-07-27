@@ -10,8 +10,26 @@ type EmailInput = {
   text: string;
 };
 
+function emailRecipients(value: string) {
+  return Array.from(new Set(String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []));
+}
+
+function emailSender(value: string | undefined) {
+  return String(value || "").trim().replace(/^["']+|["']+$/g, "");
+}
+
 async function sendEmail(input: EmailInput) {
-  if (process.env.RESEND_API_KEY && process.env.EMRN_EMAIL_FROM) {
+  const from = emailSender(process.env.EMRN_EMAIL_FROM);
+  if (process.env.RESEND_API_KEY && from) {
+    const recipients = emailRecipients(input.to);
+    if (!recipients.length) {
+      console.warn("[EMRN Assistant] Email skipped because no valid recipient was found.", {
+        to: input.to,
+        subject: input.subject,
+      });
+      return;
+    }
+
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -19,8 +37,8 @@ async function sendEmail(input: EmailInput) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: process.env.EMRN_EMAIL_FROM,
-        to: [input.to],
+        from,
+        to: recipients,
         subject: input.subject,
         text: input.text,
       }),
@@ -32,6 +50,12 @@ async function sendEmail(input: EmailInput) {
       return;
     }
 
+    const body = await response.json().catch(() => null) as { id?: string } | null;
+    console.log("[EMRN Assistant] Email provider accepted", {
+      id: body?.id || "unknown",
+      to: recipients,
+      subject: input.subject,
+    });
     return;
   }
 

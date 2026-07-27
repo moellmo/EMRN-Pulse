@@ -12,7 +12,8 @@ import {
   supabaseAdminUrlHint,
 } from "./supabase-admin";
 
-const dataDir = path.join(process.cwd(), ".data", "assistant");
+const localDataRoot = process.env.VERCEL ? "/tmp" : process.cwd();
+const dataDir = path.join(localDataRoot, ".data", "assistant");
 
 type SheetLogPayload = {
   kind: "analytics" | "quote" | "support" | "ai_usage";
