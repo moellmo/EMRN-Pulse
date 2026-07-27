@@ -38,6 +38,28 @@ function contactNameFromLatestReply(messages: AssistantMessage[]) {
   return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}$/.test(cleaned) ? cleaned : "";
 }
 
+function plainNameCandidate(text: string) {
+  const cleaned = cleanDirectReply(text);
+  if (!cleaned || cleaned.length > 60) return "";
+  if (emailPattern.test(cleaned)) return "";
+  if (/\b(quote|quotes|devis|cart|checkout|availability|available|support|order|commande|sku|product|produit|item|article)\b/i.test(cleaned)) return "";
+  if (/^(hi|hello|thanks|thank you|please|yes|ok|okay|oui)$/i.test(cleaned)) return "";
+  if (/^(?=.*\d)[A-Z0-9+._-]{3,40}$/i.test(cleaned)) return "";
+  return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}$/.test(cleaned) ? cleaned : "";
+}
+
+function contactNameFromPriorNamePrompt(messages: AssistantMessage[]) {
+  for (let index = messages.length - 1; index >= 1; index -= 1) {
+    const message = messages[index];
+    const previous = messages[index - 1];
+    if (message?.role !== "user" || previous?.role !== "assistant") continue;
+    if (!/\b(name|nom)\b/i.test(previous.content)) continue;
+    const candidate = plainNameCandidate(message.content);
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
 function isGenericQuoteOnlyText(message: string) {
   return /^(?:can\s+i\s+get|can\s+you\s+send|i\s+need|need|i\s+want|i\s+would\s+like|request|send|please)?\s*(?:a|an)?\s*(?:s?quotes?|devis|soumission)\s*$/i.test(
     message.replace(emailPattern, "").trim()
@@ -514,7 +536,7 @@ function extractRequestedProductText(messages: AssistantMessage[]) {
   const userMessages = messages.filter((message) => message.role === "user").map((message) => message.content.trim());
   const productMessages = userMessages.filter((message) => {
     if (/^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|oui|d'accord|vas-y)$/i.test(message)) return false;
-    if (emailPattern.test(message) && message.length < 90) return false;
+    if (emailPattern.test(message) && message.length < 90 && !extractSkuCandidates(message).length) return false;
     if (/^(my name is|name is|i am|i'm|je m'appelle|mon nom est|company is|compagnie|entreprise)\b/i.test(message)) {
       return /\b(need|looking for|want|quote|devis|cherche|besoin|veux|voudrais|do you have|do you carry|source|find|get)\b/i.test(message);
     }
@@ -539,7 +561,7 @@ function quoteSelectionText(messages: AssistantMessage[]) {
     .map((message) => message.content.trim())
     .filter((message) => {
       if (!message) return false;
-      if (emailPattern.test(message) && message.length < 90) return false;
+      if (emailPattern.test(message) && message.length < 90 && !extractSkuCandidates(message).length) return false;
       if (/^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|oui|d'accord|vas-y)$/i.test(message)) return false;
       return isQuoteIntent(message) || isCartIntent(message) || /\b(all|both|these|those|them|first|second|third|fourth|fifth|last|\d{1,5}\s+of|qty|quantity|sku)\b/i.test(message);
     });
@@ -571,6 +593,7 @@ export function buildQuoteDraft(
   const name =
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
+    contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
   const company =
     text.match(/(?:company is|from|for|compagnie|entreprise)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||

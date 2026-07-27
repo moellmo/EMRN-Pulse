@@ -1285,7 +1285,7 @@ function looksLikeQuoteDetailsReply(text: string) {
   if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(trimmed)) return true;
   if (/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/.test(trimmed)) return true;
   if (/\b(my name is|name is|i am|i'm|je m'appelle|mon nom est|company is|compagnie|entreprise)\b/i.test(trimmed)) return true;
-  return /^[A-Z][A-Za-z' -]{1,40}\s+[A-Z][A-Za-z' -]{1,40}$/.test(trimmed);
+  return /^[A-Z][A-Za-z' -]{1,40}(?:\s+[A-Z][A-Za-z' -]{1,40})?$/i.test(trimmed);
 }
 
 function isAffirmative(text: string) {
@@ -1450,7 +1450,19 @@ async function availabilityTextWithSubstitutes(product: CatalogProduct, language
   return `${text}${substitutesText(substitutes, language)}`;
 }
 
-function productResultsText(products: CatalogProduct[], language: "en" | "fr" | "unknown", query: string) {
+function smartSearchResultsUrl(query: string) {
+  const url = new URL("/search.php", process.env.EMRN_STORE_URL || "https://emrn.ca");
+  url.searchParams.set("search_query", query);
+  url.searchParams.set("emrn-smart-results", "1");
+  return url.toString();
+}
+
+function productResultsText(
+  products: CatalogProduct[],
+  language: "en" | "fr" | "unknown",
+  query: string,
+  options: { includeFullSearchLink?: boolean } = {}
+) {
   const shown = products.slice(0, 5);
   const lines = shown.map((product, index) => {
     const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
@@ -1481,8 +1493,14 @@ function productResultsText(products: CatalogProduct[], language: "en" | "fr" | 
     language === "fr"
       ? "Si vous me dites la taille, la marque, l’usage ou la quantité souhaitée, je peux réduire la liste ou vous aider à l’ajouter au panier."
       : "If you tell me the size, brand, use, or quantity you need, I can narrow this down or help add the right item to your cart.";
+  const fullSearchLink =
+    options.includeFullSearchLink && products.length > shown.length
+      ? language === "fr"
+        ? `\n\n[Voir tous les résultats EMRN](${smartSearchResultsUrl(query)})`
+        : `\n\n[View all matching EMRN products](${smartSearchResultsUrl(query)})`
+      : "";
 
-  return `${intro}\n\n${lines.join("\n")}\n\n${outro}`;
+  return `${intro}\n\n${lines.join("\n")}${fullSearchLink}\n\n${outro}`;
 }
 
 function productIntentText(product: CatalogProduct) {
@@ -5208,7 +5226,7 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  const resultsAnswer = productResultsText(answerProducts, language, searchQuery);
+  const resultsAnswer = productResultsText(answerProducts, language, searchQuery, { includeFullSearchLink: true });
   await saveSuccessfulAiSearchRewrite({ latest, searchQuery, products: answerProducts, openAiMs: searchTiming.openAiMs });
   await logPerformance("product_results", { answerPreview: resultsAnswer });
   return new Response(textStream(resultsAnswer), {
