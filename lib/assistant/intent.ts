@@ -144,13 +144,26 @@ export function isAccountIntent(text: string) {
 
 export function isOrderStatusIntent(text: string) {
   text = intentText(text);
+  const hasOrderSupportContext = /\b(order|orders|commande|commandes|shipment|shipping|tracking|free shipping|discount code|discount|on hold|hold|support|answer|reply|email|ticket|customer service|service client|livraison|expédition|expedition|rabais|code promo|réponse|reponse|courriel|billet)\b/i.test(text);
+  const looksLikeDelayedOrderOrSupport =
+    /\b(?:my\s+)?orders?\b.{0,160}\b(?:hold|on hold|waiting|waited|no answer|no reply|didn'?t receive|didnt receive|not received|haven'?t received|havent received|still|delayed|delay|shipped|shipping)\b/i.test(text) ||
+    /\bcommandes?\b.{0,160}\b(?:en attente|attente|attends|attend|aucune réponse|aucune reponse|pas de réponse|pas de reponse|pas reçu|pas recu|toujours|retard|expédiée|expediee|livraison)\b/i.test(text) ||
+    /\b(?:waiting|waited|been waiting|still waiting|attends|attendu|j'attends|jattends|toujours en attente)\b.{0,100}\b(?:week|weeks|days|order|orders|answer|reply|support|update|email|ticket|semaine|semaines|jours|commande|commandes|réponse|reponse|courriel|billet)\b/i.test(text) ||
+    /\b(?:no answer|no reply|no one answered|nobody answered|aucune réponse|aucune reponse|pas de réponse|pas de reponse|personne n.a répondu|personne n.a repondu|didn'?t receive(?:d)?\s+(?:an\s+)?answer|didnt receive(?:d)?\s+(?:an\s+)?answer|didn'?t get\s+(?:an\s+)?answer|not heard back)\b/i.test(text) ||
+    /\b(?:order|orders?)\b.{0,100}\b(?:on hold|hold|stuck|delayed|delay|not shipped|hasn'?t shipped|hasnt shipped|havent shipped|haven'?t shipped)\b/i.test(text);
+  const standaloneWaitingSupport =
+    /\b(?:i|we)\s+(?:have\s+)?(?:been\s+)?(?:waiting|waited)\s+for\s+(?:\d+\s+)?(?:day|days|week|weeks|month|months)\b/i.test(text) ||
+    /\b(?:j'attends|jattends|nous attendons|nous avons attendu|attendu)\s+(?:depuis|pour)?\s*(?:\d+\s+)?(?:jour|jours|semaine|semaines|mois)\b/i.test(text);
+
   return /\b(order status|order update|update on my order|update for my order|order tracking|track(?:ing)?|where is my order|shipment update|shipping update|check order|check my order|commande|suivi|statut de commande|ou est ma commande|où est ma commande)\b/i.test(text) ||
+    (hasOrderSupportContext && looksLikeDelayedOrderOrSupport) ||
+    standaloneWaitingSupport ||
     /\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30}\b/i.test(text);
 }
 
 export function isContactIntent(text: string) {
   text = intentText(text);
-  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agents?|talk to agents?|speak to someone|speak with someone|speak to an agents?|speak with an agents?|speak with agents?|live agents?|agents?|representatives?|human support|human agents?|email support|help from your team|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agents?|parler a un agents?|agents? humain|support humain|service client|représentants?|representants?)\b/i.test(text);
+  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agents?|talk to agents?|speak to someone|speak with someone|speak to an agents?|speak with an agents?|speak with agents?|live agents?|agents?|representatives?|human support|human agents?|email support|help from your team|no answer|no reply|nobody answered|no one answered|nobody got back|no one got back|didn'?t hear back|didnt hear back|not heard back|unanswered|waiting for (?:a )?(?:response|reply|answer)|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agents?|parler a un agents?|agents? humain|support humain|service client|représentants?|representants?|aucune réponse|aucune reponse|pas de réponse|pas de reponse|personne (?:ne )?(?:m|ma|nous|me)?\s*a répondu|personne (?:ne )?(?:m|ma|nous|me)?\s*a repondu|personne repondu|personne répondu|sans réponse|sans reponse)\b/i.test(text);
 }
 
 export function isAvailabilityIntent(text: string) {

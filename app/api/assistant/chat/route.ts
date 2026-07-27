@@ -3397,6 +3397,44 @@ function isProductQuestionStarterPrompt(text: string) {
     /^J'ai une question produit sur la compatibilité, les pièces ou le bon article$/i.test(clean);
 }
 
+function isAiIdentityQuestion(text: string) {
+  const clean = String(text || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return /\b(are you ai|are you an ai|are you artificial intelligence|are you an artificial intelligence|are you a bot|are you bot|are you a robot|is this ai|is this artificial intelligence|is this a bot|am i talking to ai|am i talking to artificial intelligence|am i talking to a bot|human or ai|real person or ai)\b/i.test(clean) ||
+    /\b(es[-\s]?tu une ia|etes[-\s]?vous une ia|êtes[-\s]?vous une ia|est[-\s]?ce une ia|robot|vrai humain|vraie personne)\b/i.test(clean);
+}
+
+function shouldAskAiForBroadIntentRoute({
+  latest,
+  skuCandidates,
+  taughtQuoteIntent,
+  taughtOrderStatusIntent,
+  taughtContactIntent,
+  taughtAvailabilityIntent,
+}: {
+  latest: string;
+  skuCandidates: string[];
+  taughtQuoteIntent: boolean;
+  taughtOrderStatusIntent: boolean;
+  taughtContactIntent: boolean;
+  taughtAvailabilityIntent: boolean;
+}) {
+  const clean = latest.trim();
+  if (skuCandidates.length) return false;
+  if (clean.length < 45) return false;
+  if (isFindProductPrompt(clean) || isProductQuestionStarterPrompt(clean)) return false;
+  if (isQuoteIntent(clean) || taughtQuoteIntent) return false;
+  if (isOrderStatusIntent(clean) || taughtOrderStatusIntent) return false;
+  if (isContactIntent(clean) || taughtContactIntent) return false;
+  if (isCartIntent(clean)) return false;
+  if (isAvailabilityIntent(clean) || taughtAvailabilityIntent) return false;
+  return /[?!.]|\b(i|we|my|order|help|need|looking|waiting|received|answer|reply|support|quote|product|clinic|home|customer|commande|aide|besoin|cherche|attends|réponse|reponse)\b/i.test(clean);
+}
+
 async function productsFromPageContext(pageContext: ProductPageContext, language: "en" | "fr" | "unknown") {
   if (pageContext.sku) {
     const matches = await searchBySKU(pageContext.sku);
@@ -3440,6 +3478,7 @@ async function handleAssistantPost(req: NextRequest) {
   const taughtOrderStatusIntent = taughtIntentRoute === "order_status";
   const taughtAvailabilityIntent = taughtIntentRoute === "availability";
   const createdAt = new Date().toISOString();
+  let broadIntentPlan: CatalogSearchPlan | null | undefined;
   let searchTiming: {
     totalMs?: number;
     supabaseMs?: number;
@@ -3458,6 +3497,17 @@ async function handleAssistantPost(req: NextRequest) {
   if (language === "unknown") {
     return new Response(
       textStream("Would you prefer English or French? / Préférez-vous continuer en anglais ou en français?"),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (isAiIdentityQuestion(latest)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je suis Meri, l’assistante IA d’EMRN. Je peux aider avec les produits, compatibilités, disponibilités, devis, questions de commande, photos, et je peux transmettre à l’équipe EMRN quand il faut une personne."
+          : "I’m Meri, EMRN’s AI assistant. I can help with products, compatibility, availability, quotes, order questions, photos, and I can connect you with the EMRN team when a person needs to help."
+      ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
   }
@@ -3796,6 +3846,49 @@ async function handleAssistantPost(req: NextRequest) {
     return new Response(textStream(orderStatusMissingText(draft.missing, language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  }
+
+  if (shouldAskAiForBroadIntentRoute({
+    latest,
+    skuCandidates: extractSkuCandidates(latest),
+    taughtQuoteIntent,
+    taughtOrderStatusIntent,
+    taughtContactIntent,
+    taughtAvailabilityIntent,
+  })) {
+    broadIntentPlan = await planCatalogSearch({ messages, language, sessionId, query: latest });
+    if (broadIntentPlan && broadIntentPlan.confidence >= 0.55) {
+      if (broadIntentPlan.intent === "order_status") {
+        const draft = buildOrderStatusDraft(messages, language);
+        return new Response(textStream(orderStatusMissingText(draft.missing, language)), {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+
+      if (broadIntentPlan.intent === "contact" || broadIntentPlan.intent === "support") {
+        return new Response(textStream(contactHelpText(language)), {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+
+      if (broadIntentPlan.intent === "quote") {
+        const draft = buildQuoteDraft(messages, language, []);
+        return new Response(textStream(quoteMissingText(draft.missing, language)), {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+
+      if (broadIntentPlan.intent === "not_shopping") {
+        return new Response(
+          textStream(
+            language === "fr"
+              ? "Je suis ici pour aider avec EMRN: produits, compatibilité, disponibilité, devis, commandes, photos ou support. Dites-moi ce que vous cherchez ou ce que vous voulez vérifier."
+              : "I’m here to help with EMRN products, compatibility, availability, quotes, orders, photos, or support. Tell me what you want to find or check."
+          ),
+          { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+    }
   }
 
   if (isOrderHistoryIntent(latest) || (priorAssistantRequestedOrderHistory(messages) && orderHistoryEmail(messages) && !isQuickActionPrompt(latest))) {
@@ -4346,7 +4439,7 @@ async function handleAssistantPost(req: NextRequest) {
   let aiKeywordRecoveryAttemptedQueries: string[] = [];
   let aiKeywordPlannerMs = 0;
   let aiKeywordPlannerReason = "";
-  let aiKeywordPlan: CatalogSearchPlan | null | undefined;
+  let aiKeywordPlan: CatalogSearchPlan | null | undefined = broadIntentPlan;
   const canTryAiKeywordRecovery = shouldUseAiKeywordRecovery({
     latest,
     skuCandidates,
