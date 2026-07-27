@@ -1294,6 +1294,12 @@ function isAffirmative(text: string) {
   );
 }
 
+function isQuoteDraftSendConfirmation(text: string) {
+  return isAffirmative(text) || /^(send|send it|submit|confirm|confirmed|that's it|thats it|that is it|done|all set|yes send|yes please|oui envoyer|envoyer)$/i.test(
+    String(text || "").trim()
+  );
+}
+
 function isNegative(text: string) {
   return /^(no|no thanks|not now|don'?t|do not|cancel|non|pas maintenant)$/i.test(String(text || "").trim());
 }
@@ -1309,6 +1315,33 @@ function priorAssistantOfferedItemRequest(messages: AssistantMessage[]) {
           message.content
         )
     );
+}
+
+function priorAssistantPresentedQuoteDraft(messages: AssistantMessage[]) {
+  return messages
+    .slice()
+    .reverse()
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /review this quote request|reply (?:yes|send)|send this to sales|vérifiez cette demande de devis|envoyer cette demande/i.test(
+          message.content
+        )
+    );
+}
+
+function quoteDraftText(request: QuoteRequest, language: "en" | "fr" | "unknown") {
+  const productLines = request.products.map((product, index) => {
+    const sku = product.sku ? ` — SKU: ${product.sku}` : "";
+    const quantity = product.quantity > 0 ? `${product.quantity} x ` : "";
+    return `${index + 1}. ${quantity}${product.name || product.description || "Item"}${sku}`;
+  });
+
+  if (language === "fr") {
+    return `Vérifiez cette demande de devis avant l’envoi:\n\nNom: ${request.name}\nCourriel: ${request.email}${request.company ? `\nEntreprise: ${request.company}` : ""}${request.phone ? `\nTéléphone: ${request.phone}` : ""}\n\nArticles:\n${productLines.join("\n")}\n\nRépondez “envoyer” pour l’envoyer aux ventes, ou envoyez un autre SKU, produit ou quantité pour ajouter/modifier la demande.`;
+  }
+
+  return `Please review this quote request before I send it:\n\nName: ${request.name}\nEmail: ${request.email}${request.company ? `\nCompany: ${request.company}` : ""}${request.phone ? `\nPhone: ${request.phone}` : ""}\n\nProducts:\n${productLines.join("\n")}\n\nReply “send” or “yes” to send this to sales, or send another SKU, product, or quantity to add/change the request.`;
 }
 
 function searchQueryForLatest(messages: AssistantMessage[], latest: string, products: CatalogProduct[]) {
@@ -4850,9 +4883,17 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  if (!shouldContinueMissingProductFlow && (isQuoteIntent(latest) || taughtQuoteIntent || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow)) {
+  const shouldSendPriorQuoteDraft = priorAssistantPresentedQuoteDraft(messages) && isQuoteDraftSendConfirmation(latest);
+  if (!shouldContinueMissingProductFlow && (isQuoteIntent(latest) || taughtQuoteIntent || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow || shouldSendPriorQuoteDraft)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
+      const quoteDraftAlreadyShown = priorAssistantPresentedQuoteDraft(messages);
+      if (!quoteDraftAlreadyShown || !isQuoteDraftSendConfirmation(latest)) {
+        const quoteDraftAnswer = quoteDraftText(draft.request, language);
+        await logPerformance("quote_draft_ready", { answerPreview: quoteDraftAnswer });
+        return new Response(textStream(quoteDraftAnswer), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+
       await runAssistantSideEffects("quote request", [
         logQuoteRequest(draft.request),
         sendQuoteRequestEmail(draft.request),

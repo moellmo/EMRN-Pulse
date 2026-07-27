@@ -535,7 +535,7 @@ export function priorAssistantRequestedQuoteDetails(messages: AssistantMessage[]
 function extractRequestedProductText(messages: AssistantMessage[]) {
   const userMessages = messages.filter((message) => message.role === "user").map((message) => message.content.trim());
   const productMessages = userMessages.filter((message) => {
-    if (/^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|oui|d'accord|vas-y)$/i.test(message)) return false;
+    if (/^(yes|yeah|yep|sure|ok|okay|please|send|send it|go ahead|oui|envoyer|d'accord|vas-y)$/i.test(message)) return false;
     if (emailPattern.test(message) && message.length < 90 && !extractSkuCandidates(message).length) return false;
     if (/^(my name is|name is|i am|i'm|je m'appelle|mon nom est|company is|compagnie|entreprise)\b/i.test(message)) {
       return /\b(need|looking for|want|quote|devis|cherche|besoin|veux|voudrais|do you have|do you carry|source|find|get)\b/i.test(message);
@@ -562,11 +562,27 @@ function quoteSelectionText(messages: AssistantMessage[]) {
     .filter((message) => {
       if (!message) return false;
       if (emailPattern.test(message) && message.length < 90 && !extractSkuCandidates(message).length) return false;
-      if (/^(yes|yeah|yep|sure|ok|okay|please|send it|go ahead|oui|d'accord|vas-y)$/i.test(message)) return false;
+      if (/^(yes|yeah|yep|sure|ok|okay|please|send|send it|go ahead|oui|envoyer|d'accord|vas-y)$/i.test(message)) return false;
       return isQuoteIntent(message) || isCartIntent(message) || /\b(all|both|these|those|them|first|second|third|fourth|fifth|last|\d{1,5}\s+of|qty|quantity|sku)\b/i.test(message);
     });
 
   return candidates.at(-1) || messages.filter((message) => message.role === "user").at(-1)?.content || "";
+}
+
+function quoteRelevantSkuText(messages: AssistantMessage[]) {
+  return messages
+    .filter((message) => {
+      if (message.role === "assistant") {
+        return /review this quote request|vérifiez cette demande de devis|products?:|articles:/i.test(message.content);
+      }
+
+      const text = message.content.trim();
+      if (/^(yes|yeah|yep|sure|ok|okay|please|send|send it|go ahead|oui|envoyer|d'accord|vas-y)$/i.test(text)) return false;
+      if (emailPattern.test(text) && text.length < 90 && !extractSkuCandidates(text).length) return false;
+      return isQuoteIntent(text) || priorAssistantRequestedQuoteDetails(messages) || extractSkuCandidates(text).length > 0;
+    })
+    .map((message) => message.content)
+    .join("\n");
 }
 
 function recentlyOfferedSkus(messages: AssistantMessage[]) {
@@ -588,15 +604,18 @@ export function buildQuoteDraft(
   products: CatalogProduct[]
 ): { request?: QuoteRequest; missing: string[] } {
   const text = messages.map((message) => message.content).join("\n");
+  const userText = messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
   const email = text.match(emailPattern)?.[0] || "";
   const phone = text.match(/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/)?.[0];
   const name =
+    text.match(/\bName:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
+    text.match(/\bNom:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
     contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
   const company =
-    text.match(/(?:company is|from|for|compagnie|entreprise)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||
+    userText.match(/(?:company is|from|for|compagnie|entreprise)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||
     directReplyFor(messages, "company");
   const selectionText = quoteSelectionText(messages);
   const fallbackQuantity = extractQuantity(selectionText);
@@ -607,13 +626,23 @@ export function buildQuoteDraft(
       ? products.filter((product) => offeredSkus.includes(product.sku.toUpperCase()))
       : products;
   const selectedProducts = !genericQuoteOnlySelection && productPool.length ? selectProductsForRequest(selectionText, productPool).slice(0, 8) : [];
-  const requestedProducts = selectedProducts.length
-    ? selectedProducts.map((product) => ({
-        name: product.name,
-        sku: product.sku,
-        quantity: quantityForProductSelection(selectionText, product, products.indexOf(product), fallbackQuantity),
-        url: product.url,
-      }))
+  const selectedProductRows = selectedProducts.map((product) => ({
+    name: product.name,
+    sku: product.sku,
+    quantity: quantityForProductSelection(selectionText, product, products.indexOf(product), fallbackQuantity),
+    url: product.url,
+  }));
+  const selectedSkus = new Set(selectedProductRows.map((product) => product.sku?.toUpperCase()).filter(Boolean));
+  const requestedSkuRows = Array.from(new Set(extractSkuCandidates(quoteRelevantSkuText(messages)).map((sku) => sku.toUpperCase())))
+    .filter((sku) => !selectedSkus.has(sku))
+    .map((sku) => ({
+      name: `SKU ${sku}`,
+      sku,
+      quantity: fallbackQuantity,
+      description: `SKU ${sku}`,
+    }));
+  const requestedProducts = selectedProductRows.length || requestedSkuRows.length
+    ? [...selectedProductRows, ...requestedSkuRows]
     : [
         {
           name: extractRequestedProductText(messages),
