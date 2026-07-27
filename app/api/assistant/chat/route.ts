@@ -13,7 +13,7 @@ import { assistantFeatureEnabledAsync } from "@/lib/assistant/admin-config";
 import { answerCacheEligibility, getCachedAnswer, saveCachedAnswer, type AnswerCacheEligibility, type CacheSaveResult } from "@/lib/assistant/answer-cache";
 import { normalizeSearchText } from "@/lib/search-language";
 import { buildSmartSearchQuery } from "@/lib/smart-search-translator";
-import type { AssistantLanguage, AssistantMessage, CatalogProduct, ProductPageContext, SupportRequest } from "@/lib/assistant/types";
+import type { AssistantLanguage, AssistantMessage, CatalogProduct, ProductPageContext, QuoteRequest, SupportRequest } from "@/lib/assistant/types";
 import type { CatalogSearchPlan, ExternalKnowledgeLookup } from "@/lib/assistant/openai";
 
 export const runtime = "nodejs";
