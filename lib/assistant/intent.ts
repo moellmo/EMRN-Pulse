@@ -22,17 +22,26 @@ function cleanDirectReply(text: string) {
     .trim();
 }
 
+function combinedLineNameCandidate(text: string) {
+  const cleaned = cleanDirectReply(text);
+  if (!cleaned || cleaned.length > 80) return "";
+  if (/^(hi|hello|thanks|thank you|please|yes|ok|okay|oui)$/i.test(cleaned)) return "";
+  if (/^(?=.*\d)[A-Z0-9+._-]{3,80}$/i.test(cleaned)) return "";
+  if (/\d{3,}/.test(cleaned)) return "";
+  return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,80}$/.test(cleaned) ? cleaned : "";
+}
+
 function contactNameFromLatestReply(messages: AssistantMessage[]) {
   const latest = userMessages(messages).at(-1) || "";
   if (!emailPattern.test(latest)) return "";
 
-  const cleaned = cleanDirectReply(latest)
-    .split(/[,;\n]/)
-    .map((part) => part.trim())
-    .find(Boolean) || "";
+  const parts = latest.split(/[,;\n]/).map((part) => part.trim()).filter(Boolean);
+  const emailIndex = parts.findIndex((part) => emailPattern.test(part));
+  const cleaned =
+    (emailIndex > 0 ? combinedLineNameCandidate(parts[emailIndex - 1]) : "") ||
+    combinedLineNameCandidate(parts.find((part) => !emailPattern.test(part)) || "");
 
   if (!cleaned || cleaned.length > 60) return "";
-  if (/\b(quote|devis|cart|checkout|availability|available|support|order|commande|sku)\b/i.test(cleaned)) return "";
   if (/^(hi|hello|thanks|thank you|please|yes|ok|okay|oui)$/i.test(cleaned)) return "";
   if (/^(?=.*\d)[A-Z0-9+._-]{3,40}$/i.test(cleaned)) return "";
   return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}$/.test(cleaned) ? cleaned : "";
@@ -74,7 +83,7 @@ function directReplyFor(messages: AssistantMessage[], field: "name" | "company" 
     const parts = latest.split(/[,;\n]/).map((part) => part.trim()).filter(Boolean);
     const emailIndex = parts.findIndex((part) => emailPattern.test(part));
     if (emailIndex > 0) {
-      const candidate = plainNameCandidate(parts[emailIndex - 1]);
+      const candidate = combinedLineNameCandidate(parts[emailIndex - 1]);
       if (candidate) return candidate;
     }
     return "";
