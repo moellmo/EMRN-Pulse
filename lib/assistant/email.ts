@@ -27,7 +27,9 @@ async function sendEmail(input: EmailInput) {
     });
 
     if (!response.ok) {
-      throw new Error(`Email provider failed: ${response.status} ${await response.text()}`);
+      const body = await response.text().catch(() => "");
+      console.warn("[EMRN Assistant] Email provider failed. Request was still logged.", response.status, body.slice(0, 500));
+      return;
     }
 
     return;

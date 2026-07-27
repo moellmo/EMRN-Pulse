@@ -22,6 +22,28 @@ function cleanDirectReply(text: string) {
     .trim();
 }
 
+function contactNameFromLatestReply(messages: AssistantMessage[]) {
+  const latest = userMessages(messages).at(-1) || "";
+  if (!emailPattern.test(latest)) return "";
+
+  const cleaned = cleanDirectReply(latest)
+    .split(/[,;\n]/)
+    .map((part) => part.trim())
+    .find(Boolean) || "";
+
+  if (!cleaned || cleaned.length > 60) return "";
+  if (/\b(quote|devis|cart|checkout|availability|available|support|order|commande|sku)\b/i.test(cleaned)) return "";
+  if (/^(hi|hello|thanks|thank you|please|yes|ok|okay|oui)$/i.test(cleaned)) return "";
+  if (/^(?=.*\d)[A-Z0-9+._-]{3,40}$/i.test(cleaned)) return "";
+  return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}$/.test(cleaned) ? cleaned : "";
+}
+
+function isGenericQuoteOnlyText(message: string) {
+  return /^(?:can\s+i\s+get|can\s+you\s+send|i\s+need|need|i\s+want|i\s+would\s+like|request|send|please)?\s*(?:a|an)?\s*(?:s?quotes?|devis|soumission)\s*$/i.test(
+    message.replace(emailPattern, "").trim()
+  );
+}
+
 function directReplyFor(messages: AssistantMessage[], field: "name" | "company" | "email") {
   if (!assistantAskedFor(messages, field)) return "";
   const latest = userMessages(messages).at(-1) || "";
@@ -29,6 +51,7 @@ function directReplyFor(messages: AssistantMessage[], field: "name" | "company" 
 
   const cleaned = cleanDirectReply(latest);
   if (!cleaned || cleaned.length > 80 || /\b(quote|devis|cart|checkout|availability|available)\b/i.test(cleaned)) return "";
+  if (field === "name" && /^(?=.*\d)[A-Z0-9+._-]{3,40}$/i.test(cleaned)) return "";
   return cleaned;
 }
 
@@ -498,10 +521,16 @@ function extractRequestedProductText(messages: AssistantMessage[]) {
     return message.length >= 3;
   });
   const quoteMessage =
-    productMessages.find((message) => isQuoteIntent(message) && message.length > 8) ||
-    productMessages.find((message) => /\b(need|looking for|want|cherche|besoin|veux|voudrais|do you have|do you carry|avez-vous|avez vous|source|sourcing|find|get)\b/i.test(message));
+    productMessages.find((message) => isQuoteIntent(message) && message.length > 8 && !isGenericQuoteOnlyText(message)) ||
+    productMessages.find(
+      (message) =>
+        !isGenericQuoteOnlyText(message) &&
+        /\b(need|looking for|want|cherche|besoin|veux|voudrais|do you have|do you carry|avez-vous|avez vous|source|sourcing|find|get)\b/i.test(message)
+    );
 
-  return (quoteMessage || productMessages.at(-1) || "").replace(emailPattern, "").trim();
+  const requestedText = (quoteMessage || productMessages.filter((message) => !isGenericQuoteOnlyText(message)).at(-1) || "").replace(emailPattern, "").trim();
+  if (isGenericQuoteOnlyText(requestedText)) return "";
+  return requestedText;
 }
 
 function quoteSelectionText(messages: AssistantMessage[]) {
@@ -541,18 +570,20 @@ export function buildQuoteDraft(
   const phone = text.match(/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/)?.[0];
   const name =
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    contactNameFromLatestReply(messages) ||
     directReplyFor(messages, "name");
   const company =
     text.match(/(?:company is|from|for|compagnie|entreprise)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||
     directReplyFor(messages, "company");
   const selectionText = quoteSelectionText(messages);
   const fallbackQuantity = extractQuantity(selectionText);
+  const genericQuoteOnlySelection = isGenericQuoteOnlyText(selectionText);
   const offeredSkus = recentlyOfferedSkus(messages);
   const productPool =
     offeredSkus.length && /\b(all|both|these|those|them|tous|les deux)\b/i.test(selectionText)
       ? products.filter((product) => offeredSkus.includes(product.sku.toUpperCase()))
       : products;
-  const selectedProducts = productPool.length ? selectProductsForRequest(selectionText, productPool).slice(0, 8) : [];
+  const selectedProducts = !genericQuoteOnlySelection && productPool.length ? selectProductsForRequest(selectionText, productPool).slice(0, 8) : [];
   const requestedProducts = selectedProducts.length
     ? selectedProducts.map((product) => ({
         name: product.name,
@@ -600,6 +631,7 @@ export function buildSupportDraft(
   const email = text.match(emailPattern)?.[0] || "";
   const name =
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    contactNameFromLatestReply(messages) ||
     directReplyFor(messages, "name");
   const question =
     messages
@@ -622,6 +654,7 @@ export function buildOrderStatusDraft(
   const email = text.match(emailPattern)?.[0] || "";
   const name =
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    contactNameFromLatestReply(messages) ||
     directReplyFor(messages, "name");
   const explicitOrderNumber =
     text.match(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30})\b/i)?.[1] ||

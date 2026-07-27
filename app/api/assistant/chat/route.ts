@@ -3397,6 +3397,15 @@ function isProductQuestionStarterPrompt(text: string) {
     /^J'ai une question produit sur la compatibilité, les pièces ou le bon article$/i.test(clean);
 }
 
+async function runAssistantSideEffects(label: string, tasks: Array<Promise<unknown>>) {
+  const results = await Promise.allSettled(tasks);
+  results.forEach((result) => {
+    if (result.status === "rejected") {
+      console.warn(`[EMRN Pulse] ${label} side effect failed`, result.reason);
+    }
+  });
+}
+
 function isAiIdentityQuestion(text: string) {
   const clean = String(text || "")
     .toLowerCase()
@@ -3555,7 +3564,7 @@ async function handleAssistantPost(req: NextRequest) {
         category: supportCategoryFromMessages(messages),
         summary: supportSummaryFromMessages(messages),
       };
-      await Promise.all([
+      await runAssistantSideEffects("support request", [
         logSupportRequest(supportRequest),
         sendSupportEmail(supportRequest),
         logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
@@ -3804,7 +3813,7 @@ async function handleAssistantPost(req: NextRequest) {
     const draft = buildOrderStatusDraft(messages, language);
     if (draft.request) {
       if (shouldSendOrderStatusSupport) {
-        await Promise.all([
+        await runAssistantSideEffects("order status support request", [
           sendOrderStatusEmail(draft.request),
           logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
         ]);
@@ -3943,9 +3952,16 @@ async function handleAssistantPost(req: NextRequest) {
     }
   }
 
-  const shouldIgnorePriorQuoteFlow = (isQuickActionPrompt(latest) || isProductSearchIntent(latest)) && !isQuoteIntent(latest) && !taughtQuoteIntent;
+  const priorQuoteDetailsRequested = priorAssistantRequestedQuoteDetails(messages);
+  const latestCanContinueQuoteFlow =
+    priorQuoteDetailsRequested && (looksLikeQuoteDetailsReply(latest) || extractSkuCandidates(latest).length > 0 || hasExplicitQuantity(latest));
+  const shouldIgnorePriorQuoteFlow =
+    !latestCanContinueQuoteFlow &&
+    (isQuickActionPrompt(latest) || isProductSearchIntent(latest)) &&
+    !isQuoteIntent(latest) &&
+    !taughtQuoteIntent;
   const shouldContinuePriorQuoteFlow =
-    !shouldIgnorePriorQuoteFlow && priorAssistantRequestedQuoteDetails(messages) && looksLikeQuoteDetailsReply(latest);
+    !shouldIgnorePriorQuoteFlow && priorQuoteDetailsRequested && latestCanContinueQuoteFlow;
   const shouldContinueItemRequestFlow =
     !shouldIgnorePriorQuoteFlow && priorAssistantOfferedItemRequest(messages) && isAffirmative(latest);
 
@@ -4819,7 +4835,7 @@ async function handleAssistantPost(req: NextRequest) {
   if (!shouldContinueMissingProductFlow && (isQuoteIntent(latest) || taughtQuoteIntent || shouldContinuePriorQuoteFlow || shouldContinueItemRequestFlow)) {
     const draft = buildQuoteDraft(messages, language, products);
     if (draft.request) {
-      await Promise.all([
+      await runAssistantSideEffects("quote request", [
         logQuoteRequest(draft.request),
         sendQuoteRequestEmail(draft.request),
         logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
