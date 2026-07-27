@@ -3390,6 +3390,13 @@ function isSiteInfoQuestion(text: string) {
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
 }
 
+function isProductQuestionStarterPrompt(text: string) {
+  const clean = text.trim();
+  return /^I have a product question about compatibility, parts, or which item fits$/i.test(clean) ||
+    /^J’ai une question produit sur la compatibilité, les pièces ou le bon article$/i.test(clean) ||
+    /^J'ai une question produit sur la compatibilité, les pièces ou le bon article$/i.test(clean);
+}
+
 async function productsFromPageContext(pageContext: ProductPageContext, language: "en" | "fr" | "unknown") {
   if (pageContext.sku) {
     const matches = await searchBySKU(pageContext.sku);
@@ -3808,6 +3815,17 @@ async function handleAssistantPost(req: NextRequest) {
     return new Response(textStream(recentOrdersText(recentOrders, language)), {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  }
+
+  if (isProductQuestionStarterPrompt(latest)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Bien sûr. Quel produit ou SKU voulez-vous vérifier? Envoyez le modèle, la marque, le numéro de pièce, ou dites ce que vous essayez de faire, et je vérifierai les articles EMRN en premier."
+          : "Sure. What product or SKU do you want to check? Send the model, brand, part number, or what you are trying to do, and I’ll check EMRN items first."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
   }
 
   if (isFindProductPrompt(latest)) {
