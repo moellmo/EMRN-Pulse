@@ -4321,7 +4321,7 @@ async function handleAssistantPost(req: NextRequest) {
     taughtQuoteIntent ||
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
-    (shouldUseProductDetailIntent && isContextProductSelectionReply(latest)) ||
+    (shouldUseProductDetailIntent && (!skuCandidates.length || isContextProductSelectionReply(latest))) ||
     shouldCompareRememberedProducts ||
     shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
