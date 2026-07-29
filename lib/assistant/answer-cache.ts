@@ -40,7 +40,7 @@ export type AnswerCacheEligibility = {
 const cache = new Map<string, CachedAnswer>();
 const MAX_CACHE_ROWS = 250;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
-const CACHE_KEY_VERSION = "v2";
+const CACHE_KEY_VERSION = "v3";
 let lastDurableReadError = "";
 let lastDurableWriteError = "";
 

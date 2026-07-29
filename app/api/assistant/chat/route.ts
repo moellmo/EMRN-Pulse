@@ -1576,6 +1576,10 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   const normalized = normalizeSearchText(query);
   const groups: ProductIntentRequirement[] = [];
 
+  if (/\b(?:replacement|spare|replica|part|parts|remplacement|pi[eè]ce|pi[eè]ces)\b/.test(normalized) && /\b(?:blade|blades|lame|lames)\b/.test(normalized)) {
+    groups.push({ terms: ["blade", "blades", "lame", "lames", "cutting blade", "replacement blade"], field: "name_category" });
+  }
+
   if (/\b(posters?|charts?|diagrams?|reference image|anatomy image|anatomical chart)\b/.test(normalized)) {
     groups.push({ terms: ["poster", "posters", "chart", "charts", "diagram"], field: "name_category" });
   }
@@ -1606,7 +1610,7 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
 
 function productsMatchingExplicitIntent(products: CatalogProduct[], latest: string, searchQuery: string) {
   const groups = explicitProductTypeGroups(`${latest} ${searchQuery}`);
-  if (!groups.length) return { products, suppressed: false };
+  if (!groups.length && !isReplacementPartRequest(`${latest} ${searchQuery}`)) return { products, suppressed: false };
 
   const matching = products.filter((product) => {
     const haystack = productIntentText(product);
@@ -1614,11 +1618,30 @@ function productsMatchingExplicitIntent(products: CatalogProduct[], latest: stri
     return groups.every((group) => {
       const target = group.field === "name_category" ? nameCategory : haystack;
       return group.terms.some((term) => target.includes(normalizeSearchText(term)));
-    });
+    }) && isExactReplacementPartProductMatch(product, `${latest} ${searchQuery}`);
   });
 
   if (matching.length) return { products: matching, suppressed: false };
   return { products: [] as CatalogProduct[], suppressed: true };
+}
+
+function isReplacementPartRequest(text: string) {
+  return /\b(?:replacement|spare|remplacement|parts?|pi[eè]ce?s?)\b/i.test(text);
+}
+
+function isExactReplacementPartProductMatch(product: CatalogProduct, query: string) {
+  if (!isReplacementPartRequest(query)) return true;
+  const text = productIntentText(product);
+  const requestedType = requestedProductTypeKey(query);
+  if (requestedType === "blade" && !/\b(?:blade|blades|lame|lames)\b/i.test(text)) return false;
+
+  const referenceCandidates = extractSkuCandidates(query);
+  if (!referenceCandidates.length) return true;
+  const compactProductText = text.replace(/[^a-z0-9]/gi, "");
+  return referenceCandidates.some((reference) => {
+    const compactReference = normalizeSku(reference);
+    return compactReference.length >= 4 && compactProductText.includes(compactReference);
+  });
 }
 
 async function recoverExplicitIntentProducts(latest: string, searchQuery: string, language: AssistantLanguage) {
@@ -3145,6 +3168,7 @@ function familySearchForMissingColorSku(sku: string) {
 }
 
 function requestedProductTypePattern(text: string) {
+  if (/\b(blades?|lames?|cutting blades?)\b/i.test(text)) return /\b(blades?|lames?|cutting blades?)\b/i;
   if (/\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(text)) return /\b(airways?|voies?\s+a[eé]riennes?)\b/i;
   if (/\b(lungs?)\b/i.test(text)) return /\b(lungs?)\b/i;
   if (/\b(pads?|electrodes?|électrodes?)\b/i.test(text)) return /\b(pads?|electrodes?|électrodes?)\b/i;
@@ -3153,6 +3177,7 @@ function requestedProductTypePattern(text: string) {
 }
 
 function requestedProductTypeKey(text: string) {
+  if (/\b(blades?|lames?|cutting blades?)\b/i.test(text)) return "blade";
   if (/\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(text)) return "airway";
   if (/\b(lungs?)\b/i.test(text)) return "lung";
   if (/\b(pads?|padz|electrodes?|électrodes?)\b/i.test(text)) return "pad";
@@ -4483,6 +4508,11 @@ async function handleAssistantPost(req: NextRequest) {
           searchQuery,
           language,
         };
+      } else if (isReplacementPartRequest(latest)) {
+        // A failed replacement-part reference must not fall back to a broad
+        // keyword search. Broad recovery is how unrelated catalog products
+        // previously got presented as a replacement blade.
+        searchResult = { products: [], found: 0, searchQuery: skuCandidates.join(", "), language };
       } else if (hasProductWordsBeyondSku(latest, skuCandidates)) {
         searchQuery = searchQueryForLatest(messages, latest, []);
         searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
@@ -4971,6 +5001,40 @@ async function handleAssistantPost(req: NextRequest) {
         const colorAnswer = colorFallbackText(availableColorProducts, requestedColor, language, latest);
         await logPerformance("color_fallback", { answerPreview: colorAnswer });
         return new Response(textStream(colorAnswer), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
+
+    // Replacement parts require an exact catalog match. If EMRN has no exact
+    // result, use the trusted AI lookup to verify the manufacturer part, but
+    // never turn a related catalog result into a recommendation.
+    if (isReplacementPartRequest(latest) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
+      const openAiStartedAt = Date.now();
+      const externalLookup = await lookupExternalKnowledge({
+        messages,
+        products: [],
+        language,
+        sessionId,
+        query: latest,
+      });
+      if (externalLookup) {
+        const externalAnswer = externalLookupCustomerAnswer(externalLookup, [], language);
+        await logPerformance("replacement_part_external_no_match", {
+          openAiMs: Date.now() - openAiStartedAt,
+          openAiUsed: true,
+          answerPreview: externalAnswer,
+          proofSourceType: externalLookup.sourceType,
+          proofSourceUrls: externalLookup.sourceUrls,
+          proofPartNumbers: externalLookupPartNumbers(externalLookup),
+          proofSearchTerms: externalLookupSearchTerms(externalLookup),
+          emrnMatchCount: 0,
+          emrnMatchedSkus: [],
+        });
+        return new Response(textStream(externalAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
