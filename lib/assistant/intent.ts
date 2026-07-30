@@ -289,6 +289,8 @@ export function extractSkuCandidates(text: string) {
     if (/^OF\d{1,5}$/i.test(sku)) return false;
     if (/^X\d{1,5}$/i.test(sku)) return false;
     if (/^X\d+-\d+$/i.test(sku)) return false;
+    // Do not turn a North American phone number into a quote line item.
+    if (/^[2-9]\d{2}-?[2-9]\d{2}-?\d{4}$/.test(sku)) return false;
     if (!/\d/.test(sku)) return false;
     if (/^\d{1,3}(?:ML|MM|CM|IN)?$/i.test(sku)) return false;
     return true;
@@ -612,11 +614,6 @@ function quoteRelevantSkuText(messages: AssistantMessage[]) {
     .join("\n");
 }
 
-function explicitQuoteSkuCandidates(text: string) {
-  return Array.from(String(text || "").matchAll(/\bSKU\s*[:#]?\s*([A-Z0-9][A-Z0-9+._/ -]{2,39})/gi))
-    .flatMap((match) => extractSkuCandidates(match[1] || ""));
-}
-
 function recentlyOfferedSkus(messages: AssistantMessage[]) {
   const assistantMessage = messages
     .slice()
@@ -638,7 +635,9 @@ export function buildQuoteDraft(
   const text = messages.map((message) => message.content).join("\n");
   const userText = messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
   const email = text.match(emailPattern)?.[0] || "";
-  const phone = text.match(/\b(?:phone|telephone|tel|téléphone)\s*[:#-]?\s*((?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4})\b/i)?.[1];
+  // Read contact details only from the customer. This keeps a part number in a
+  // prior assistant message from becoming a phone number in the email.
+  const phone = userText.match(/\b(?:phone|telephone|tel|téléphone)\s*[:#-]?\s*((?:\+?1[-.\s]?)?(?:\(?[2-9]\d{2}\)?[-.\s]?)[2-9]\d{2}[-.\s]?\d{4})\b/i)?.[1];
   const name =
     text.match(/\bName:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
     text.match(/\bNom:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
@@ -657,15 +656,24 @@ export function buildQuoteDraft(
     offeredSkus.length && /\b(all|both|these|those|them|tous|les deux)\b/i.test(selectionText)
       ? products.filter((product) => offeredSkus.includes(product.sku.toUpperCase()))
       : products;
-  const selectedProducts = !genericQuoteOnlySelection && productPool.length ? selectProductsForRequest(selectionText, productPool).slice(0, 8) : [];
-  const selectedProductRows = selectedProducts.map((product) => ({
+  // A customer-supplied SKU/part number is authoritative. Never fall back to
+  // unrelated search results merely because the catalog did not return an exact
+  // row; include the requested SKU for sales to quote instead.
+  const requestedSkus = Array.from(new Set(extractSkuCandidates(quoteRelevantSkuText(messages)).map((sku) => sku.toUpperCase())));
+  const skuMatchedPool = requestedSkus.length
+    ? productPool.filter((product) => requestedSkus.includes(product.sku.toUpperCase()))
+    : productPool;
+  const selectedProducts = !genericQuoteOnlySelection && skuMatchedPool.length
+    ? selectProductsForRequest(selectionText, skuMatchedPool).slice(0, 8)
+    : [];
+  const selectedProductRows = Array.from(new Map(selectedProducts.map((product) => [product.sku.toUpperCase(), {
     name: product.name,
     sku: product.sku,
     quantity: quantityForProductSelection(selectionText, product, products.indexOf(product), fallbackQuantity),
     url: product.url,
-  }));
+  }])).values());
   const selectedSkus = new Set(selectedProductRows.map((product) => product.sku?.toUpperCase()).filter(Boolean));
-  const requestedSkuRows = Array.from(new Set(explicitQuoteSkuCandidates(quoteRelevantSkuText(messages)).map((sku) => sku.toUpperCase())))
+  const requestedSkuRows = requestedSkus
     .filter((sku) => !selectedSkus.has(sku))
     .map((sku) => ({
       name: `SKU ${sku}`,

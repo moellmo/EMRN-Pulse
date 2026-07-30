@@ -3707,7 +3707,10 @@ async function handleAssistantPost(req: NextRequest) {
     );
   const looksLikeSupportDetailsReply = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest);
 
-  if (priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
+  // Quote collection also says "our team". Keep a quote reply in its own flow
+  // rather than treating the customer's email/SKU as a new support request.
+  const priorAssistantAskedQuoteDetails = priorAssistantRequestedQuoteDetails(messages);
+  if (!priorAssistantAskedQuoteDetails && priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
     if (draft.request) {
       const supportRequest = {
