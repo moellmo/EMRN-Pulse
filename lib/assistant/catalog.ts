@@ -435,6 +435,43 @@ function rankBrandModelHits(hits: SearchHit[], originalQuery: string, translated
   const query = normalizeCommonSearchTypos(`${originalQuery} ${translatedQuery}`);
   const queryTokens = meaningfulQueryTokens(query);
   if (queryTokens.length < 2) return hits;
+  const asksAccessory = includesAny(query, [
+    "accessory",
+    "accessories",
+    "replacement",
+    "part",
+    "parts",
+    "shelving",
+    "shelf",
+    "module",
+    "holder",
+    "mount",
+    "strap",
+    "case",
+    "adapter",
+    "specula",
+    "speculum",
+    "tips",
+    "covers",
+  ]);
+  const accessoryOnlyTerms = [
+    "accessories",
+    "accessory",
+    "replacement",
+    "replacement part",
+    "parts",
+    "shelving",
+    "shelf",
+    "module",
+    "holder",
+    "mount",
+    "strap",
+    "adapter",
+    "specula",
+    "speculum",
+    "tips",
+    "covers",
+  ];
 
   const score = (hit: SearchHit) => {
     const doc = hit.document || {};
@@ -462,6 +499,7 @@ function rankBrandModelHits(hits: SearchHit[], originalQuery: string, translated
     if (query.includes("backup") && name.includes("backup")) value += 1800;
     if (query.includes("load n go") && name.includes("load n go")) value += 1800;
     if (queryTokens.some((token) => brand.includes(token)) && !queryMentionsBrand) value += 500;
+    if (!asksAccessory && includesAny(name, accessoryOnlyTerms)) value -= 7000;
 
     return value;
   };
@@ -890,7 +928,6 @@ function rankAedHits(hits: SearchHit[], originalQuery: string, translatedQuery: 
     "training",
     "wall mount",
   ];
-
   const score = (hit: SearchHit) => {
     const name = ` ${documentNameText(hit)} `;
     let value = 0;
