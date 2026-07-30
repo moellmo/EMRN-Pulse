@@ -154,7 +154,7 @@ export function isNegativeSearchFeedback(text: string) {
 
 export function isQuoteIntent(text: string) {
   text = intentText(text);
-  return /\b(quotes?|pricing|formal quotes?|request (?:a )?quotes?|special pricing|bulk price|company pricing|purchase order|po\b|b2b|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
+  return /\b(quotes?|pricing|formal quotes?|request (?:a )?quotes?|discounts?|special pricing|bulk price|bulk discount|bulk orders?|large orders?|volume pricing|volume discount|company pricing|business discount|academic pricing|academic discount|education pricing|school pricing|university pricing|university discount|research pricing|research discount|hospital pricing|institutional pricing|nonprofit pricing|government pricing|purchase order|po\b|b2b|devis|soumission|prix|devis automatique|auto quote)\b/i.test(text);
 }
 
 export function isCartIntent(text: string) {

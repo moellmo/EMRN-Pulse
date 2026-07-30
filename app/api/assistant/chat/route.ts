@@ -122,8 +122,8 @@ function quoteMissingText(missing: string[], language: "en" | "fr" | "unknown") 
       : missing.join(", ");
 
   return language === "fr"
-    ? `Bien sûr. Je peux envoyer votre demande de devis ou de recherche d’article à notre équipe ici dans le chat. Vous pouvez aussi demander un devis directement depuis une page produit en cliquant « Add to Quote », puis « My Quote » en haut du site pour réviser et soumettre la demande. Pour l’envoyer ici, il me manque: ${fields}.`
-    : `Of course. I can send your quote or item-sourcing request to our team here in chat. You can also request a quote directly from a product page by clicking “Add to Quote”, then “My Quote” at the top of the site to review and submit it. To send it here, I still need: ${fields}.`;
+    ? `Bien sûr. Je peux envoyer votre demande de devis ou de recherche d’article à notre équipe ici dans le chat. Pour les achats en volume, hôpitaux, écoles, entreprises ou recherche, indiquez l’organisation et les quantités; les rabais doivent être révisés et ne sont pas garantis. Vous pouvez aussi demander un devis directement depuis une page produit en cliquant « Add to Quote », puis « My Quote » en haut du site. Pour l’envoyer ici, il me manque: ${fields}.`
+    : `Of course. I can send your quote or item-sourcing request to our team here in chat. For hospital, school, business, research, or other volume purchasing, include the organization and quantities; discounts must be reviewed and are not guaranteed. You can also request a quote directly from a product page by clicking “Add to Quote”, then “My Quote” at the top of the site. To send it here, I still need: ${fields}.`;
 }
 
 function orderStatusMissingText(missing: string[], language: "en" | "fr" | "unknown") {
@@ -4019,7 +4019,7 @@ async function handleAssistantPost(req: NextRequest) {
 
   const shouldUseProductDetailIntent = isProductDetailIntent(latest) && !looksLikePlainCatalogKeywordSearch(latest);
 
-  if (!extractSkuCandidates(latest).length && !shouldUseProductDetailIntent && !isProductSearchIntent(latest) && !looksLikeSpecificProductSearch(latest) && (!isAvailabilityIntent(latest) || isSiteInfoQuestion(latest))) {
+  if (!extractSkuCandidates(latest).length && !shouldUseProductDetailIntent && !isProductSearchIntent(latest) && !looksLikeSpecificProductSearch(latest) && !isQuoteIntent(latest) && !taughtQuoteIntent && (!isAvailabilityIntent(latest) || isSiteInfoQuestion(latest))) {
     const faqAnswer = faqAnswerText(latest, language);
     if (faqAnswer) {
       return new Response(textStream(faqAnswer), {
