@@ -1257,6 +1257,9 @@ function escapeRegExp(value: string) {
 
 function cleanProductQuery(text: string) {
   return String(text || "")
+    // Detail questions still need to search by the named product, not by the
+    // conversational wrapper (for example "what size is the g3 responder").
+    .replace(/^\s*(?:what\s+(?:size|dimensions?|measurements?|capacity|colour|color|details?|specifications?|specs?|features?)\s+(?:is|are|of|for)\s+(?:the\s+)?|how\s+(?:big|large|wide|tall|long|heavy)\s+(?:is|are)\s+(?:the\s+)?|(?:tell\s+me\s+)?(?:the\s+)?(?:size|dimensions?)\s+(?:of|for)\s+(?:the\s+)?)/i, "")
     .replace(/\b(no,?\s+)?(do you have|do have|do u have|so you have|you have|do you carry|can you find|find me|find|search for|search|show me|how about|what about|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|i would like|we would like|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
     .replace(/\b(what|which)\s+((?:adult|pediatric|paediatric|replacement|training)\s+)?(pads?|padz|electrodes?)\s+(?:work|works|fit|fits|go|goes)\s+with\b/gi, "$1 $2$3 for ")
     .replace(/\b(no|so|a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits|to|also|add|buy|purchase|order|get|take)\b/gi, " ")
@@ -5099,10 +5102,7 @@ async function handleAssistantPost(req: NextRequest) {
     // Replacement parts require an exact catalog match. If EMRN has no exact
     // result, use the trusted AI lookup to verify the manufacturer part, but
     // never turn a related catalog result into a recommendation.
-    const hasPriorProductContext = messages.slice(0, -1).some((message) =>
-      message.role === "assistant" && /\b(?:SKU|product|produit|article|item|view product|voir le produit)\b/i.test(message.content)
-    );
-    if ((isReplacementPartRequest(latest) || (shouldUseProductDetailIntent && hasPriorProductContext)) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
+    if ((isReplacementPartRequest(latest) || shouldUseProductDetailIntent) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
       const openAiStartedAt = Date.now();
       const externalLookup = await lookupExternalKnowledge({
         messages,
@@ -5112,8 +5112,11 @@ async function handleAssistantPost(req: NextRequest) {
         query: latest,
       });
       if (externalLookup) {
-        const externalAnswer = externalLookupCustomerAnswer(externalLookup, [], language, { question: latest });
-        await logPerformance("replacement_part_external_no_match", {
+        // Even with no initial catalog hit, let the AI's exact brand/model/part
+        // research drive a second EMRN lookup before saying the item is absent.
+        const recoveredProducts = await findEmrnProductsForExternalLookup(externalLookup, language);
+        const externalAnswer = externalLookupCustomerAnswer(externalLookup, recoveredProducts, language, { question: latest });
+        await logPerformance("external_lookup_no_initial_catalog_match", {
           openAiMs: Date.now() - openAiStartedAt,
           openAiUsed: true,
           answerPreview: externalAnswer,
@@ -5121,8 +5124,8 @@ async function handleAssistantPost(req: NextRequest) {
           proofSourceUrls: externalLookup.sourceUrls,
           proofPartNumbers: externalLookupPartNumbers(externalLookup),
           proofSearchTerms: externalLookupSearchTerms(externalLookup),
-          emrnMatchCount: 0,
-          emrnMatchedSkus: [],
+          emrnMatchCount: recoveredProducts.length,
+          emrnMatchedSkus: recoveredProducts.map((product) => product.sku).filter(Boolean),
         });
         return new Response(textStream(externalAnswer), {
           headers: {
