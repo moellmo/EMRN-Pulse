@@ -547,7 +547,7 @@ export function priorAssistantRequestedQuoteDetails(messages: AssistantMessage[]
     .some(
       (message) =>
         message.role === "assistant" &&
-        /quote request|demande de devis|send your quote|envoyer votre demande|(?:quote|devis)[\s\S]{0,80}(?:still need|il me manque)/i.test(
+        /quote request|demande de devis|send your quote|envoyer votre demande|(?:quote|devis)[\s\S]{0,500}(?:still need|il me manque)/i.test(
           message.content
         )
     );
