@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createCart, normalizeCommonSearchTypos, removeMcpCartItem, searchBySKU, searchProducts, updateMcpCartItem } from "@/lib/assistant/catalog";
+import { createCart, normalizeCommonSearchTypos, removeMcpCartItem, searchBySKU, searchProducts, skuMatchesWithConfiguredAffixes, updateMcpCartItem } from "@/lib/assistant/catalog";
 import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
 import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
@@ -1058,15 +1058,8 @@ function normalizeSku(value: string) {
   return String(value || "").replace(/[^a-z0-9+]/gi, "").toUpperCase();
 }
 
-function normalizeSkuBase(value: string) {
-  return normalizeSku(value).replace(/\++$/g, "");
-}
-
 function skuMatchesWithSellableSuffix(left: string, right: string) {
-  const leftSku = normalizeSku(left);
-  const rightSku = normalizeSku(right);
-  if (!leftSku || !rightSku) return false;
-  return leftSku === rightSku || normalizeSkuBase(leftSku) === normalizeSkuBase(rightSku);
+  return skuMatchesWithConfiguredAffixes(left, right);
 }
 
 function skuZeroInsertionCandidates(sku: string) {
@@ -2454,16 +2447,31 @@ function isDirectCatalogDetailQuestion(text: string) {
 function catalogDetailCandidateProducts(question: string, products: CatalogProduct[]) {
   const skuCandidates = extractSkuCandidates(question).map(normalizeSku).filter(Boolean);
   if (skuCandidates.length) {
-    const exactSkuProducts = products.filter((product) => skuCandidates.includes(normalizeSku(product.sku || "")));
+    const exactSkuProducts = products.filter((product) => skuCandidates.some((sku) => skuMatchesWithConfiguredAffixes(product.sku || "", sku)));
     if (exactSkuProducts.length) return exactSkuProducts;
   }
+
+  // Do not let a loosely related search result answer a named product question.
+  // With a named model/brand, the answer must come from a catalog product that
+  // contains those same reference terms; otherwise continue to AI recovery.
+  const referenceTerms = normalizeSearchText(question)
+    .split(/\s+/)
+    .filter((term) => term.length >= 3 || /\d/.test(term))
+    .filter((term) => !/^(what|which|how|does|have|with|this|that|these|those|the|and|for|from|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|product|products|item|items|bag|bags|pack|packs|unit|units|is|are|it)$/.test(term));
+  const hasNamedReference = referenceTerms.length >= 2 || referenceTerms.some((term) => /\d/.test(term));
+  const namedReferenceProducts = hasNamedReference
+    ? products.filter((product) => {
+        const productText = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer}`);
+        return referenceTerms.every((term) => productText.includes(term));
+      })
+    : products;
 
   const asksAccessory =
     /\b(shelving|shelf|module|oxygen module|accessor(?:y|ies)|replacement|refill|strap|pouch|insert|divider|part|parts|pi[eè]ce|accessoire|remplacement)\b/i.test(question);
   const asksColor = /\b(black|blue|green|orange|pink|purple|red|white|yellow|noir|bleu|vert|rouge|blanc|jaune)\b/i.test(question);
   const accessoryNamePattern = /\b(shelving|shelf|module|accessor(?:y|ies)|replacement|refill|strap|pouch|insert|divider|parts?)\b/i;
 
-  return [...products].sort((a, b) => {
+  return [...namedReferenceProducts].sort((a, b) => {
     const score = (product: CatalogProduct) => {
       const name = `${product.name} ${product.parentName}`.toLowerCase();
       let value = 0;

@@ -169,7 +169,11 @@ function skuSuffixCandidates() {
 
 function skuMatchCandidates(sku: string) {
   const normalized = normalizeSku(sku);
-  const candidates = new Set([normalized].filter(Boolean));
+  // A trailing + is an EMRN sellable-variant suffix (for example G35000RE+).
+  // Manufacturer research commonly omits it, so treat the base and suffixed
+  // forms as the same product family when recovering an exact catalog match.
+  const baseSku = normalized.replace(/\++$/g, "");
+  const candidates = new Set([normalized, baseSku, baseSku ? `${baseSku}+` : ""].filter(Boolean));
   for (const suffix of skuSuffixCandidates()) {
     if (normalized && suffix && !normalized.endsWith(suffix)) candidates.add(`${normalized}${suffix}`);
     if (suffix && normalized.endsWith(suffix)) candidates.add(normalized.slice(0, -suffix.length));
@@ -183,6 +187,17 @@ function skuMatchCandidates(sku: string) {
     for (const prefix of skuPrefixCandidates()) candidates.add(`${prefix}${normalized}`);
   }
   return candidates;
+}
+
+// Treat manufacturer SKUs and EMRN's configured store SKU forms as equivalent.
+// Examples: G35000RE ↔ G35000RE+, 12345 ↔ DY12345, and 12345 ↔ 12345U.
+export function skuMatchesWithConfiguredAffixes(left: string, right: string) {
+  const leftCandidates = skuMatchCandidates(left);
+  const rightCandidates = skuMatchCandidates(right);
+  for (const candidate of leftCandidates) {
+    if (rightCandidates.has(candidate)) return true;
+  }
+  return false;
 }
 
 function textFromHtml(value: string) {
