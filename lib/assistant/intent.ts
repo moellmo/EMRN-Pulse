@@ -258,7 +258,7 @@ export function isSupportYes(text: string) {
 
 export function extractSkuCandidates(text: string) {
   const candidates: string[] = [];
-  const normalizedText = String(text || "").replace(
+  const normalizedText = String(text || "").replace(emailPattern, " ").replace(
     /\b(do\s*you\s*have|do\s*u\s*have|have|carry|find|search|show\s*me|sku|item|product|produit|avez[-\s]?vous|cherche)(?=[A-Z]{1,12}\d|[A-Z0-9]{2,}[/-][A-Z0-9]+|\d{4,})/gi,
     "$1 "
   );
@@ -274,7 +274,7 @@ export function extractSkuCandidates(text: string) {
   }
 
   const matches =
-    skuText.match(/\b(?:[A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,10}\s*-?\s*\d{3,}[A-Z0-9]*(?:-[A-Z0-9]+)*\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\+?|\d{4,}\+?)(?=\s|$|[,.!?])/gi) || [];
+    skuText.match(/\b(?:(?=[A-Z0-9]*\d)[A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,4}\s*-?\s*\d{3,}[A-Z0-9]*(?:-[A-Z0-9]+)*\+?|[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\+?|\d{4,}\+?)(?=\s|$|[,.!?])/gi) || [];
   candidates.push(...matches.filter((sku) => !/^sku\s*\d/i.test(sku)));
 
   for (const match of skuText.matchAll(/(?:^|[^\w/-])(?=([A-Z0-9+/-]{3,30})(?=\s|$|[,.!?]))(?=[A-Z0-9+/-]*\d)([A-Z0-9][A-Z0-9+/-]{2,29}\+?)(?=\s|$|[,.!?])/gi)) {
@@ -288,6 +288,7 @@ export function extractSkuCandidates(text: string) {
     if (/^\d{1,3}G$/i.test(sku)) return false;
     if (/^OF\d{1,5}$/i.test(sku)) return false;
     if (/^X\d{1,5}$/i.test(sku)) return false;
+    if (/^X\d+-\d+$/i.test(sku)) return false;
     if (!/\d/.test(sku)) return false;
     if (/^\d{1,3}(?:ML|MM|CM|IN)?$/i.test(sku)) return false;
     return true;
@@ -544,7 +545,7 @@ export function priorAssistantRequestedQuoteDetails(messages: AssistantMessage[]
     .some(
       (message) =>
         message.role === "assistant" &&
-        /quote request|demande de devis|send your quote|envoyer votre demande|still need|il me manque/i.test(
+        /quote request|demande de devis|send your quote|envoyer votre demande|(?:quote|devis)[\s\S]{0,80}(?:still need|il me manque)/i.test(
           message.content
         )
     );
@@ -590,10 +591,7 @@ function quoteSelectionText(messages: AssistantMessage[]) {
 function quoteRelevantSkuText(messages: AssistantMessage[]) {
   return messages
     .filter((message) => {
-      if (message.role === "assistant") {
-        return /review this quote request|vérifiez cette demande de devis|products?:|articles:/i.test(message.content);
-      }
-
+      if (message.role !== "user") return false;
       const text = message.content.trim();
       if (/^(yes|yeah|yep|sure|ok|okay|please|send|send it|go ahead|oui|envoyer|d'accord|vas-y)$/i.test(text)) return false;
       if (isGenericQuoteOnlyText(text)) return false;
@@ -601,8 +599,6 @@ function quoteRelevantSkuText(messages: AssistantMessage[]) {
       return isQuoteIntent(text) || priorAssistantRequestedQuoteDetails(messages) || extractSkuCandidates(text).length > 0;
     })
     .map((message) => {
-      if (message.role === "assistant") return message.content;
-
       const text = message.content.trim();
       if (!emailPattern.test(text)) return text;
 
@@ -614,6 +610,11 @@ function quoteRelevantSkuText(messages: AssistantMessage[]) {
       return parts.filter((part) => !emailPattern.test(part)).join("\n");
     })
     .join("\n");
+}
+
+function explicitQuoteSkuCandidates(text: string) {
+  return Array.from(String(text || "").matchAll(/\bSKU\s*[:#]?\s*([A-Z0-9][A-Z0-9+._/ -]{2,39})/gi))
+    .flatMap((match) => extractSkuCandidates(match[1] || ""));
 }
 
 function recentlyOfferedSkus(messages: AssistantMessage[]) {
@@ -637,7 +638,7 @@ export function buildQuoteDraft(
   const text = messages.map((message) => message.content).join("\n");
   const userText = messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
   const email = text.match(emailPattern)?.[0] || "";
-  const phone = text.match(/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/)?.[0];
+  const phone = text.match(/\b(?:phone|telephone|tel|téléphone)\s*[:#-]?\s*((?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4})\b/i)?.[1];
   const name =
     text.match(/\bName:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
     text.match(/\bNom:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
@@ -664,7 +665,7 @@ export function buildQuoteDraft(
     url: product.url,
   }));
   const selectedSkus = new Set(selectedProductRows.map((product) => product.sku?.toUpperCase()).filter(Boolean));
-  const requestedSkuRows = Array.from(new Set(extractSkuCandidates(quoteRelevantSkuText(messages)).map((sku) => sku.toUpperCase())))
+  const requestedSkuRows = Array.from(new Set(explicitQuoteSkuCandidates(quoteRelevantSkuText(messages)).map((sku) => sku.toUpperCase())))
     .filter((sku) => !selectedSkus.has(sku))
     .map((sku) => ({
       name: `SKU ${sku}`,

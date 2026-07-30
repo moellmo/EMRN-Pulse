@@ -3529,6 +3529,28 @@ async function runAssistantSideEffects(label: string, tasks: Array<Promise<unkno
   });
 }
 
+function supportEmailDeliveryText(sent: boolean, language: AssistantLanguage) {
+  if (sent) {
+    return language === "fr"
+      ? "Merci. Votre question a été envoyée à notre équipe de support. Quelqu’un vous répondra sous peu."
+      : "Thank you. Your question has been sent to our support team. Someone will respond shortly.";
+  }
+  return language === "fr"
+    ? "Votre demande de support a été enregistrée, mais le courriel n’a pas pu être livré. Veuillez contacter EMRN directement pour un suivi rapide."
+    : "Your support request was recorded, but the email could not be delivered. Please contact EMRN directly for prompt follow-up.";
+}
+
+function orderStatusEmailDeliveryText(sent: boolean, language: AssistantLanguage) {
+  if (sent) {
+    return language === "fr"
+      ? "D’accord. J’ai envoyé cette demande de statut au support afin qu’ils vérifient la commande et vous répondent par courriel."
+      : "Okay. I sent this order status request to support so they can check the order and email you back.";
+  }
+  return language === "fr"
+    ? "Votre demande de statut a été enregistrée, mais le courriel n’a pas pu être livré. Veuillez contacter EMRN directement pour un suivi rapide."
+    : "Your order-status request was recorded, but the email could not be delivered. Please contact EMRN directly for prompt follow-up.";
+}
+
 function isAiIdentityQuestion(text: string) {
   const clean = String(text || "")
     .toLowerCase()
@@ -3693,17 +3715,14 @@ async function handleAssistantPost(req: NextRequest) {
         category: supportCategoryFromMessages(messages),
         summary: supportSummaryFromMessages(messages),
       };
+      const supportEmailResult = await sendSupportEmail(supportRequest);
       await runAssistantSideEffects("support request", [
         logSupportRequest(supportRequest),
-        sendSupportEmail(supportRequest),
+        Promise.resolve(supportEmailResult),
         logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
       ]);
       return new Response(
-        textStream(
-          language === "fr"
-            ? "Merci. Votre question a été envoyée à notre équipe de support. Quelqu’un vous répondra sous peu."
-            : "Thank you. Your question has been sent to our support team. Someone will respond shortly."
-        ),
+        textStream(supportEmailDeliveryText(supportEmailResult.sent, language)),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }
@@ -3739,7 +3758,7 @@ async function handleAssistantPost(req: NextRequest) {
       );
     }
 
-    await sendQuoteLinkEmail({
+    const quoteLinkEmailResult = await sendQuoteLinkEmail({
       to: email,
       quoteNumber: quotePaymentLink.quoteNumber || (language === "fr" ? "votre devis" : "your quote"),
       checkoutUrl: quotePaymentLink.checkoutUrl,
@@ -3747,9 +3766,13 @@ async function handleAssistantPost(req: NextRequest) {
     });
     return new Response(
       textStream(
-        language === "fr"
-          ? `C’est envoyé à ${email}. Vous pouvez aussi ouvrir le lien ici: ${quotePaymentLink.checkoutUrl}`
-          : `I sent it to ${email}. You can also open the link here: ${quotePaymentLink.checkoutUrl}`
+        quoteLinkEmailResult.sent
+          ? language === "fr"
+            ? `C’est envoyé à ${email}. Vous pouvez aussi ouvrir le lien ici: ${quotePaymentLink.checkoutUrl}`
+            : `I sent it to ${email}. You can also open the link here: ${quotePaymentLink.checkoutUrl}`
+          : language === "fr"
+            ? `Je n’ai pas pu envoyer le lien de paiement par courriel. Vous pouvez tout de même l’ouvrir ici: ${quotePaymentLink.checkoutUrl}`
+            : `I could not email the payment link. You can still open it here: ${quotePaymentLink.checkoutUrl}`
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
@@ -3942,16 +3965,13 @@ async function handleAssistantPost(req: NextRequest) {
     const draft = buildOrderStatusDraft(messages, language);
     if (draft.request) {
       if (shouldSendOrderStatusSupport) {
+        const orderStatusEmailResult = await sendOrderStatusEmail(draft.request);
         await runAssistantSideEffects("order status support request", [
-          sendOrderStatusEmail(draft.request),
+          Promise.resolve(orderStatusEmailResult),
           logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
         ]);
         return new Response(
-          textStream(
-            language === "fr"
-              ? "D’accord. J’ai envoyé cette demande de statut au support afin qu’ils vérifient la commande et vous répondent par courriel."
-              : "Okay. I sent this order status request to support so they can check the order and email you back."
-          ),
+          textStream(orderStatusEmailDeliveryText(orderStatusEmailResult.sent, language)),
           { headers: { "Content-Type": "text/plain; charset=utf-8" } }
         );
       }
@@ -4285,17 +4305,14 @@ async function handleAssistantPost(req: NextRequest) {
         category: supportCategoryFromMessages(messages),
         summary: supportSummaryFromMessages(messages),
       };
+      const supportEmailResult = await sendSupportEmail(supportRequest);
       await runAssistantSideEffects("support request", [
         logSupportRequest(supportRequest),
-        sendSupportEmail(supportRequest),
+        Promise.resolve(supportEmailResult),
         logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
       ]);
       return new Response(
-        textStream(
-          language === "fr"
-            ? "Merci. Votre question a été envoyée à notre équipe de support. Quelqu’un vous répondra sous peu."
-            : "Thank you. Your question has been sent to our support team. Someone will respond shortly."
-        ),
+        textStream(supportEmailDeliveryText(supportEmailResult.sent, language)),
         { headers: { "Content-Type": "text/plain; charset=utf-8" } }
       );
     }

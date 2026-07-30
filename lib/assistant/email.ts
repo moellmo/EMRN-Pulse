@@ -14,6 +14,7 @@ export type EmailDeliveryResult = {
   sent: boolean;
   reason?: "invalid_recipient" | "provider_rejected" | "not_configured";
   providerStatus?: number;
+  providerId?: string;
 };
 
 function emailRecipients(value: string) {
@@ -28,6 +29,7 @@ async function sendEmail(input: EmailInput) {
   const from = emailSender(process.env.EMRN_EMAIL_FROM);
   if (process.env.RESEND_API_KEY && from) {
     const recipients = emailRecipients(input.to);
+    const replyTo = emailRecipients(process.env.EMRN_EMAIL_REPLY_TO || "")[0];
     if (!recipients.length) {
       console.error("[EMRN Assistant] Email skipped because no valid recipient was found.", {
         to: input.to,
@@ -36,51 +38,65 @@ async function sendEmail(input: EmailInput) {
       return { sent: false, reason: "invalid_recipient" } satisfies EmailDeliveryResult;
     }
 
-    let response: Response;
-    try {
-      response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+    const idempotencyKey = `emrn-pulse-${crypto.randomUUID()}`;
+    let lastStatus: number | undefined;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let response: Response;
+      try {
+        response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: JSON.stringify({
+            from,
+            to: recipients,
+            subject: input.subject,
+            text: input.text,
+            ...(replyTo ? { reply_to: replyTo } : {}),
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+      } catch (error) {
+        console.error("[EMRN Assistant] Email provider request failed.", {
+          attempt: attempt + 1,
+          error: error instanceof Error ? error.message : String(error),
           from,
           to: recipients,
           subject: input.subject,
-          text: input.text,
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch (error) {
-      console.error("[EMRN Assistant] Email provider request failed.", {
-        error: error instanceof Error ? error.message : String(error),
-        from,
-        to: recipients,
-        subject: input.subject,
-      });
-      return { sent: false, reason: "provider_rejected" } satisfies EmailDeliveryResult;
-    }
+        });
+        if (attempt === 0) continue;
+        return { sent: false, reason: "provider_rejected" } satisfies EmailDeliveryResult;
+      }
 
-    if (!response.ok) {
+      if (response.ok) {
+        const body = await response.json().catch(() => null) as { id?: string } | null;
+        console.log("[EMRN Assistant] Email provider accepted", {
+          id: body?.id || "unknown",
+          to: recipients,
+          subject: input.subject,
+        });
+        return { sent: true, providerId: body?.id } satisfies EmailDeliveryResult;
+      }
+
+      lastStatus = response.status;
       const body = await response.text().catch(() => "");
       console.error("[EMRN Assistant] Email provider rejected message.", {
+        attempt: attempt + 1,
         status: response.status,
         body: body.slice(0, 500),
         from,
         to: recipients,
         subject: input.subject,
       });
+      if (attempt === 0 && (response.status === 429 || response.status >= 500)) continue;
       return { sent: false, reason: "provider_rejected", providerStatus: response.status } satisfies EmailDeliveryResult;
     }
 
-    const body = await response.json().catch(() => null) as { id?: string } | null;
-    console.log("[EMRN Assistant] Email provider accepted", {
-      id: body?.id || "unknown",
-      to: recipients,
-      subject: input.subject,
-    });
-    return { sent: true } satisfies EmailDeliveryResult;
+    return { sent: false, reason: "provider_rejected", providerStatus: lastStatus } satisfies EmailDeliveryResult;
   }
 
   console.error("[EMRN Assistant] Email provider not configured. Message logged only.", {
