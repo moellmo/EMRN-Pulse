@@ -10,6 +10,12 @@ type EmailInput = {
   text: string;
 };
 
+export type EmailDeliveryResult = {
+  sent: boolean;
+  reason?: "invalid_recipient" | "provider_rejected" | "not_configured";
+  providerStatus?: number;
+};
+
 function emailRecipients(value: string) {
   return Array.from(new Set(String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []));
 }
@@ -23,31 +29,49 @@ async function sendEmail(input: EmailInput) {
   if (process.env.RESEND_API_KEY && from) {
     const recipients = emailRecipients(input.to);
     if (!recipients.length) {
-      console.warn("[EMRN Assistant] Email skipped because no valid recipient was found.", {
+      console.error("[EMRN Assistant] Email skipped because no valid recipient was found.", {
         to: input.to,
         subject: input.subject,
       });
-      return;
+      return { sent: false, reason: "invalid_recipient" } satisfies EmailDeliveryResult;
     }
 
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    let response: Response;
+    try {
+      response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from,
+          to: recipients,
+          subject: input.subject,
+          text: input.text,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch (error) {
+      console.error("[EMRN Assistant] Email provider request failed.", {
+        error: error instanceof Error ? error.message : String(error),
         from,
         to: recipients,
         subject: input.subject,
-        text: input.text,
-      }),
-    });
+      });
+      return { sent: false, reason: "provider_rejected" } satisfies EmailDeliveryResult;
+    }
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      console.warn("[EMRN Assistant] Email provider failed. Request was still logged.", response.status, body.slice(0, 500));
-      return;
+      console.error("[EMRN Assistant] Email provider rejected message.", {
+        status: response.status,
+        body: body.slice(0, 500),
+        from,
+        to: recipients,
+        subject: input.subject,
+      });
+      return { sent: false, reason: "provider_rejected", providerStatus: response.status } satisfies EmailDeliveryResult;
     }
 
     const body = await response.json().catch(() => null) as { id?: string } | null;
@@ -56,18 +80,24 @@ async function sendEmail(input: EmailInput) {
       to: recipients,
       subject: input.subject,
     });
-    return;
+    return { sent: true } satisfies EmailDeliveryResult;
   }
 
-  console.warn("[EMRN Assistant] Email provider not configured. Message logged only.", input);
+  console.error("[EMRN Assistant] Email provider not configured. Message logged only.", {
+    hasApiKey: Boolean(process.env.RESEND_API_KEY),
+    hasFrom: Boolean(from),
+    to: input.to,
+    subject: input.subject,
+  });
+  return { sent: false, reason: "not_configured" } satisfies EmailDeliveryResult;
 }
 
-export async function sendAdminNotificationEmail(input: EmailInput) {
-  await sendEmail(input);
+export async function sendAdminNotificationEmail(input: EmailInput): Promise<EmailDeliveryResult> {
+  return sendEmail(input);
 }
 
-export async function sendQuoteRequestEmail(request: QuoteRequest) {
-  await sendEmail({
+export async function sendQuoteRequestEmail(request: QuoteRequest): Promise<EmailDeliveryResult> {
+  return sendEmail({
     to: quoteEmail,
     subject: "New Quote Request - AI Assistant",
     text: [
@@ -94,9 +124,9 @@ export async function sendQuoteRequestEmail(request: QuoteRequest) {
   });
 }
 
-export async function sendSupportEmail(request: SupportRequest) {
+export async function sendSupportEmail(request: SupportRequest): Promise<EmailDeliveryResult> {
   const summary = request.summary;
-  await sendEmail({
+  return sendEmail({
     to: supportEmail,
     subject: "New Support Request - AI Assistant",
     text: [
@@ -138,7 +168,7 @@ export async function sendSupportEmail(request: SupportRequest) {
 }
 
 export async function sendQuoteLinkEmail(input: { to: string; quoteNumber: string; checkoutUrl: string; language: "en" | "fr" | "unknown" }) {
-  await sendEmail({
+  return sendEmail({
     to: input.to,
     subject: `EMRN Quote ${input.quoteNumber} Payment Link`,
     text:
@@ -162,8 +192,8 @@ export async function sendQuoteLinkEmail(input: { to: string; quoteNumber: strin
   });
 }
 
-export async function sendOrderStatusEmail(request: OrderStatusRequest) {
-  await sendEmail({
+export async function sendOrderStatusEmail(request: OrderStatusRequest): Promise<EmailDeliveryResult> {
+  return sendEmail({
     to: orderStatusEmail,
     subject: `Order Status Request - ${request.orderNumber}`,
     text: [

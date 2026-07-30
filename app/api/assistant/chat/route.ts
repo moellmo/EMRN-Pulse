@@ -5005,15 +5005,20 @@ async function handleAssistantPost(req: NextRequest) {
         return new Response(textStream(quoteDraftAnswer), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
       }
 
+      const quoteEmailResult = await sendQuoteRequestEmail(draft.request);
       await runAssistantSideEffects("quote request", [
         logQuoteRequest(draft.request),
-        sendQuoteRequestEmail(draft.request),
+        Promise.resolve(quoteEmailResult),
         logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
       ]);
-      const quoteSentAnswer = language === "fr"
-        ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
-        : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly.";
-      await logPerformance("quote_request_sent", { answerPreview: quoteSentAnswer });
+      const quoteSentAnswer = quoteEmailResult.sent
+        ? language === "fr"
+          ? "Merci. Votre demande a été envoyée à notre équipe des ventes. Nous vérifierons l’article et vous contacterons sous peu."
+          : "Thank you. Your request has been sent to our sales team. We will check the item and contact you shortly."
+        : language === "fr"
+          ? "Votre demande a été enregistrée, mais le courriel n’a pas pu être envoyé. L’équipe doit vérifier la configuration du domaine de courriel avant de recevoir les demandes. Veuillez nous contacter directement pour le suivi."
+          : "Your quote request was recorded, but the email could not be delivered. The team must verify the email domain configuration before receiving requests. Please contact us directly for follow-up.";
+      await logPerformance(quoteEmailResult.sent ? "quote_request_sent" : "quote_request_email_failed", { answerPreview: quoteSentAnswer });
       return new Response(textStream(quoteSentAnswer), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
     }
 
