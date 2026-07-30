@@ -858,9 +858,25 @@ function recentAssistantProductSkus(messages: AssistantMessage[]) {
   return skus.slice(0, 8);
 }
 
+function recentAssistantProductNames(messages: AssistantMessage[]) {
+  const assistantMessages = messages
+    .slice(0, -1)
+    .filter((message) => message.role === "assistant")
+    .slice(-4)
+    .reverse();
+  const names: string[] = [];
+  for (const message of assistantMessages) {
+    for (const match of message.content.matchAll(/(?:^|\n)\s*(?:\d+\.\s*)?\*\*([^*\n]{3,140})\*\*\s+[—-]\s+SKU\b/gi)) {
+      const name = match[1]?.trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+  }
+  return names.slice(0, 4);
+}
+
 async function recentAssistantProducts(messages: AssistantMessage[]) {
   const skus = recentAssistantProductSkus(messages);
-  const products = (
+  let products = (
     await Promise.all(
       skus.map(async (sku) => {
         const [product] = await searchBySKU(sku);
@@ -868,6 +884,19 @@ async function recentAssistantProducts(messages: AssistantMessage[]) {
       })
     )
   ).filter((product): product is CatalogProduct => Boolean(product));
+
+  if (!products.length) {
+    products = (
+      await Promise.all(
+        recentAssistantProductNames(messages).map(async (name) => {
+          const result = await searchProducts({ query: name, limit: 3 });
+          return result.products.find((product) =>
+            normalizeSearchText(`${product.name} ${product.parentName}`).includes(normalizeSearchText(name))
+          ) || null;
+        })
+      )
+    ).filter((product): product is CatalogProduct => Boolean(product));
+  }
 
   const seen = new Set<string>();
   return products.filter((product) => {
@@ -3038,7 +3067,7 @@ function externalLookupCustomerAnswer(
   lookup: ExternalKnowledgeLookup,
   products: CatalogProduct[],
   language: "en" | "fr" | "unknown",
-  options: { focusedProduct?: CatalogProduct } = {}
+  options: { focusedProduct?: CatalogProduct; question?: string } = {}
 ) {
   const sourceLabel = lookup.sourceType === "manufacturer"
     ? "manufacturer information"
@@ -3071,19 +3100,30 @@ function externalLookupCustomerAnswer(
     : "";
 
   if (lookup.status === "confirmed") {
-    const intro = `Confirmed compatible: Based on ${sourceLabel}, ${summary}.${partText}`;
-    if (focusedLine) return `${intro}\n\n${focusedLine}\n\nWould you like me to add it to your cart or prepare a quote?`;
-    if (lines.length) return `${intro}\n\nI found the matching EMRN product${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}\n\nWould you like me to add one to cart or prepare a quote?`;
+    const compatibilityIntro = isCompatibilityQuestion(options.question || "");
+    const intro = language === "fr"
+      ? `${compatibilityIntro ? "Compatibilité confirmée" : "Selon"}: ${compatibilityIntro ? `Selon ${sourceLabel}, ` : `${sourceLabel}: `}${summary}.${partText}`
+      : compatibilityIntro
+        ? `Confirmed compatible: Based on ${sourceLabel}, ${summary}.${partText}`
+        : `Based on ${sourceLabel}, ${summary}.${partText}`;
+    if (focusedLine) return `${intro}\n\n${focusedLine}\n\n${language === "fr" ? "Voulez-vous que je l’ajoute au panier ou que je prépare un devis?" : "Would you like me to add it to your cart or prepare a quote?"}`;
+    if (lines.length) return `${intro}\n\n${language === "fr" ? `J’ai trouvé le produit EMRN correspondant${lines.length > 1 ? "s" : ""}:` : `I found the matching EMRN product${lines.length > 1 ? "s" : ""}:`}\n\n${lines.join("\n")}\n\n${language === "fr" ? "Voulez-vous que j’en ajoute un au panier ou que je prépare un devis?" : "Would you like me to add one to cart or prepare a quote?"}`;
     const item = cleanExternalLookupItemName(lookup.exactProductName) || lookup.manufacturerPartNumbers.join(", ") || "the exact item";
-    return `${intro}\n\nI do not see an exact matching EMRN catalog item after checking by part number and product terms. I can send this to EMRN to source/check **${item}**. Please send your name, email, quantity, and any deadline.`;
+    return language === "fr"
+      ? `${intro}\n\nJe ne vois pas d’article EMRN correspondant exactement après vérification du numéro de pièce et des termes du produit. Je peux envoyer une demande à EMRN pour rechercher/vérifier **${item}**. Envoyez votre nom, courriel, quantité et échéance si nécessaire.`
+      : `${intro}\n\nI do not see an exact matching EMRN catalog item after checking by part number and product terms. I can send this to EMRN to source/check **${item}**. Please send your name, email, quantity, and any deadline.`;
   }
 
   if (lookup.status === "not_compatible") {
-    return `Not compatible: Based on ${sourceLabel}, ${summary}.${partText}${lines.length ? `\n\nRelated EMRN option${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : ""}\n\nWould you like me to send this to support to double-check?`;
+    return language === "fr"
+      ? `Non compatible: Selon ${sourceLabel}, ${summary}.${partText}${lines.length ? `\n\nOption EMRN connexe${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : ""}\n\nVoulez-vous que j’envoie cette question au support pour vérification?`
+      : `Not compatible: Based on ${sourceLabel}, ${summary}.${partText}${lines.length ? `\n\nRelated EMRN option${lines.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : ""}\n\nWould you like me to send this to support to double-check?`;
   }
 
   const item = cleanExternalLookupItemName(lookup.exactProductName) || lookup.manufacturerPartNumbers.join(", ") || "this item";
-  return `Can’t confirm: I can’t confirm this from available product/manufacturer info.${partText}\n\nI checked EMRN by the available part number/product terms${products.length ? ` and found related EMRN option${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " and did not find an exact EMRN match"}.\n\nReply yes and I’ll send this to support for **${item}**.`;
+  return language === "fr"
+    ? `Impossible de confirmer: Je ne peux pas confirmer cette information à partir des renseignements produit/fabricant disponibles.${partText}\n\nJ’ai vérifié EMRN avec le numéro de pièce et les termes disponibles${products.length ? ` et trouvé une option EMRN connexe${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " et je n’ai pas trouvé de correspondance EMRN exacte"}.\n\nRépondez oui et j’enverrai cette question au support pour **${item}**.`
+    : `Can’t confirm: I can’t confirm this from available product/manufacturer info.${partText}\n\nI checked EMRN by the available part number/product terms${products.length ? ` and found related EMRN option${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " and did not find an exact EMRN match"}.\n\nReply yes and I’ll send this to support for **${item}**.`;
 }
 
 function shouldTrustG3OxygenCylinderProof(lookup: ExternalKnowledgeLookup, product: CatalogProduct | undefined, question: string) {
@@ -3285,6 +3325,13 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
   const answer = (en: string, fr: string) => (language === "fr" ? fr : en);
   const link = (label: string, url: string) => `[${label}](${url})`;
 
+  if (/\b(must|have to|required to|need to|buy|purchase|order)\b.{0,50}\b(?:online|on the website)\b|\b(?:acheter|commander|oblig[eé]e?|dois)\b.{0,50}\b(?:en ligne|sur le site)\b/i.test(text)) {
+    return answer(
+      `No. You do not have to buy online. I can help identify the product and send a quote or sourcing request by email through EMRN. If you want to order online, eligible products can be purchased from their product pages.`,
+      `Non. Vous n’êtes pas obligé(e) d’acheter en ligne. Je peux vous aider à identifier le produit et envoyer une demande de devis ou de recherche d’article par courriel à EMRN. Si vous préférez commander en ligne, les produits admissibles peuvent être achetés depuis leur page produit.`
+    );
+  }
+
   if (/\b(order statuses|order status mean|status mean|awaiting payment|awaiting fulfillment|awaiting shipment|partially shipped|completed)\b/i.test(text)) {
     return answer(
       `Order statuses show where the order is in the process. Awaiting Payment means payment is not complete or confirmed. Awaiting Fulfillment means the order is being reviewed, picked, packed, allocated, or prepared. Awaiting Shipment means it is being prepared for shipment and may be waiting on stock availability, warehouse processing, or carrier pickup. Partially Shipped means some items shipped separately. Shipped means tracking should be available by email or in your account. Completed means the order has been processed. More details: ${link("Help Center", helpLink)}`,
@@ -3462,7 +3509,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 }
 
 function isSiteInfoQuestion(text: string) {
-  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher)\b/i.test(text) ||
+  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher|online|en ligne|acheter|commander)\b/i.test(text) ||
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
 }
 
@@ -3512,6 +3559,7 @@ function shouldAskAiForBroadIntentRoute({
   if (skuCandidates.length) return false;
   if (clean.length < 45) return false;
   if (isFindProductPrompt(clean) || isProductQuestionStarterPrompt(clean)) return false;
+  if (isSiteInfoQuestion(clean)) return false;
   if (isQuoteIntent(clean) || taughtQuoteIntent) return false;
   if (isOrderStatusIntent(clean) || taughtOrderStatusIntent) return false;
   if (isContactIntent(clean) || taughtContactIntent) return false;
@@ -3554,7 +3602,12 @@ async function handleAssistantPost(req: NextRequest) {
   const messages = (body?.messages || []) as AssistantMessage[];
   const sessionId = String(body?.sessionId || crypto.randomUUID());
   const requestedLanguage = body?.language;
-  const language = requestedLanguage && requestedLanguage !== "unknown" ? requestedLanguage : detectCustomerLanguage(messages);
+  const detectedLanguage = detectCustomerLanguage(messages);
+  const language = detectedLanguage === "fr"
+    ? "fr"
+    : requestedLanguage && requestedLanguage !== "unknown"
+      ? requestedLanguage
+      : detectedLanguage;
   const pageContext = (body?.pageContext || {}) as ProductPageContext;
   const latest = messages.at(-1)?.content || "";
   const taughtIntentRoute = await taughtIntentRouteForQuery(latest);
@@ -5012,7 +5065,10 @@ async function handleAssistantPost(req: NextRequest) {
     // Replacement parts require an exact catalog match. If EMRN has no exact
     // result, use the trusted AI lookup to verify the manufacturer part, but
     // never turn a related catalog result into a recommendation.
-    if (isReplacementPartRequest(latest) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
+    const hasPriorProductContext = messages.slice(0, -1).some((message) =>
+      message.role === "assistant" && /\b(?:SKU|product|produit|article|item|view product|voir le produit)\b/i.test(message.content)
+    );
+    if ((isReplacementPartRequest(latest) || (shouldUseProductDetailIntent && hasPriorProductContext)) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
       const openAiStartedAt = Date.now();
       const externalLookup = await lookupExternalKnowledge({
         messages,
@@ -5022,7 +5078,7 @@ async function handleAssistantPost(req: NextRequest) {
         query: latest,
       });
       if (externalLookup) {
-        const externalAnswer = externalLookupCustomerAnswer(externalLookup, [], language);
+        const externalAnswer = externalLookupCustomerAnswer(externalLookup, [], language, { question: latest });
         await logPerformance("replacement_part_external_no_match", {
           openAiMs: Date.now() - openAiStartedAt,
           openAiUsed: true,
@@ -5247,6 +5303,7 @@ async function handleAssistantPost(req: NextRequest) {
         : externalLookup;
       const externalAnswer = externalLookupCustomerAnswer(finalExternalLookup, emrnLookupProducts, language, {
         focusedProduct: focusedExternalProduct,
+        question: latest,
       });
       await logPerformance("external_knowledge_structured", {
         openAiMs: Date.now() - openAiStartedAt,
@@ -5286,7 +5343,7 @@ async function handleAssistantPost(req: NextRequest) {
     const extractedLookup = externalLookupFromAnswerText(fallbackText, latest);
     if (extractedLookup) {
       const emrnLookupProducts = await findEmrnProductsForExternalLookup(extractedLookup, language, detailProducts);
-      const extractedAnswer = externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language);
+      const extractedAnswer = externalLookupCustomerAnswer(extractedLookup, emrnLookupProducts, language, { question: latest });
       await logPerformance("external_knowledge_extracted", {
         openAiMs: Date.now() - openAiStartedAt,
         openAiUsed: true,

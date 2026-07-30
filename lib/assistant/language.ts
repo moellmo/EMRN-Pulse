@@ -40,14 +40,14 @@ const englishSignals = [
 ];
 
 export function detectCustomerLanguage(messages: AssistantMessage[]): AssistantLanguage {
-  const firstUserMessage = messages.find((message) => message.role === "user")?.content || "";
-  const normalized = firstUserMessage.toLowerCase();
+  const latestUserMessage = messages.filter((message) => message.role === "user").at(-1)?.content || "";
+  const normalized = latestUserMessage.toLowerCase();
   const frenchScore = frenchSignals.filter((term) => normalized.includes(term)).length;
   const englishScore = englishSignals.filter((term) => normalized.includes(term)).length;
 
   if (frenchScore > englishScore) return "fr";
   if (englishScore > frenchScore) return "en";
-  if (/[àâçéèêëîïôûùüÿœ]/i.test(firstUserMessage)) return "fr";
+  if (/[àâçéèêëîïôûùüÿœ]/i.test(latestUserMessage)) return "fr";
   if (normalized.trim()) return "en";
   return "unknown";
 }
