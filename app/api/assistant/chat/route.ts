@@ -1339,6 +1339,17 @@ function lcsuCanisterSkuHints(text: string) {
   return ["886100", "8002004L10"];
 }
 
+function isLcsuFamilyRequest(text: string) {
+  return /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/i.test(normalizeSearchText(text));
+}
+
+function lcsuFamilySearchQuery(text: string) {
+  return cleanProductQuery(text)
+    .replace(/\blcsu\s*4?\b/gi, "LCSU 4")
+    .replace(/\blaerdal\s+compact\s+suction\s+unit\b/gi, "LCSU 4")
+    .trim() || "LCSU 4";
+}
+
 function isAccessoryCatalogSearch(text: string) {
   const normalized = normalizeSearchText(text);
   return /\b(?:accessor(?:y|ies)|replacement parts?|spare parts?|conversion parts?|add ons?)\b/.test(normalized) &&
@@ -3000,6 +3011,8 @@ function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
   const asksOnsite = /\b(onsite|heartstart|hs1)\b/.test(query);
   const asksTorso = /\btorso\b/.test(query);
   const asksCanister = /\b(canister|cannister|collection jar|suction container)\b/.test(query);
+  const asksLcsuFamily = /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/.test(query);
+  const asksLcsuAccessory = isAccessoryCatalogSearch(latest) || asksCanister || /\b(?:battery|charger|filter|wire stand|carry bag|vacuum tube|patient tube|shoulder)\b/.test(query);
 
   const score = (product: CatalogProduct) => {
     const text = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.categories.join(" ")}`);
@@ -3016,6 +3029,8 @@ function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
     if (asksTorso && /\bno torso\b/.test(text)) value -= 16000;
     if (asksCanister && /\b(canister|cannister|collection jar|suction container)\b/.test(text)) value += 9000;
     if (asksCanister && !/\b(canister|cannister|collection jar|suction container)\b/.test(text)) value -= 12000;
+    if (asksLcsuFamily && !asksLcsuAccessory && /\b(?:laerdal compact suction unit|lcsu\s*4)\b/.test(text)) value += 7000;
+    if (asksLcsuFamily && !asksLcsuAccessory && /\b(?:canister|battery|charger|filter|wire stand|carry bag|vacuum tube|patient tube|shoulder)\b/.test(text)) value -= 3500;
     return value;
   };
 
@@ -4672,6 +4687,9 @@ async function handleAssistantPost(req: NextRequest) {
     searchResult = skuProducts.length
       ? { products: skuProducts, found: skuProducts.length, searchQuery: mappedSkus.join(", "), language }
       : await searchProducts({ query: searchQuery, language, limit: 8 });
+  } else if (isLcsuFamilyRequest(latest)) {
+    searchQuery = lcsuFamilySearchQuery(latest);
+    searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
   } else if (skuCandidates.length) {
     const skuProducts = (
       await Promise.all(
