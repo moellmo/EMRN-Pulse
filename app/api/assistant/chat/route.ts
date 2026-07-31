@@ -1330,6 +1330,15 @@ function isSpecificAedAccessoryRequest(text: string) {
   return asksForPads && namesAed;
 }
 
+function lcsuCanisterSkuHints(text: string) {
+  const normalized = normalizeSearchText(text);
+  if (!/\b(canister|cannister|suction container)\b/.test(normalized)) return [];
+  if (!/\b(?:lcsu\s*4?|laerdal compact suction unit)\b/.test(normalized)) return [];
+  if (/\b800\s*(?:ml|m l)\b/.test(normalized)) return ["8002004L10"];
+  if (/\b300\s*(?:ml|m l)\b/.test(normalized)) return ["886100"];
+  return ["886100", "8002004L10"];
+}
+
 function isAccessoryCatalogSearch(text: string) {
   const normalized = normalizeSearchText(text);
   return /\b(?:accessor(?:y|ies)|replacement parts?|spare parts?|conversion parts?|add ons?)\b/.test(normalized) &&
@@ -4465,6 +4474,7 @@ async function handleAssistantPost(req: NextRequest) {
   // Known AED model + pad combinations take precedence over a short model
   // code that happens to look like a SKU (for example FRx).
   const aedAccessorySkus = aedAccessorySkuHints(latest);
+  const lcsuCanisterSkus = lcsuCanisterSkuHints(latest);
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !shouldUseProductDetailIntent && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
@@ -4568,7 +4578,7 @@ async function handleAssistantPost(req: NextRequest) {
   }
   const preSearchKnowledgeStartedAt = Date.now();
   const preSearchKnowledgeMatches =
-    !pageProductsForCart.length && !skuCandidates.length && !rememberedContextProducts.length && !isAccessoryCatalogSearch(latest)
+    !pageProductsForCart.length && !skuCandidates.length && !rememberedContextProducts.length && !isAccessoryCatalogSearch(latest) && !lcsuCanisterSkus.length
       ? await matchingApprovedKnowledgeForQuery(latest)
       : [];
   const preSearchKnowledgeMs = Date.now() - preSearchKnowledgeStartedAt;
@@ -4649,17 +4659,18 @@ async function handleAssistantPost(req: NextRequest) {
   let skuSuggestion: Awaited<ReturnType<typeof closeSkuSuggestion>> = null;
   if (pageProductsForCart.length) {
     searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
-  } else if (aedAccessorySkus.length) {
+  } else if (aedAccessorySkus.length || lcsuCanisterSkus.length) {
+    const mappedSkus = aedAccessorySkus.length ? aedAccessorySkus : lcsuCanisterSkus;
     const skuProducts = (
       await Promise.all(
-        aedAccessorySkus.map(async (sku) => {
+        mappedSkus.map(async (sku) => {
           const matches = await searchBySKU(sku);
           return matches;
         })
       )
     ).flat();
     searchResult = skuProducts.length
-      ? { products: skuProducts, found: skuProducts.length, searchQuery: aedAccessorySkus.join(", "), language }
+      ? { products: skuProducts, found: skuProducts.length, searchQuery: mappedSkus.join(", "), language }
       : await searchProducts({ query: searchQuery, language, limit: 8 });
   } else if (skuCandidates.length) {
     const skuProducts = (
