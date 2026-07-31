@@ -1303,7 +1303,9 @@ function hasProductWordsBeyondSku(text: string, skuCandidates: string[]) {
 
 function aedAccessorySkuHints(text: string) {
   const normalized = normalizeSearchText(text);
-  const asksForPads = /\b(pads?|padz|electrodes?|électrodes?)\b/i.test(text);
+  // Match after accent normalization so French "électrodes" follows the
+  // same device-specific path as English "electrodes".
+  const asksForPads = /\b(pads?|padz|electrodes?)\b/i.test(normalized);
   if (!asksForPads) return [];
 
   if (/\bzoll\b/.test(normalized) && /\baed\s+plus\b/.test(normalized)) {
@@ -1311,12 +1313,21 @@ function aedAccessorySkuHints(text: string) {
     return ["8900-0800-01", "8900-0810-01"];
   }
 
-  if (/\bphilips\b/.test(normalized) && /\bfrx\b/.test(normalized)) {
-    if (/\b(training|trainer)\b/.test(normalized)) return ["989803139291", "989803139271"];
+  // FRx is the Philips HeartStart FRx model. Customers routinely omit the
+  // manufacturer, so model + pads is enough to select its dedicated pads.
+  if (/\bfrx\b/.test(normalized) || /\bheartstart\s+frx\b/.test(normalized)) {
+    if (/\b(training|trainer|formation|entrainement)\b/.test(normalized)) return ["989803139291", "989803139271"];
     return ["989803139261"];
   }
 
   return [];
+}
+
+function isSpecificAedAccessoryRequest(text: string) {
+  const normalized = normalizeSearchText(text);
+  const asksForPads = /\b(pads?|padz|electrodes?)\b/.test(normalized);
+  const namesAed = /\b(?:aed|defibrillator|defibrillateur|heartstart|frx|fr3|zoll|lifepak|powerheart)\b/.test(normalized);
+  return asksForPads && namesAed;
 }
 
 function looksLikeQuoteDetailsReply(text: string) {
@@ -1800,7 +1811,11 @@ function shouldUseAiKeywordRecovery(input: {
   taughtContactIntent: boolean;
   taughtAvailabilityIntent: boolean;
 }) {
-  if (input.skuCandidates.length) return false;
+  // A specific AED model plus pads is a compatibility question, not an
+  // ordinary SKU lookup. Let the planner try to establish the relationship
+  // when the exact model is not yet in the catalog; it must still produce a
+  // matching EMRN item before anything is shown to the customer.
+  if (input.skuCandidates.length && !isSpecificAedAccessoryRequest(input.latest)) return false;
   if (isQuoteIntent(input.latest) || input.taughtQuoteIntent) return false;
   if (isOrderStatusIntent(input.latest) || input.taughtOrderStatusIntent) return false;
   if (isContactIntent(input.latest) || input.taughtContactIntent) return false;
@@ -4422,7 +4437,9 @@ async function handleAssistantPost(req: NextRequest) {
       ? await productsFromPageContext(pageContext, language)
       : [];
   const skuCandidates = extractSkuCandidates(latest);
-  const aedAccessorySkus = !skuCandidates.length ? aedAccessorySkuHints(latest) : [];
+  // Known AED model + pad combinations take precedence over a short model
+  // code that happens to look like a SKU (for example FRx).
+  const aedAccessorySkus = aedAccessorySkuHints(latest);
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !shouldUseProductDetailIntent && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
@@ -4640,10 +4657,11 @@ async function handleAssistantPost(req: NextRequest) {
           searchQuery,
           language,
         };
-      } else if (isReplacementPartRequest(latest)) {
+      } else if (isReplacementPartRequest(latest) || isSpecificAedAccessoryRequest(latest)) {
         // A failed replacement-part reference must not fall back to a broad
-        // keyword search. Broad recovery is how unrelated catalog products
-        // previously got presented as a replacement blade.
+        // keyword search. The same applies to a named AED: unrelated pads
+        // are not a safe substitute. The AI recovery below may still find an
+        // exact EMRN relationship; otherwise this becomes a sourcing quote.
         searchResult = { products: [], found: 0, searchQuery: skuCandidates.join(", "), language };
       } else if (hasProductWordsBeyondSku(latest, skuCandidates)) {
         searchQuery = searchQueryForLatest(messages, latest, []);
@@ -4687,7 +4705,13 @@ async function handleAssistantPost(req: NextRequest) {
   } else {
     products = rankRequestedColorProducts(products, `${latest} ${searchQuery}`);
   }
-  const intentFilteredProducts = productsMatchingExplicitIntent(products, latest, searchQuery);
+  // These are explicit, verified device-to-accessory mappings. Do not let a
+  // generic intent filter discard their exact catalog SKU, including when the
+  // customer's wording is French or otherwise does not contain an English
+  // product-type keyword.
+  const intentFilteredProducts = aedAccessorySkus.length
+    ? { products, suppressed: false }
+    : productsMatchingExplicitIntent(products, latest, searchQuery);
   let suppressedLowConfidenceProducts = intentFilteredProducts.suppressed;
   products = intentFilteredProducts.products;
 
@@ -4797,7 +4821,7 @@ async function handleAssistantPost(req: NextRequest) {
   if (explicitPartProductSearch) {
     await tryAiKeywordRecovery("named device replacement-part search");
   }
-  if (weakProductSearchResult(products, latest, searchQuery)) {
+  if (!aedAccessorySkus.length && weakProductSearchResult(products, latest, searchQuery)) {
     products = [];
     suppressedLowConfidenceProducts = true;
     await tryAiKeywordRecovery("weak product search result");
