@@ -199,9 +199,17 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
   if (!normalizedQuery) return [];
 
   return (await approvedKnowledgeMemory()).filter((item) => {
-    const itemText = `${item.query} ${item.correctSearchTerms || ""} ${item.note || ""}`;
+    // Intent-routing rules are evaluated separately. They must never supply
+    // product SKUs or search terms to a product lookup.
+    if (normalizeMemoryType(item.type) === "intent_route") return false;
+
+    // Notes are operator context, not matching evidence. Including them made
+    // a broad word from an old note capable of pulling an unrelated product
+    // family into a new customer search.
+    const itemText = `${item.query} ${item.correctSearchTerms || ""}`;
     if (hasFamilyConflict(normalizedQuery, itemText)) return false;
     if (hasProductFormatConflict(normalizedQuery, itemText)) return false;
+    if (hasInsufficientProductOverlap(normalizedQuery, itemText)) return false;
 
     const normalizedItemQuery = normalizeSearchText(item.query);
     if (normalizedItemQuery && (normalizedQuery.includes(normalizedItemQuery) || normalizedItemQuery.includes(normalizedQuery))) {
@@ -209,6 +217,20 @@ export async function matchingApprovedKnowledgeForQuery(query: string) {
     }
     return hasMeaningfulOverlap(normalizedQuery, itemText);
   });
+}
+
+function hasInsufficientProductOverlap(normalizedQuery: string, itemText: string) {
+  const queryTerms = significantTerms(normalizedQuery)
+    .filter((term) => !/^(need|want|looking|find|show|tell|please|used|using|use|used|have|does|do|can|will|would|should|size|dimensions?|measurement|width|height|depth|length|capacity|unit|units)$/.test(term));
+  const itemTerms = new Set(significantTerms(normalizeSearchText(itemText)));
+  if (queryTerms.length < 2) return false;
+
+  // A taught product rule must share at least two identifying terms with a
+  // newly named product. This keeps "Laerdal Compact Suction Unit" from
+  // matching a rule for "Laerdal Little Junior QCPR" merely because both say
+  // Laerdal, while preserving exact family/SKU aliases such as Philips FRx.
+  const shared = new Set(queryTerms.filter((term) => itemTerms.has(term)));
+  return shared.size < 2;
 }
 
 export async function taughtIntentRouteForQuery(query: string): Promise<KnowledgeIntentRoute | null> {

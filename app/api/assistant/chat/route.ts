@@ -954,6 +954,15 @@ function isContextProductSelectionReply(text: string) {
     /^\s*(?:add\s+(?:to\s+(?:my\s+)?)?(?:cart|catt|cartt|crt)|add\s+it\s+to\s+(?:my\s+)?(?:cart|catt|cartt|crt)|add\s+this\s+to\s+(?:my\s+)?(?:cart|catt|cartt|crt)|buy\s+it|purchase\s+it)\s*$/i.test(text);
 }
 
+function isUnnamedProductFollowUp(text: string) {
+  if (isContextProductSelectionReply(text)) return true;
+  const namedTerms = normalizeSearchText(cleanProductQuery(text))
+    .split(/\s+/)
+    .filter((term) => term.length >= 3 || /\d/.test(term))
+    .filter((term) => !/^(what|which|how|many|much|does|do|is|are|can|could|would|will|with|for|from|about|the|and|this|that|these|those|it|them|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|include|included|comes|come|hold|holds|fit|fits|work|works|compatible|compatibility|part|parts|replacement|replacements|accessory|accessories|unit|units|centimeter|centimeters|centimetre|centimetres|inch|inches|cm|mm)$/.test(term));
+  return namedTerms.length === 0;
+}
+
 function isGenericContextProductReply(text: string) {
   const normalized = String(text || "").toLowerCase();
   if (!/\b(it|this|that|the item|the product|ce produit|cet article)\b/i.test(normalized)) return false;
@@ -1261,6 +1270,13 @@ function cleanProductQuery(text: string) {
     // conversational wrapper (for example "what size is the g3 responder").
     .replace(/^\s*(?:what\s+(?:size|dimensions?|measurements?|capacity|colour|color|details?|specifications?|specs?|features?)\s+(?:is|are|of|for)\s+(?:the\s+)?|how\s+(?:big|large|wide|tall|long|heavy)\s+(?:is|are)\s+(?:the\s+)?|(?:tell\s+me\s+)?(?:the\s+)?(?:size|dimensions?)\s+(?:of|for)\s+(?:the\s+)?)/i, "")
     .replace(/\b(no,?\s+)?(do you have|do have|do u have|so you have|you have|do you carry|can you find|find me|find|search for|search|show me|how about|what about|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|i would like|we would like|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
+    // For a part described in relation to a named device, put the device
+    // family first so catalog search can retrieve the matching part.
+    .replace(/^\s*(.+?)\s+(?:that\s+)?(?:is\s+)?used\s+(?:on|with|for)\s+(?:the\s+)?(.+?)\s*$/i, "$2 $1")
+    // Manufacturer wording and EMRN's catalog name for the same device.
+    // This is a catalog alias (not a one-off answer) so every question about
+    // its canisters, filters, bags, or stands searches the correct family.
+    .replace(/\blaerdal\s+compact\s+suction\s+unit\s*(?:\(?\s*lcsu\s*[- ]?4\s*\)?)?/gi, "LCSU 4")
     .replace(/\b(what|which)\s+((?:adult|pediatric|paediatric|replacement|training)\s+)?(pads?|padz|electrodes?)\s+(?:work|works|fit|fits|go|goes)\s+with\b/gi, "$1 $2$3 for ")
     .replace(/\b(no|so|a|an|the|some|product|products|item|items|please|pls|svp|un|une|des|le|la|les|produit|produits|to|also|add|buy|purchase|order|get|take)\b/gi, " ")
     .replace(/[?!.]+/g, " ")
@@ -1620,6 +1636,9 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   if (/\b(cushion|cushions|lumbar support)\b/.test(normalized)) {
     groups.push({ terms: ["cushion", "cushions", "lumbar"], field: "name_category" });
   }
+  if (/\b(canister|cannister|collection jar|suction container|suction canister)\b/.test(normalized)) {
+    groups.push({ terms: ["canister", "cannister", "collection jar", "suction container"], field: "name_category" });
+  }
   if (/\b(blood pressure cuff|bp cuff|nibp cuff|cuff|cuffs)\b/.test(normalized)) {
     groups.push({ terms: ["cuff", "cuffs", "nibp", "blood pressure"], field: "name_category" });
   }
@@ -1711,6 +1730,14 @@ function assistantRecoveryQueries(query: string) {
   const normalized = normalizeSearchText(query);
   const queries: string[] = [];
 
+  if (/\b(?:laerdal\s+)?compact\s+suction\s+unit\b/.test(normalized) || /\blcsu\s*[- ]?4\b/.test(normalized)) {
+    if (/\b(canister|cannister|collection jar|suction container)\b/.test(normalized)) {
+      queries.push("LCSU 4 canister");
+    } else {
+      queries.push("LCSU 4");
+    }
+  }
+
   if (
     /\b(face|facial|visage)\b/.test(normalized) &&
     /\b(vessels?|vascular|arter(?:y|ies)|veins?|blood vessels?|vaisseaux?|sanguins?|nerfs?)\b/.test(normalized) &&
@@ -1780,6 +1807,7 @@ function shouldUseAiKeywordRecovery(input: {
   if (isCartIntent(input.latest)) return false;
   if (isAvailabilityIntent(input.latest) || input.taughtAvailabilityIntent) return false;
   if (assistantRecoveryQueries(input.latest).length) return true;
+  if (explicitProductTypeGroups(input.latest).length) return true;
   return isProductSearchIntent(input.latest) || looksLikeSpecificProductSearch(input.latest) || looksLikePlainCatalogKeywordSearch(input.latest);
 }
 
@@ -2655,6 +2683,7 @@ function catalogProductMatchesRequestedType(question: string, product: CatalogPr
   if (questionType === "battery") return /\b(batter(?:y|ies)|batterie|batteries|pile|piles|lithium|alkaline|123a|cr123)\b/i.test(productText);
   if (questionType === "lung") return /\b(lungs?)\b/i.test(productText);
   if (questionType === "airway") return /\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(productText);
+  if (questionType === "canister") return /\b(canister|cannister|collection jar|suction container)\b/i.test(productText);
   return true;
 }
 
@@ -2832,6 +2861,7 @@ function productMatchesRequestedKnowledgeSku(query: string, product: CatalogProd
   if (key === "battery" && !/\b(batter(?:y|ies))\b/i.test(text)) return false;
   if (key === "airway" && !/\bairways?\b/i.test(text)) return false;
   if (key === "lung" && !/\blungs?\b/i.test(text)) return false;
+  if (key === "canister" && !/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return false;
   const asksTraining = /\b(training|trainer)\b/i.test(query);
   if (key === "pad" && asksTraining && !/\b(training|trainer)\b/i.test(text)) return false;
   if (key === "pad" && !asksTraining && /\b(training|trainer)\b/i.test(text)) return false;
@@ -2934,6 +2964,7 @@ function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
   const asksBattery = /\b(batter(?:y|ies))\b/.test(query);
   const asksOnsite = /\b(onsite|heartstart|hs1)\b/.test(query);
   const asksTorso = /\btorso\b/.test(query);
+  const asksCanister = /\b(canister|cannister|collection jar|suction container)\b/.test(query);
 
   const score = (product: CatalogProduct) => {
     const text = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.categories.join(" ")}`);
@@ -2948,6 +2979,8 @@ function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
     if (asksOnsite && /\bfr3\b/.test(text)) value -= 4500;
     if (asksTorso && /\bwith torso\b/.test(text)) value += 12000;
     if (asksTorso && /\bno torso\b/.test(text)) value -= 16000;
+    if (asksCanister && /\b(canister|cannister|collection jar|suction container)\b/.test(text)) value += 9000;
+    if (asksCanister && !/\b(canister|cannister|collection jar|suction container)\b/.test(text)) value -= 12000;
     return value;
   };
 
@@ -3224,6 +3257,7 @@ function requestedProductTypePattern(text: string) {
   if (/\b(lungs?)\b/i.test(text)) return /\b(lungs?)\b/i;
   if (/\b(pads?|electrodes?|électrodes?)\b/i.test(text)) return /\b(pads?|electrodes?|électrodes?)\b/i;
   if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return /\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i;
+  if (/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return /\b(canister|cannister|collection jar|suction container)\b/i;
   return null;
 }
 
@@ -3233,6 +3267,7 @@ function requestedProductTypeKey(text: string) {
   if (/\b(lungs?)\b/i.test(text)) return "lung";
   if (/\b(pads?|padz|electrodes?|électrodes?)\b/i.test(text)) return "pad";
   if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return "battery";
+  if (/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return "canister";
   return "";
 }
 
@@ -3461,7 +3496,10 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
     );
   }
 
-  if (/\b(return|returns|exchange|returnable|wrong item|damaged|damage|opened|used|special order|non-returnable)\b/i.test(text)) {
+  // "used with/on" is normal product language (for example, "a canister
+  // used with an LCSU"); it must not be mistaken for a return request.
+  if (/\b(return|returns|exchange|returnable|wrong item|non-returnable)\b/i.test(text) ||
+    (/\b(opened|used|damaged|damage|special order)\b/i.test(text) && /\b(return|returns|exchange|refund|send(?:ing)?\s+(?:it\s+)?back|bring(?:ing)?\s+(?:it\s+)?back)\b/i.test(text))) {
     return answer(
       `Returns require a return merchandise authorization number from Customer Service, and the RMA must be clearly written on the outside of the carton. Items are not returnable after 15 days from the date received. Shipping and handling are non-refundable, and return transport may be at your expense when the return is due to preference or customer error. Returns are not authorized for non-returnable website items, special/custom orders, discontinued items, items not in original packaging, damaged or non-saleable items, and injectable medication or pharmaceutical products. An 18% restocking fee may apply. If a shipment arrives damaged, note the damage on the delivery bill, have the driver sign it, take a photo, and contact EMRN. Details: ${link("Shipping and returns", shippingReturnsLink)}`,
       `Les retours nécessitent un numéro d’autorisation de retour du service client, et le RMA doit être clairement inscrit à l’extérieur de la boîte. Les articles ne sont pas retournables après 15 jours suivant la réception. Les frais de livraison/manutention ne sont pas remboursables, et le transport de retour peut être à vos frais si le retour est dû à une préférence ou erreur du client. Les retours ne sont pas autorisés pour les articles indiqués non retournables, commandes spéciales/personnalisées, articles discontinués, articles hors emballage original, endommagés ou non revendables, ni médicaments injectables ou produits pharmaceutiques. Des frais de restockage de 18 % peuvent s’appliquer. Si l’expédition arrive endommagée, notez les dommages sur le bon de livraison, faites signer le chauffeur, prenez une photo et contactez EMRN. Détails: ${link("Livraison et retours", shippingReturnsLink)}`
@@ -4104,7 +4142,13 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
-  const shouldUseProductDetailIntent = isProductDetailIntent(latest) && !looksLikePlainCatalogKeywordSearch(latest);
+  const explicitPartProductSearch =
+    explicitProductTypeGroups(latest).length > 0 &&
+    /\b(?:for|with|on|used\s+(?:with|on|for)|need|find|looking)\b/i.test(latest);
+  const shouldUseProductDetailIntent =
+    isProductDetailIntent(latest) &&
+    !looksLikePlainCatalogKeywordSearch(latest) &&
+    !explicitPartProductSearch;
 
   if (!extractSkuCandidates(latest).length && !shouldUseProductDetailIntent && !isProductSearchIntent(latest) && !looksLikeSpecificProductSearch(latest) && !isQuoteIntent(latest) && !taughtQuoteIntent && (!isAvailabilityIntent(latest) || isSiteInfoQuestion(latest))) {
     const faqAnswer = faqAnswerText(latest, language);
@@ -4406,7 +4450,10 @@ async function handleAssistantPost(req: NextRequest) {
     taughtQuoteIntent ||
     shouldContinuePriorQuoteFlow ||
     shouldContinueItemRequestFlow ||
-    (shouldUseProductDetailIntent && (!skuCandidates.length || isContextProductSelectionReply(latest))) ||
+    // A detail question only inherits the prior result when it is actually a
+    // follow-up ("what size is it?"). A newly named product must start a new
+    // catalog/AI search instead of inheriting unrelated prior SKUs.
+    (shouldUseProductDetailIntent && !skuCandidates.length && isUnnamedProductFollowUp(latest)) ||
     shouldCompareRememberedProducts ||
     shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
@@ -4690,7 +4737,10 @@ async function handleAssistantPost(req: NextRequest) {
     const plan = aiKeywordPlan;
     if (plan && ["product_search", "product_question"].includes(plan.intent) && plan.searchTerms.length) {
       aiKeywordPlannerReason = plan.reason;
-      const plannedQueries = catalogPlanQueries(plan, latest);
+      const plannedQueries = Array.from(new Set([
+        ...assistantRecoveryQueries(latest),
+        ...catalogPlanQueries(plan, latest),
+      ]));
       aiKeywordRecoveryAttemptedQueries = plannedQueries;
       for (const plannedQuery of plannedQueries) {
         const plannedResult = await searchProducts({ query: plannedQuery, language, limit: 8 });
@@ -4739,6 +4789,13 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (suppressedLowConfidenceProducts) {
     await tryAiKeywordRecovery("suppressed low-confidence product matches");
+  }
+  // A named device plus a requested replacement part is often expressed with
+  // a manufacturer family name that differs from EMRN's SKU/name. Ask the
+  // planner to resolve that relationship before displaying merely related
+  // parts (for example a Compact Suction Unit canister vs any canister).
+  if (explicitPartProductSearch) {
+    await tryAiKeywordRecovery("named device replacement-part search");
   }
   if (weakProductSearchResult(products, latest, searchQuery)) {
     products = [];
