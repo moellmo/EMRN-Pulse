@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCart, normalizeCommonSearchTypos, removeMcpCartItem, searchBySKU, searchProducts, skuMatchesWithConfiguredAffixes, updateMcpCartItem } from "@/lib/assistant/catalog";
 import { createB2BQuoteCheckout, lookupB2BInvoice, lookupB2BQuote } from "@/lib/assistant/b2b";
 import { logAnalyticsEvent, logQuoteRequest, logSupportRequest } from "@/lib/assistant/analytics";
-import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendSupportEmail } from "@/lib/assistant/email";
+import { sendOrderStatusEmail, sendQuoteLinkEmail, sendQuoteRequestEmail, sendQuoteRequestReceiptEmail, sendSupportEmail, sendSupportReceiptEmail } from "@/lib/assistant/email";
 import { allowsMultipleCartItems, buildOrderStatusDraft, buildQuoteDraft, buildSupportDraft, extractOrdinalSelection, extractQuantity, extractSkuCandidates, hasExplicitQuantity, inferSearchQuery, isAccountIntent, isAvailabilityIntent, isCartIntent, isContactIntent, isFindProductPrompt, isMedicalAdviceRequest, isNegativeSearchFeedback, isOrderStatusIntent, isProductCapabilityIntent, isProductDetailIntent, isProductSearchIntent, isQuickActionPrompt, isQuoteIntent, isSupportYes, priorAssistantRequestedQuoteDetails, quantityForProductSelection, selectProductsForCart } from "@/lib/assistant/intent";
 import { detectCustomerLanguage } from "@/lib/assistant/language";
 import { getOrderDetails, getOrderStatus, getRecentOrdersByEmail } from "@/lib/assistant/orders";
@@ -3832,9 +3832,13 @@ async function handleAssistantPost(req: NextRequest) {
         summary: supportSummaryFromMessages(messages),
       };
       const supportEmailResult = await sendSupportEmail(supportRequest);
+      const supportReceiptResult = supportEmailResult.sent
+        ? await sendSupportReceiptEmail(supportRequest)
+        : null;
       await runAssistantSideEffects("support request", [
         logSupportRequest(supportRequest),
         Promise.resolve(supportEmailResult),
+        Promise.resolve(supportReceiptResult),
         logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
       ]);
       return new Response(
@@ -4429,9 +4433,13 @@ async function handleAssistantPost(req: NextRequest) {
         summary: supportSummaryFromMessages(messages),
       };
       const supportEmailResult = await sendSupportEmail(supportRequest);
+      const supportReceiptResult = supportEmailResult.sent
+        ? await sendSupportReceiptEmail(supportRequest)
+        : null;
       await runAssistantSideEffects("support request", [
         logSupportRequest(supportRequest),
         Promise.resolve(supportEmailResult),
+        Promise.resolve(supportReceiptResult),
         logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt }),
       ]);
       return new Response(
@@ -5173,9 +5181,13 @@ async function handleAssistantPost(req: NextRequest) {
       }
 
       const quoteEmailResult = await sendQuoteRequestEmail(draft.request);
+      const quoteReceiptResult = quoteEmailResult.sent
+        ? await sendQuoteRequestReceiptEmail(draft.request)
+        : null;
       await runAssistantSideEffects("quote request", [
         logQuoteRequest(draft.request),
         Promise.resolve(quoteEmailResult),
+        Promise.resolve(quoteReceiptResult),
         logAnalyticsEvent({ type: "quote_request", sessionId, language, query: searchQuery, createdAt }),
       ]);
       const quoteSentAnswer = quoteEmailResult.sent

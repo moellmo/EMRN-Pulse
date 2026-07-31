@@ -140,6 +140,41 @@ export async function sendQuoteRequestEmail(request: QuoteRequest): Promise<Emai
   });
 }
 
+export async function sendQuoteRequestReceiptEmail(request: QuoteRequest): Promise<EmailDeliveryResult> {
+  const isFrench = request.language === "fr";
+  return sendEmail({
+    to: request.email,
+    subject: isFrench ? "EMRN — demande de devis reçue" : "EMRN — Quote request received",
+    text: isFrench
+      ? [
+          `Bonjour ${request.name},`,
+          "",
+          "Nous avons reçu votre demande de devis et notre équipe la révisera sous peu.",
+          "",
+          "Articles demandés:",
+          ...request.products.map((item) => `- ${item.quantity} x ${item.name}${item.sku ? ` (SKU ${item.sku})` : ""}`),
+          "",
+          "Si vous devez ajouter une quantité, un SKU, une photo ou une échéance, répondez directement à ce courriel.",
+          "",
+          "Merci,",
+          "EMRN Medical Supplies",
+        ].join("\n")
+      : [
+          `Hello ${request.name},`,
+          "",
+          "We received your quote request and our team will review it shortly.",
+          "",
+          "Requested items:",
+          ...request.products.map((item) => `- ${item.quantity} x ${item.name}${item.sku ? ` (SKU ${item.sku})` : ""}`),
+          "",
+          "If you need to add a quantity, SKU, photo, or deadline, reply directly to this email.",
+          "",
+          "Thank you,",
+          "EMRN Medical Supplies",
+        ].join("\n"),
+  });
+}
+
 export async function sendSupportEmail(request: SupportRequest): Promise<EmailDeliveryResult> {
   const summary = request.summary;
   return sendEmail({
@@ -180,6 +215,38 @@ export async function sendSupportEmail(request: SupportRequest): Promise<EmailDe
       "Conversation",
       ...request.conversation.map((message) => `${message.role.toUpperCase()}: ${message.content}`),
     ].join("\n"),
+  });
+}
+
+export async function sendSupportReceiptEmail(request: SupportRequest): Promise<EmailDeliveryResult> {
+  const isFrench = request.language === "fr";
+  const question = String(request.question || "").replace(/\s+/g, " ").trim().slice(0, 700);
+  return sendEmail({
+    to: request.email,
+    subject: isFrench ? "EMRN — demande de soutien reçue" : "EMRN — Support request received",
+    text: isFrench
+      ? [
+          `Bonjour ${request.name},`,
+          "",
+          "Nous avons reçu votre demande de soutien et notre équipe la révisera sous peu.",
+          question ? `Résumé: ${question}` : "",
+          "",
+          "Vous pouvez répondre directement à ce courriel pour ajouter des détails, un numéro de commande, un SKU ou des photos.",
+          "",
+          "Merci,",
+          "EMRN Medical Supplies",
+        ].filter(Boolean).join("\n")
+      : [
+          `Hello ${request.name},`,
+          "",
+          "We received your support request and our team will review it shortly.",
+          question ? `Summary: ${question}` : "",
+          "",
+          "Reply directly to this email if you need to add details, an order number, SKU, or photos.",
+          "",
+          "Thank you,",
+          "EMRN Medical Supplies",
+        ].filter(Boolean).join("\n"),
   });
 }
 
