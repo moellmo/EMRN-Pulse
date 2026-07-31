@@ -738,6 +738,7 @@ export function buildSupportDraft(
   const name =
     text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
+    contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
   const question =
     messages
