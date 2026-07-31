@@ -3809,6 +3809,14 @@ async function handleAssistantPost(req: NextRequest) {
     );
   }
 
+  const priorAssistantRequestedOrderStatus = messages
+    .slice(-4)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /order status request|order status in BigCommerce|email used for that order|protect the order details|suivi de commande|statut de commande|statut de la commande dans BigCommerce|courriel utilisé|courriel utilise|protéger les détails de la commande|proteger les details de la commande|order number/i.test(message.content)
+    );
+
   const priorAssistantAskedSupport = messages
     .slice(-3)
     .some(
@@ -3825,7 +3833,7 @@ async function handleAssistantPost(req: NextRequest) {
   // Quote collection also says "our team". Keep a quote reply in its own flow
   // rather than treating the customer's email/SKU as a new support request.
   const priorAssistantAskedQuoteDetails = priorAssistantRequestedQuoteDetails(messages);
-  if (!priorAssistantAskedQuoteDetails && priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
+  if (!priorAssistantAskedQuoteDetails && !priorAssistantRequestedOrderStatus && priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
     if (draft.request) {
       const supportRequest = {
@@ -3899,14 +3907,6 @@ async function handleAssistantPost(req: NextRequest) {
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
   }
-
-  const priorAssistantRequestedOrderStatus = messages
-    .slice(-4)
-    .some(
-      (message) =>
-        message.role === "assistant" &&
-        /order status request|order status in BigCommerce|email used for that order|protect the order details|suivi de commande|statut de commande|statut de la commande dans BigCommerce|courriel utilisé|courriel utilise|protéger les détails de la commande|proteger les details de la commande|order number/i.test(message.content)
-    );
 
   const looksLikeOrderDetailsReply =
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) || /\border\s*#?\s*\d{3,}\b|\b\d{3,}\b/i.test(latest);
@@ -4431,6 +4431,7 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (
     !priorAssistantAskedQuoteDetails &&
+    !priorAssistantRequestedOrderStatus &&
     priorAssistantAskedSupport &&
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) &&
     !isQuickActionPrompt(latest)
