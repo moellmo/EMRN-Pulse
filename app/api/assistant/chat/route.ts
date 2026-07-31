@@ -1330,6 +1330,12 @@ function isSpecificAedAccessoryRequest(text: string) {
   return asksForPads && namesAed;
 }
 
+function isAccessoryCatalogSearch(text: string) {
+  const normalized = normalizeSearchText(text);
+  return /\b(?:accessor(?:y|ies)|replacement parts?|spare parts?|conversion parts?|add ons?)\b/.test(normalized) &&
+    /\b(?:for|with|on|available|do you have|what|which|need|lcsu|laerdal|g3|aed|frx|zoll|lifepak)\b/.test(normalized);
+}
+
 function looksLikeQuoteDetailsReply(text: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return false;
@@ -2877,6 +2883,11 @@ function productMatchesRequestedKnowledgeSku(query: string, product: CatalogProd
   if (key === "airway" && !/\bairways?\b/i.test(text)) return false;
   if (key === "lung" && !/\blungs?\b/i.test(text)) return false;
   if (key === "canister" && !/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return false;
+  // When a canister capacity is specified, never expand it to another size
+  // just because both products fit the same suction unit. Without a capacity
+  // the approved rule may safely show every compatible canister option.
+  const requestedCapacity = normalizeSearchText(query).match(/\b(\d{2,4})\s*(?:ml|m l)\b/)?.[1];
+  if (key === "canister" && requestedCapacity && !new RegExp(`\\b${requestedCapacity}\\s*(?:ml|m l)\\b`, "i").test(text)) return false;
   const asksTraining = /\b(training|trainer)\b/i.test(query);
   if (key === "pad" && asksTraining && !/\b(training|trainer)\b/i.test(text)) return false;
   if (key === "pad" && !asksTraining && /\b(training|trainer)\b/i.test(text)) return false;
@@ -3297,6 +3308,17 @@ function productFamilyForPartsSearch(product: CatalogProduct) {
 function relatedPartQueries(product: CatalogProduct) {
   const family = productFamilyForPartsSearch(product);
   const normalized = `${product.name} ${product.parentName}`.toLowerCase();
+  if (/\b(?:lcsu\s*4|compact suction unit\s*4)\b/i.test(normalized)) {
+    return [
+      "LCSU 4 canister",
+      "LCSU 4 battery",
+      "LCSU 4 wire stand",
+      "LCSU 4 carry bag",
+      "LCSU 4 filter",
+      "LCSU 4 vacuum tube",
+      "LCSU 4 accessories",
+    ];
+  }
   if (/\b(statpacks?|g3\+?|load[\s-]?n[\s-]?go|g3500[46])\b/i.test(normalized)) {
     return [
       "statpacks g3 accessories",
@@ -3319,6 +3341,9 @@ function relatedPartQueries(product: CatalogProduct) {
 function isRelatedPartForProduct(part: CatalogProduct, baseProduct: CatalogProduct) {
   const base = `${baseProduct.name} ${baseProduct.parentName}`.toLowerCase();
   const partText = `${part.name} ${part.parentName} ${part.sku}`.toLowerCase();
+  if (/\b(?:lcsu\s*4|compact suction unit\s*4)\b/i.test(base)) {
+    return /\b(?:lcsu\s*4|compact suction unit\s*4|88610[05678]|88611[1356]|88612[35]|88006005)\b/i.test(partText);
+  }
   if (/\b(statpacks?|g3\+?|load[\s-]?n[\s-]?go|g3500[46])\b/i.test(base)) {
     return /\b(statpacks?|g3\+?|g3500[46]|oxygen module|shelving|module|pouch|insert|divider)\b/i.test(partText);
   }
@@ -4398,7 +4423,7 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if ((isAvailabilityIntent(latest) || taughtAvailabilityIntent) && !isResultFilterIntent(latest)) {
+  if ((isAvailabilityIntent(latest) || taughtAvailabilityIntent) && !isResultFilterIntent(latest) && !isAccessoryCatalogSearch(latest)) {
     const latestSkuCandidates = extractSkuCandidates(latest);
     const skuCandidates = latestSkuCandidates.length
       ? latestSkuCandidates
@@ -4543,7 +4568,7 @@ async function handleAssistantPost(req: NextRequest) {
   }
   const preSearchKnowledgeStartedAt = Date.now();
   const preSearchKnowledgeMatches =
-    !pageProductsForCart.length && !skuCandidates.length && !rememberedContextProducts.length
+    !pageProductsForCart.length && !skuCandidates.length && !rememberedContextProducts.length && !isAccessoryCatalogSearch(latest)
       ? await matchingApprovedKnowledgeForQuery(latest)
       : [];
   const preSearchKnowledgeMs = Date.now() - preSearchKnowledgeStartedAt;
