@@ -237,7 +237,7 @@ function priorAssistantRequestedQuoteLookup(messages: AssistantMessage[]) {
     .some(
       (message) =>
         message.role === "assistant" &&
-        /quote lookup|look up the quote|quote number|numéro du devis|numero du devis|devis/i.test(message.content)
+        /quote lookup|look up (?:the|your) quote|find (?:the|my|your) quote|send (?:me )?(?:the|your) quote number|quote number|numéro du devis|numero du devis|rechercher (?:le|mon|votre) devis|trouver (?:le|mon|votre) devis/i.test(message.content)
     );
 }
 
@@ -3916,6 +3916,10 @@ async function handleAssistantPost(req: NextRequest) {
     !isQuickActionPrompt(latest) &&
     (Boolean(standaloneQuoteNumberFromText(latest)) || Boolean(quoteNumberFromText(latest)) || Boolean(orderHistoryEmail(messages)));
   const shouldSendOrderStatusSupport = priorAssistantOfferedOrderStatusSupport(messages) && isAffirmative(latest);
+  // New-quote contact collection takes precedence over lookup routes. A name
+  // can naturally contain words such as "receipt" or "order", and an email
+  // must never cause Meri to retrieve a different customer's saved record.
+  const quoteRequestInProgress = priorAssistantAskedQuoteDetails;
 
   if (isCurrentCartQuestion(latest)) {
     return new Response(textStream(currentCartText(pageContext, language)), {
@@ -3923,7 +3927,7 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isInvoiceLookupIntent(latest) || shouldContinueInvoiceLookup) {
+  if (!quoteRequestInProgress && (isInvoiceLookupIntent(latest) || shouldContinueInvoiceLookup)) {
     const email = orderHistoryEmail(messages);
     const conversationText = messages.map((message) => message.content).join("\n");
     const orderNumber = orderNumberFromText(conversationText) || recentStandaloneOrderNumber(messages) || standaloneOrderNumberFromText(latest);
@@ -3955,7 +3959,10 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isQuotePurchaseIntent(latest)) {
+  // A customer replying with their name or email to a new quote request must
+  // stay in that draft flow. Otherwise a historical quote lookup can capture
+  // the reply and expose an unrelated saved quote.
+  if (isQuotePurchaseIntent(latest) && !quoteRequestInProgress) {
     const conversationText = messages.map((message) => message.content).join("\n");
     const quoteNumber = quoteNumberFromText(conversationText) || standaloneQuoteNumberFromText(latest) || recentAssistantQuoteNumber(messages);
     if (!quoteNumber) {
@@ -3987,7 +3994,8 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
-  if (isQuoteLookupIntent(latest) || shouldContinueQuoteLookup) {
+  const explicitQuoteLookup = isQuoteLookupIntent(latest);
+  if (explicitQuoteLookup || (shouldContinueQuoteLookup && !quoteRequestInProgress)) {
     const conversationText = messages.map((message) => message.content).join("\n");
     const quoteNumber = quoteNumberFromText(conversationText) || standaloneQuoteNumberFromText(latest);
     const email = orderHistoryEmail(messages);
@@ -4169,7 +4177,7 @@ async function handleAssistantPost(req: NextRequest) {
     }
   }
 
-  if (isOrderHistoryIntent(latest) || (priorAssistantRequestedOrderHistory(messages) && orderHistoryEmail(messages) && !isQuickActionPrompt(latest))) {
+  if (!quoteRequestInProgress && (isOrderHistoryIntent(latest) || (priorAssistantRequestedOrderHistory(messages) && orderHistoryEmail(messages) && !isQuickActionPrompt(latest)))) {
     const email = orderHistoryEmail(messages);
     if (!email) {
       return new Response(

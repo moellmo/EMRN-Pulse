@@ -571,7 +571,10 @@ function extractRequestedProductText(messages: AssistantMessage[]) {
         /\b(need|looking for|want|cherche|besoin|veux|voudrais|do you have|do you carry|avez-vous|avez vous|source|sourcing|find|get)\b/i.test(message)
     );
 
-  const requestedText = (quoteMessage || productMessages.filter((message) => !isGenericQuoteOnlyText(message)).at(-1) || "").replace(emailPattern, "").trim();
+  const requestedText = (quoteMessage || productMessages.filter((message) => !isGenericQuoteOnlyText(message)).at(-1) || "")
+    .replace(emailPattern, "")
+    .replace(/^.*?\b(?:quote|devis|soumission)\s+(?:for|pour)\s*/i, "")
+    .trim();
   if (isGenericQuoteOnlyText(requestedText)) return "";
   return requestedText;
 }
@@ -646,10 +649,18 @@ export function buildQuoteDraft(
     contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
   const company =
-    userText.match(/(?:company is|from|for|compagnie|entreprise)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||
+    userText.match(/(?:company\s*(?:is|:|-)?|organisation\s*(?:is|:|-)?|organization\s*(?:is|:|-)?|business\s*(?:is|:|-)?|compagnie\s*(?:est|:|-)?|entreprise\s*(?:est|:|-)?)\s+([A-Z0-9][A-Za-z0-9&.,' -]{1,80})/i)?.[1]?.trim() ||
     directReplyFor(messages, "company");
   const selectionText = quoteSelectionText(messages);
-  const fallbackQuantity = extractQuantity(selectionText);
+  // Model names frequently include numbers (for example "LCSU 4" and
+  // "300 ml"). Treat a number as a quote quantity only when the customer
+  // expresses one, rather than silently turning a model number into quantity.
+  const explicitQuantity =
+    selectionText.match(/\b(?:qty|quantity)\s*[:=]?\s*(\d{1,5})\b/i)?.[1] ||
+    selectionText.match(/\b(\d{1,5})\s*x\b/i)?.[1] ||
+    selectionText.match(/\b(?:need|want|require|looking for)\s+(\d{1,5})\s+(?:of\s+)?(?:the\s+)?[a-z]/i)?.[1] ||
+    "";
+  const fallbackQuantity = Number(explicitQuantity) || 1;
   const genericQuoteOnlySelection = isGenericQuoteOnlyText(selectionText);
   const offeredSkus = recentlyOfferedSkus(messages);
   const productPool =
@@ -663,7 +674,10 @@ export function buildQuoteDraft(
   const skuMatchedPool = requestedSkus.length
     ? productPool.filter((product) => requestedSkus.includes(product.sku.toUpperCase()))
     : productPool;
-  const selectedProducts = !genericQuoteOnlySelection && skuMatchedPool.length
+  // search results generated from a later name/email message must never be
+  // inserted into a quote if they do not actually match the requested item.
+  const productPoolMatchesRequest = requestedSkus.length > 0 || productPool.some((product) => scoreProductForText(selectionText, product) > 0);
+  const selectedProducts = !genericQuoteOnlySelection && skuMatchedPool.length && productPoolMatchesRequest
     ? selectProductsForRequest(selectionText, skuMatchedPool).slice(0, 8)
     : [];
   const selectedProductRows = Array.from(new Map(selectedProducts.map((product) => [product.sku.toUpperCase(), {

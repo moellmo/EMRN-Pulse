@@ -8,6 +8,7 @@ type EmailInput = {
   to: string;
   subject: string;
   text: string;
+  html?: string;
 };
 
 export type EmailDeliveryResult = {
@@ -56,6 +57,7 @@ async function sendEmail(input: EmailInput) {
             to: recipients,
             subject: input.subject,
             text: input.text,
+            ...(input.html ? { html: input.html } : {}),
             ...(replyTo ? { reply_to: replyTo } : {}),
           }),
           signal: AbortSignal.timeout(10000),
@@ -112,6 +114,49 @@ export async function sendAdminNotificationEmail(input: EmailInput): Promise<Ema
   return sendEmail(input);
 }
 
+function escapeHtml(value: string) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function receiptEmailHtml(input: {
+  title: string;
+  greeting: string;
+  intro: string;
+  detailTitle?: string;
+  detailHtml?: string;
+  closing: string;
+}) {
+  const publicSiteUrl = String(process.env.EMRN_PUBLIC_SITE_URL || "https://emrn-pulse-ih1i.vercel.app").replace(/\/+$/, "");
+  const meriLogo = `${publicSiteUrl}/emrn-pulse/meri-avatar.png`;
+  const emrnLogo = `${publicSiteUrl}/emrn-pulse/emrn-wordmark.svg`;
+  const detail = input.detailHtml
+    ? `<tr><td style="padding:0 32px 24px;"><div style="border:1px solid #e8e3e0;border-radius:10px;background:#fffaf9;padding:18px 20px;"><p style="margin:0 0 10px;color:#5b4c4d;font:600 13px Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase;">${escapeHtml(input.detailTitle || "Details")}</p>${input.detailHtml}</div></td></tr>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f5f3f2;color:#302b2d;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f3f2;"><tr><td align="center" style="padding:28px 12px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(41,25,29,.12);">
+      <tr><td style="background:#c94f52;padding:20px 32px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
+        <td valign="middle"><img src="${escapeHtml(emrnLogo)}" width="177" alt="EMRN Medical Supplies" style="display:block;max-width:177px;height:auto;border:0;"></td>
+        <td align="right" valign="middle"><img src="${escapeHtml(meriLogo)}" width="44" height="44" alt="Meri, EMRN assistant" style="display:block;border:0;border-radius:50%;background:#fff;"></td>
+      </tr></table></td></tr>
+      <tr><td style="padding:32px 32px 14px;"><p style="margin:0 0 12px;color:#c94f52;font:600 13px Arial,sans-serif;letter-spacing:.07em;text-transform:uppercase;">Meri from EMRN</p><h1 style="margin:0;color:#302b2d;font-size:25px;line-height:1.25;">${escapeHtml(input.title)}</h1></td></tr>
+      <tr><td style="padding:4px 32px 24px;"><p style="margin:0 0 14px;font-size:16px;line-height:1.55;">${escapeHtml(input.greeting)}</p><p style="margin:0;font-size:16px;line-height:1.55;">${escapeHtml(input.intro)}</p></td></tr>
+      ${detail}
+      <tr><td style="padding:0 32px 32px;"><p style="margin:0;color:#514849;font-size:15px;line-height:1.55;">${escapeHtml(input.closing)}</p></td></tr>
+      <tr><td style="border-top:1px solid #ece8e6;padding:20px 32px;color:#766d6e;font-size:12px;line-height:1.5;">EMRN Medical Supplies &middot; Equipment Medical Rive Nord<br><a href="https://emrn.ca" style="color:#c94f52;text-decoration:underline;">emrn.ca</a></td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+}
+
 export async function sendQuoteRequestEmail(request: QuoteRequest): Promise<EmailDeliveryResult> {
   return sendEmail({
     to: quoteEmail,
@@ -142,6 +187,8 @@ export async function sendQuoteRequestEmail(request: QuoteRequest): Promise<Emai
 
 export async function sendQuoteRequestReceiptEmail(request: QuoteRequest): Promise<EmailDeliveryResult> {
   const isFrench = request.language === "fr";
+  const productsText = request.products.map((item) => `- ${item.quantity} x ${item.name}${item.sku ? ` (SKU ${item.sku})` : ""}`).join("\n");
+  const productsHtml = `<ul style="margin:0;padding-left:20px;color:#302b2d;font-size:15px;line-height:1.6;">${request.products.map((item) => `<li>${escapeHtml(`${item.quantity} x ${item.name}${item.sku ? ` (SKU ${item.sku})` : ""}`)}</li>`).join("")}</ul>`;
   return sendEmail({
     to: request.email,
     subject: isFrench ? "EMRN — demande de devis reçue" : "EMRN — Quote request received",
@@ -152,7 +199,7 @@ export async function sendQuoteRequestReceiptEmail(request: QuoteRequest): Promi
           "Nous avons reçu votre demande de devis et notre équipe la révisera sous peu.",
           "",
           "Articles demandés:",
-          ...request.products.map((item) => `- ${item.quantity} x ${item.name}${item.sku ? ` (SKU ${item.sku})` : ""}`),
+          productsText,
           "",
           "Si vous devez ajouter une quantité, un SKU, une photo ou une échéance, répondez directement à ce courriel.",
           "",
@@ -165,13 +212,25 @@ export async function sendQuoteRequestReceiptEmail(request: QuoteRequest): Promi
           "We received your quote request and our team will review it shortly.",
           "",
           "Requested items:",
-          ...request.products.map((item) => `- ${item.quantity} x ${item.name}${item.sku ? ` (SKU ${item.sku})` : ""}`),
+          productsText,
           "",
           "If you need to add a quantity, SKU, photo, or deadline, reply directly to this email.",
           "",
           "Thank you,",
           "EMRN Medical Supplies",
         ].join("\n"),
+    html: receiptEmailHtml({
+      title: isFrench ? "Demande de devis reçue" : "Quote request received",
+      greeting: isFrench ? `Bonjour ${request.name},` : `Hello ${request.name},`,
+      intro: isFrench
+        ? "Nous avons reçu votre demande de devis. Notre équipe la révisera sous peu."
+        : "We received your quote request. Our team will review it shortly.",
+      detailTitle: isFrench ? "Articles demandés" : "Requested items",
+      detailHtml: productsHtml,
+      closing: isFrench
+        ? "Pour ajouter une quantité, un SKU, une photo ou une échéance, répondez directement à ce courriel."
+        : "To add a quantity, SKU, photo, or deadline, reply directly to this email.",
+    }),
   });
 }
 
@@ -247,6 +306,22 @@ export async function sendSupportReceiptEmail(request: SupportRequest): Promise<
           "Thank you,",
           "EMRN Medical Supplies",
         ].filter(Boolean).join("\n"),
+    html: receiptEmailHtml({
+      title: isFrench ? "Demande de soutien reçue" : "Support request received",
+      greeting: isFrench ? `Bonjour ${request.name},` : `Hello ${request.name},`,
+      intro: isFrench
+        ? "Nous avons reçu votre demande de soutien. Notre équipe la révisera sous peu."
+        : "We received your support request. Our team will review it shortly.",
+      ...(question
+        ? {
+            detailTitle: isFrench ? "Votre demande" : "Your request",
+            detailHtml: `<p style="margin:0;color:#302b2d;font-size:15px;line-height:1.6;">${escapeHtml(question)}</p>`,
+          }
+        : {}),
+      closing: isFrench
+        ? "Pour ajouter des détails, un numéro de commande, un SKU ou des photos, répondez directement à ce courriel."
+        : "To add details, an order number, SKU, or photos, reply directly to this email.",
+    }),
   });
 }
 

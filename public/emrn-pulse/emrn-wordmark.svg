@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="444" height="116" viewBox="0 0 444 116" role="img" aria-labelledby="title">
+  <title>EMRN Medical Supplies</title>
+  <rect width="444" height="116" fill="none"/>
+  <path fill="#ffffff" d="M7 11h18l13 19 13-19h18L48 45l23 33H52L38 57 24 78H5l23-33z"/>
+  <path fill="#ffffff" d="M79 11h58v14H97v12h35v14H97v13h41v14H79zM147 11h17l20 30 20-30h17v67h-18V41l-19 29-19-29v37h-18zM231 11h27c24 0 40 13 40 33s-16 34-40 34h-27zm26 52c13 0 22-7 22-19s-9-19-22-19h-8v38zM307 11h18l33 40V11h18v67h-17l-34-41v41h-18z"/>
+  <path fill="#ffffff" d="M84 96h268v4H84z" opacity=".85"/>
+  <text x="84" y="111" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="13" letter-spacing="1.3">ÉQUIPEMENT MÉDICAL RIVE NORD</text>
+</svg>
