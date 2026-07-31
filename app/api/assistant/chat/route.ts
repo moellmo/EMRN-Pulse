@@ -3814,11 +3814,13 @@ async function handleAssistantPost(req: NextRequest) {
     .some(
       (message) =>
         message.role === "assistant" &&
-        /support team|equipe de support|équipe de support|send a message to our team|send this to support|send it to support|envoyer.*support|nom, votre courriel et votre question|name, email, and question/i.test(
+        /support team|equipe de support|équipe de support|send (?:a message|this|it)?\s*to our team|send this to support|send it to support|envoyer.*support|nom, votre courriel et votre question|name, email, and question|still need:.*(?:name|email|question)|il me manque:.*(?:nom|courriel|question)/i.test(
           message.content
         )
     );
-  const looksLikeSupportDetailsReply = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest);
+  const looksLikeSupportDetailsReply =
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) ||
+    /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}$/.test(latest.trim());
 
   // Quote collection also says "our team". Keep a quote reply in its own flow
   // rather than treating the customer's email/SKU as a new support request.

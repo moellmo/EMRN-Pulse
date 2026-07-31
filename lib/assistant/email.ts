@@ -133,7 +133,7 @@ function receiptEmailHtml(input: {
 }) {
   const publicSiteUrl = String(process.env.EMRN_PUBLIC_SITE_URL || "https://emrn-pulse-ih1i.vercel.app").replace(/\/+$/, "");
   const meriLogo = `${publicSiteUrl}/emrn-pulse/meri-avatar.png`;
-  const emrnLogo = `${publicSiteUrl}/emrn-pulse/emrn-wordmark.svg`;
+  const emrnLogo = `${publicSiteUrl}/emrn-pulse/emrn-logo.jpg`;
   const detail = input.detailHtml
     ? `<tr><td style="padding:0 32px 24px;"><div style="border:1px solid #e8e3e0;border-radius:10px;background:#fffaf9;padding:18px 20px;"><p style="margin:0 0 10px;color:#5b4c4d;font:600 13px Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase;">${escapeHtml(input.detailTitle || "Details")}</p>${input.detailHtml}</div></td></tr>`
     : "";
@@ -143,8 +143,8 @@ function receiptEmailHtml(input: {
 <body style="margin:0;padding:0;background:#f5f3f2;color:#302b2d;font-family:Arial,Helvetica,sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f3f2;"><tr><td align="center" style="padding:28px 12px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(41,25,29,.12);">
-      <tr><td style="background:#c94f52;padding:20px 32px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-        <td valign="middle"><img src="${escapeHtml(emrnLogo)}" width="177" alt="EMRN Medical Supplies" style="display:block;max-width:177px;height:auto;border:0;"></td>
+      <tr><td style="background:#ffffff;border-bottom:5px solid #c94f52;padding:16px 32px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
+        <td valign="middle"><img src="${escapeHtml(emrnLogo)}" width="255" alt="EMRN Medical Supplies" style="display:block;max-width:255px;height:auto;border:0;"></td>
         <td align="right" valign="middle"><img src="${escapeHtml(meriLogo)}" width="44" height="44" alt="Meri, EMRN assistant" style="display:block;border:0;border-radius:50%;background:#fff;"></td>
       </tr></table></td></tr>
       <tr><td style="padding:32px 32px 14px;"><p style="margin:0 0 12px;color:#c94f52;font:600 13px Arial,sans-serif;letter-spacing:.07em;text-transform:uppercase;">Meri from EMRN</p><h1 style="margin:0;color:#302b2d;font-size:25px;line-height:1.25;">${escapeHtml(input.title)}</h1></td></tr>

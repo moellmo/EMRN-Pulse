@@ -741,9 +741,15 @@ export function buildSupportDraft(
     directReplyFor(messages, "name");
   const question =
     messages
-      .filter((message) => message.role === "user" && !isSupportYes(message.content))
-      .at(-1)?.content ||
-    messages.filter((message) => message.role === "user").at(-1)?.content ||
+      .filter((message) => message.role === "user")
+      .map((message) => message.content.trim())
+      .find((message) =>
+        Boolean(message) &&
+        !isSupportYes(message) &&
+        !emailPattern.test(message) &&
+        !plainNameCandidate(message) &&
+        !/^(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\b/i.test(message)
+      ) ||
     "";
   const missing = [!name ? "name" : "", !email ? "email" : "", !question ? "question" : ""].filter(Boolean);
 
