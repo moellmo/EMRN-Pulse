@@ -1676,6 +1676,25 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   if (/\b(canister|cannister|collection jar|suction container|suction canister)\b/.test(normalized)) {
     groups.push({ terms: ["canister", "cannister", "collection jar", "suction container"], field: "name_category" });
   }
+  // Product type and active ingredient are both mandatory here. A broad
+  // search service may return a result set for an otherwise unmatched query;
+  // do not turn that into an answer that recommends a syringe, brush, or
+  // flashlight to someone who asked for sterile swabs.
+  if (/\b(swabs?|applicators?)\b/.test(normalized)) {
+    groups.push({ terms: ["swab", "swabs", "applicator", "applicators"], field: "name_category" });
+  }
+  if (/\bchlorhexidine\b/.test(normalized)) {
+    groups.push({ terms: ["chlorhexidine"], field: "any" });
+  }
+  if (/\b(?:ecg|ekg|electrocardiogram)\b/.test(normalized) && /\b(?:paper|printout|recording)\b/.test(normalized)) {
+    groups.push({ terms: ["ecg", "ekg", "electrocardiogram"], field: "any" });
+    groups.push({ terms: ["paper", "recording paper", "thermal paper"], field: "name_category" });
+  }
+  if (/\bkangaroo\b/.test(normalized) && /\b(?:feeding|enteral)\b/.test(normalized) && /\bbags?\b/.test(normalized)) {
+    groups.push({ terms: ["kangaroo"], field: "any" });
+    groups.push({ terms: ["feeding", "enteral"], field: "any" });
+    groups.push({ terms: ["bag", "bags"], field: "name_category" });
+  }
   if (/\b(blood pressure cuff|bp cuff|nibp cuff|cuff|cuffs)\b/.test(normalized)) {
     groups.push({ terms: ["cuff", "cuffs", "nibp", "blood pressure"], field: "name_category" });
   }
@@ -3435,6 +3454,16 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
   const answer = (en: string, fr: string) => (language === "fr" ? fr : en);
   const link = (label: string, url: string) => `[${label}](${url})`;
 
+  if (
+    /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn)\b/i.test(text) ||
+    /\b(o[uù] est emrn|o[uù].*etes?.*situ[eé]s?|adresse d.?emrn|adresse.*emrn|emplacement d.?emrn|localisation d.?emrn|visiter emrn)\b/i.test(text)
+  ) {
+    return answer(
+      `EMRN is located at **295 Av. Lafleur, LaSalle, QC H8R 3H5, Canada**. We also ship medical supplies across Canada. Is there anything else I can help with, or would you like me to send a question to our support team?`,
+      `EMRN est situé au **295, av. Lafleur, LaSalle (Québec) H8R 3H5, Canada**. Nous expédions aussi des fournitures médicales partout au Canada. Puis-je vous aider avec autre chose, ou souhaitez-vous que j’envoie une question à notre équipe de support?`
+    );
+  }
+
   if (/\b(must|have to|required to|need to|buy|purchase|order)\b.{0,50}\b(?:online|on the website)\b|\b(?:acheter|commander|oblig[eé]e?|dois)\b.{0,50}\b(?:en ligne|sur le site)\b/i.test(text)) {
     return answer(
       `No. You do not have to buy online. I can help identify the product and send a quote or sourcing request by email through EMRN. If you want to order online, eligible products can be purchased from their product pages.`,
@@ -3622,7 +3651,8 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 }
 
 function isSiteInfoQuestion(text: string) {
-  return /\b(business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher|online|en ligne|acheter|commander)\b/i.test(text) ||
+  return /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn|business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher|online|en ligne|acheter|commander)\b/i.test(text) ||
+    /\b(o[uù] est emrn|o[uù].*etes?.*situ[eé]s?|adresse d.?emrn|adresse.*emrn|emplacement d.?emrn|localisation d.?emrn|visiter emrn)\b/i.test(text) ||
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
 }
 
@@ -4850,7 +4880,13 @@ async function handleAssistantPost(req: NextRequest) {
         };
         const plannedProducts = productsMatchingSearchPlan(plannedResult.products, plan, latest);
         const filtered = productsMatchingExplicitIntent(plannedProducts, latest, plannedQuery);
-        const candidateProducts = filtered.products.length ? filtered.products : plannedProducts;
+        // An AI-rewritten query must never bypass an explicit product-type
+        // requirement from the customer's original request. For example,
+        // "Kangaroo feeding bags" is not satisfied by feeding pumps or an
+        // unrelated carry bag merely because the recovery query found them.
+        // Keep looking for an exact catalog match; otherwise the normal
+        // no-match/sourcing path is safer than a false recommendation.
+        const candidateProducts = filtered.suppressed ? [] : filtered.products;
         if (candidateProducts.length) {
           products = candidateProducts;
           searchQuery = plannedQuery;
