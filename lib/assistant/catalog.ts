@@ -1857,7 +1857,7 @@ export async function searchProducts(input: ProductSearchInput) {
   };
 }
 
-export async function searchBySKU(sku: string) {
+export async function searchBySKU(sku: string, options: { allowFallback?: boolean } = {}) {
   const variants = skuSearchVariants(sku);
   let results: TypesenseSearchResult[] = [];
   try {
@@ -1913,6 +1913,11 @@ export async function searchBySKU(sku: string) {
       ? enrichProductsFromBigCommerce(typesenseProducts)
       : typesenseProducts;
   }
+
+  // Exact-reference flows (especially replacement parts) must not wait on
+  // several broad fallback services once the current catalog index says the
+  // SKU is absent. Their caller will use the bounded sourcing path instead.
+  if (options.allowFallback === false) return [];
 
   const smartSearchProducts = await searchSmartSearchApiBySKU(sku);
   if (smartSearchProducts.length) return smartSearchProducts;

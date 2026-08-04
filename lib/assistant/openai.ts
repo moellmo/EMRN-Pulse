@@ -726,14 +726,25 @@ export async function planCatalogSearch({
     max_output_tokens: 450,
   };
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4500);
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    console.warn("[EMRN Pulse] OpenAI catalog search planner timed out or failed", error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     console.error("[EMRN Pulse] OpenAI catalog search planner failed", response.status, await response.text());
@@ -763,12 +774,14 @@ export async function lookupExternalKnowledge({
   language,
   sessionId,
   query,
+  timeoutMs = 7500,
 }: {
   messages: AssistantMessage[];
   products: CatalogProduct[];
   language: AssistantLanguage;
   sessionId?: string;
   query?: string;
+  timeoutMs?: number;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
@@ -838,14 +851,25 @@ export async function lookupExternalKnowledge({
     max_output_tokens: 900,
   };
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    console.warn("[EMRN Pulse] OpenAI external lookup timed out or failed", error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     console.error("[EMRN Pulse] OpenAI external lookup failed", response.status, await response.text());

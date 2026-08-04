@@ -1816,11 +1816,37 @@ function productsMatchingExplicitIntent(products: CatalogProduct[], latest: stri
       return group.terms.some((term) => target.includes(normalizeSearchText(term)));
     }) &&
       isExactReplacementPartProductMatch(product, `${latest} ${searchQuery}`) &&
+      productMatchesExplicitMeasuredRequirements(product, latest) &&
       (!isLcsuCanisterRequest(`${latest} ${searchQuery}`) || productMatchesLcsuCanisterRequest(product, `${latest} ${searchQuery}`));
   });
 
   if (matching.length) return { products: matching, suppressed: false };
   return { products: [] as CatalogProduct[], suppressed: true };
+}
+
+// An AI search can identify the right manufacturer item even when EMRN does
+// not carry that exact configuration.  In that case a vaguely similar EMRN
+// item must not be displayed as the match.  Keep every explicit measurement
+// from the customer's request as a hard requirement (capacity, volume, pack
+// size, dimensions, gauge, etc.).
+function productMatchesExplicitMeasuredRequirements(product: CatalogProduct, query: string) {
+  const requestedMeasurements = Array.from(
+    normalizeSearchText(query).matchAll(/\b(\d+(?:\.\d+)?)\s*(lb|lbs|pounds?|ml|l|liters?|litres?|cm|mm|inch|inches|in|ga|gauge)\b/g)
+  );
+  if (!requestedMeasurements.length) return true;
+
+  const productText = normalizeSearchText(`${product.name} ${product.parentName} ${product.description} ${product.categories.join(" ")}`);
+  return requestedMeasurements.every((match) => {
+    const value = match[1];
+    const unit = match[2];
+    const aliases =
+      /^(lb|lbs|pounds?)$/.test(unit) ? "lb|lbs|pounds?" :
+      /^(l|liters?|litres?)$/.test(unit) ? "l|liters?|litres?" :
+      /^(inch|inches|in)$/.test(unit) ? "inch|inches|in" :
+      /^(ga|gauge)$/.test(unit) ? "ga|gauge|g" :
+      unit;
+    return new RegExp(`\\b${value}\\s*(?:${aliases})\\b`, "i").test(productText);
+  });
 }
 
 function isReplacementPartRequest(text: string) {
@@ -1962,6 +1988,11 @@ function shouldUseAiKeywordRecovery(input: {
   // reference inside a real product request (for example, "Acme 8210 masks")
   // needs the AI exact-match check; otherwise a different brand's coincidentally
   // similar number can be shown as the customer's requested item.
+  // A supplied replacement reference takes the direct exact-SKU path and,
+  // when it is not in EMRN, the single trusted sourcing lookup below. Running
+  // the catalog planner and its retry matrix first only delays that honest
+  // answer and can never make a related part an acceptable substitute.
+  if (isReplacementPartRequest(input.latest) && input.skuCandidates.length) return false;
   if (input.skuCandidates.length && !isSpecificAedAccessoryRequest(input.latest)) {
     return hasProductWordsBeyondSku(input.latest, input.skuCandidates);
   }
@@ -2743,6 +2774,8 @@ function filterProductsFromText(products: CatalogProduct[], text: string) {
     filtered = filtered.filter((product) => sizePattern.test(`${product.name} ${product.description}`));
   }
 
+  filtered = filtered.filter((product) => productMatchesExplicitMeasuredRequirements(product, text));
+
   return filtered;
 }
 
@@ -3125,7 +3158,9 @@ function productMatchesCustomerExactIdentifiers(product: CatalogProduct, latest:
 }
 
 function productMatchesRequestedExactProduct(product: CatalogProduct, plan: CatalogSearchPlan | null | undefined, latest: string) {
-  return productMatchesCustomerExactIdentifiers(product, latest) && (!plan || productMatchesExactSearchPlan(product, plan));
+  return productMatchesCustomerExactIdentifiers(product, latest) &&
+    productMatchesExplicitMeasuredRequirements(product, latest) &&
+    (!plan || productMatchesExactSearchPlan(product, plan));
 }
 
 function productsMatchingSearchPlan(products: CatalogProduct[], plan: CatalogSearchPlan, latest: string) {
@@ -3265,6 +3300,7 @@ function externalLookupProductMatches(lookup: ExternalKnowledgeLookup, products:
       const matches = sourceTerms.filter((term) => normalizedHaystack.includes(term));
       return matches.length >= Math.min(4, sourceTerms.length);
     })
+    .filter((product) => productMatchesExplicitMeasuredRequirements(product, [lookup.exactProductName, lookup.summary, ...lookup.searchTerms].join(" ")))
     .slice(0, 5);
 }
 
@@ -3292,19 +3328,26 @@ function externalLookupContextProductMatches(lookup: ExternalKnowledgeLookup, pr
 async function findEmrnProductsForExternalLookup(
   lookup: ExternalKnowledgeLookup,
   language: "en" | "fr" | "unknown",
-  contextProducts: CatalogProduct[] = []
+  contextProducts: CatalogProduct[] = [],
+  options: { exactReferenceOnly?: boolean } = {}
 ) {
   const partNumbers = externalLookupPartNumbers(lookup);
-  const terms = Array.from(
+  const allTerms = Array.from(
     new Set([
       ...externalLookupSearchTerms(lookup),
       ...partNumbers.map((part) => part.replace(/^0+/, "")),
       ...lookup.searchTerms.flatMap((term) => partNumbers.map((part) => `${term} ${part}`)),
       ...brandFamilyRecoveryTerms(lookup),
     ].map((term) => term.trim()).filter(Boolean))
-  ).slice(0, 18);
+  );
+  // For a supplied replacement reference, only an exact EMRN part/name match
+  // is useful. Searching every generated synonym risks a long wait and cannot
+  // justify offering a merely related component as a replacement.
+  const terms = options.exactReferenceOnly
+    ? Array.from(new Set([...partNumbers, lookup.exactProductName].map((term) => term.trim()).filter(Boolean))).slice(0, 3)
+    : allTerms.slice(0, 18);
   const skuProducts = (
-    await Promise.all(partNumbers.map((sku) => searchBySKU(sku)))
+    await Promise.all(partNumbers.map((sku) => searchBySKU(sku, { allowFallback: !options.exactReferenceOnly })))
   ).flat();
   const searchProductsResults = (
     await Promise.all(terms.map((term) => searchProducts({ query: term, language, limit: 8 })))
@@ -5172,13 +5215,20 @@ async function handleAssistantPost(req: NextRequest) {
     const skuProducts = (
       await Promise.all(
         skuCandidates.map(async (sku) => {
-          const matches = await searchBySKU(sku);
+          const matches = await searchBySKU(sku, {
+            allowFallback: !isReplacementPartRequest(latest),
+          });
           return matches;
         })
       )
     ).flat();
     if (skuProducts.length) {
       searchResult = { products: skuProducts, found: skuCandidates.length };
+    } else if (isReplacementPartRequest(latest)) {
+      // A near-SKU suggestion is not evidence that a replacement part is
+      // compatible. Skip that slow fuzzy lookup and move directly to the
+      // bounded trusted verification/sourcing path below.
+      searchResult = { products: [], found: 0, searchQuery: skuCandidates.join(", "), language };
     } else {
       skuSuggestion = await closeSkuSuggestion(skuCandidates, language);
       if (skuSuggestion) {
@@ -5189,7 +5239,7 @@ async function handleAssistantPost(req: NextRequest) {
           searchQuery,
           language,
         };
-      } else if (isReplacementPartRequest(latest) || isSpecificAedAccessoryRequest(latest)) {
+      } else if (isSpecificAedAccessoryRequest(latest)) {
         // A failed replacement-part reference must not fall back to a broad
         // keyword search. The same applies to a named AED: unrelated pads
         // are not a safe substitute. The AI recovery below may still find an
@@ -5768,12 +5818,18 @@ async function handleAssistantPost(req: NextRequest) {
         language,
         sessionId,
         query: latest,
+        // A missing explicit replacement reference must turn into a sourcing
+        // request quickly. The normal detail-question budget remains longer.
+        timeoutMs: isReplacementPartRequest(latest) && skuCandidates.length ? 4500 : undefined,
       });
       if (externalLookup) {
         // Even with no initial catalog hit, let the AI's exact brand/model/part
         // research drive a second EMRN lookup before saying the item is absent.
-        const recoveredProducts = (await findEmrnProductsForExternalLookup(externalLookup, language))
-          .filter((product) => productMatchesCustomerExactIdentifiers(product, latest));
+        const recoveredProducts = (await findEmrnProductsForExternalLookup(externalLookup, language, [], {
+          exactReferenceOnly: isReplacementPartRequest(latest) && skuCandidates.length > 0,
+        }))
+          .filter((product) => productMatchesCustomerExactIdentifiers(product, latest))
+          .filter((product) => productMatchesExplicitMeasuredRequirements(product, latest));
         const customerIdentifiers = customerSuppliedExactIdentifiers(latest);
         const lookupText = normalizeSearchText([
           externalLookup.exactProductName,
@@ -5797,6 +5853,24 @@ async function handleAssistantPost(req: NextRequest) {
           emrnMatchedSkus: recoveredProducts.map((product) => product.sku).filter(Boolean),
         });
         return new Response(textStream(externalAnswer), {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+      // The trusted lookup has a bounded response window. For a specific
+      // replacement reference, do not fall through to another unrelated
+      // suggestion/recovery sequence if that lookup cannot verify it in time.
+      // The safe and useful result is an immediate sourcing request.
+      if (isReplacementPartRequest(latest) && skuCandidates.length) {
+        const sourceAnswer = exactCatalogMatchUnavailableAnswer(latest, language);
+        await logPerformance("replacement_part_source_required", {
+          openAiMs: Date.now() - openAiStartedAt,
+          openAiUsed: true,
+          answerPreview: sourceAnswer,
+        });
+        return new Response(textStream(sourceAnswer), {
           headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
@@ -5990,9 +6064,9 @@ async function handleAssistantPost(req: NextRequest) {
       const directSkuProducts = skuCandidates.length
         ? detailProducts.filter((product) => skuCandidates.some((sku) => skuMatchesWithSellableSuffix(product.sku || "", sku)))
         : [];
-      const focusedCandidates = selectedDetailProducts.length
+      const focusedCandidates = (selectedDetailProducts.length
         ? selectedDetailProducts
-        : directSkuProducts;
+        : directSkuProducts).filter((product) => productMatchesExplicitMeasuredRequirements(product, latest));
       const focusedExternalProduct = focusedCandidates.length
         ? rankProductsForAnswer(focusedCandidates, latest)[0]
         : undefined;
