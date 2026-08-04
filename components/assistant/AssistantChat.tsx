@@ -18,6 +18,7 @@ type UiText = {
   resetLabel: string;
   sendLabel: string;
   typing: string;
+  stillChecking: string;
   retry: string;
   error: string;
   uploadProductPhoto: string;
@@ -82,6 +83,7 @@ const ui: Record<"en" | "fr", UiText> = {
     resetLabel: "Start over",
     sendLabel: "Send message",
     typing: "Meri is checking EMRN data...",
+    stillChecking: "Meri is still checking EMRN and manufacturer information to make sure the answer is correct...",
     retry: "Retry",
     error: "I’m sorry, I could not complete that request. Would you like me to send this to our support team?",
     uploadProductPhoto: "Search product by photo",
@@ -115,6 +117,7 @@ const ui: Record<"en" | "fr", UiText> = {
     resetLabel: "Recommencer",
     sendLabel: "Envoyer le message",
     typing: "Meri vérifie les données EMRN...",
+    stillChecking: "Meri vérifie toujours les informations d’EMRN et du fabricant pour s’assurer que la réponse est correcte...",
     retry: "Réessayer",
     error:
       "Je suis désolée, je n’ai pas pu compléter cette demande. Voulez-vous que je l’envoie à notre équipe de support?",
@@ -144,6 +147,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
   const [messages, setMessages] = useState<AssistantMessage[]>(() => storedMessages(mode, storedLanguage()));
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showLongWait, setShowLongWait] = useState(false);
   const [isOpen, setIsOpen] = useState(mode === "embedded");
   const [showNudge, setShowNudge] = useState(false);
   const [pageContext, setPageContext] = useState<ProductPageContext>({});
@@ -201,6 +205,16 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
     }, 80);
     return () => window.clearTimeout(timer);
   }, [isOpen, mode]);
+
+  useEffect(() => {
+    if (!busy || uploadingPhoto) {
+      setShowLongWait(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => setShowLongWait(true), 30_000);
+    return () => window.clearTimeout(timer);
+  }, [busy, uploadingPhoto]);
 
   useEffect(() => {
     if (mode !== "floating" || typeof window === "undefined") return;
@@ -526,7 +540,7 @@ export function AssistantChat({ mode = "embedded" }: AssistantChatProps) {
                 <span />
                 <span />
               </span>
-              {uploadingPhoto ? text.uploadingPhoto : text.typing}
+              {uploadingPhoto ? text.uploadingPhoto : showLongWait ? text.stillChecking : text.typing}
             </div>
           ) : null}
           {hasError && lastPrompt ? (
