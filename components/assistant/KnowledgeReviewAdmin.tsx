@@ -18,7 +18,7 @@ type KnowledgeReviewAdminProps = {
   initialDraft?: Partial<typeof emptyDraft>;
 };
 
-const typeOptions: KnowledgeMemoryType[] = ["alias", "preferred_product", "compatibility", "replacement_part", "color_option", "intent_route", "note"];
+const typeOptions: KnowledgeMemoryType[] = ["alias", "preferred_product", "product_fact", "compatibility", "replacement_part", "color_option", "intent_route", "note"];
 const statusOptions: KnowledgeMemoryStatus[] = ["approved", "needs_review", "disabled"];
 const answerOptions: Array<NonNullable<KnowledgeMemoryItem["answer"]>> = ["", "confirmed", "not_compatible", "cant_confirm"];
 const routeAnswerOptions: Array<NonNullable<KnowledgeMemoryItem["answer"]>> = ["route_quote", "route_contact", "route_order_status", "route_availability", "route_support"];
@@ -35,6 +35,12 @@ const typeHelp: Record<KnowledgeMemoryType, { title: string; useWhen: string; ex
     useWhen: "Use this when you know the exact EMRN product that should show first for a question or search.",
     example: "Example: what AED pads work with Philips FRx -> SKU 989803139261.",
     fields: "Fill Customer Query, Correct SKU, and helpful Correct Search Terms.",
+  },
+  product_fact: {
+    title: "Product fact: an approved specification or product detail",
+    useWhen: "Use this for weight capacity, dimensions, what is included, package quantity, material, or another fact about one exact EMRN product.",
+    example: "Example: what is the weight capacity for DY10321-4 -> 500 lb.",
+    fields: "Fill Customer Query with the fact being asked (not just the SKU), Correct SKU, Answer = confirmed, and put the customer-ready fact and proof in Note.",
   },
   compatibility: {
     title: "Compatibility: does item A work with item B?",

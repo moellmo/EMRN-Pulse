@@ -3005,7 +3005,7 @@ function approvedKnowledgeAnswer(
 ) {
   const currentType = requestedProductTypeKey(currentQuery);
   const rule = rules.find((item) => {
-    if (!item.answer || !["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type)) return false;
+    if (!item.answer || !["compatibility", "replacement_part", "preferred_product", "product_fact", "alias"].includes(item.type)) return false;
     const ruleType = requestedProductTypeKey(`${item.query} ${item.correctSearchTerms} ${item.note}`);
     return !currentType || !ruleType || currentType === ruleType;
   });
@@ -3028,6 +3028,19 @@ function approvedKnowledgeAnswer(
   const proof = (rule.note || rule.correctSearchTerms || rule.query).replace(/[.。\s]+$/g, "");
 
   if (rule.answer === "confirmed") {
+    if (rule.type === "product_fact") {
+      const intro = language === "fr"
+        ? `D’après les renseignements approuvés EMRN/fabricant, ${proof}.`
+        : `Based on approved EMRN/manufacturer information, ${proof}.`;
+      const next = productLines.length
+        ? language === "fr"
+          ? "Voulez-vous que je l’ajoute au panier ou que je prépare un devis?"
+          : "Would you like me to add it to cart or prepare a quote?"
+        : language === "fr"
+          ? "Voulez-vous que j’envoie une demande de sourcing/devis à EMRN?"
+          : "Would you like me to send an EMRN item-sourcing/quote request?";
+      return `${intro}${productLines.length ? `\n\n${productLines.join("\n")}` : ""}\n\n${next}`;
+    }
     const intro = language === "fr"
       ? `Confirmed compatible: D’après les renseignements approuvés EMRN/fabricant, ${proof}.`
       : `Confirmed compatible: Based on approved EMRN/manufacturer information, ${proof}.`;
@@ -3054,12 +3067,35 @@ function approvedKnowledgeAnswer(
   return `${intro}${productLines.length ? `\n\n${productLines.join("\n")}` : ""}\n\n${language === "fr" ? "Répondez oui et je l’enverrai au support." : "Reply yes and I’ll send this to support."}`;
 }
 
+// A product-fact rule is not a product-wide canned answer.  Its subject
+// (weight, dimensions, package quantity, material, included contents, etc.)
+// must also be present in the current customer question before it can answer.
+// This keeps a saved capacity fact from answering "do you have this SKU?" or
+// an unrelated question about the same product.
+function productFactTopics(text: string) {
+  const normalized = normalizeSearchText(text);
+  const topics: string[] = [];
+  if (/\b(?:weight|capacity|weight limit|load limit|hold|holds|lb|lbs|pounds?)\b/.test(normalized)) topics.push("weight_capacity");
+  if (/\b(?:size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|long|wide|tall)\b/.test(normalized)) topics.push("dimensions");
+  if (/\b(?:how many|quantity|qty|count|package|pack|case|box|boxes|sold by|sold as|unit of sale)\b/.test(normalized)) topics.push("package_quantity");
+  if (/\b(?:material|made of|latex|latex free|latex-free|disposable|reusable|washable|waterproof)\b/.test(normalized)) topics.push("material");
+  if (/\b(?:include|includes|included|comes with|what is in|contents?)\b/.test(normalized)) topics.push("included_contents");
+  return topics;
+}
+
+function productFactMatchesQuestion(rule: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>[number], question: string) {
+  const questionTopics = productFactTopics(question);
+  if (!questionTopics.length) return false;
+  const ruleTopics = productFactTopics(`${rule.query} ${rule.note || ""}`);
+  return questionTopics.some((topic) => ruleTopics.includes(topic));
+}
+
 function knowledgeRuleSkus(rule: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>[number]) {
   return [rule.correctSku, rule.relatedSku].filter(Boolean) as string[];
 }
 
 function approvedKnowledgeProductSearchQuery(rules: Awaited<ReturnType<typeof matchingApprovedKnowledgeForQuery>>) {
-  const rule = rules.find((item) => item.answer && ["compatibility", "replacement_part", "preferred_product", "alias"].includes(item.type));
+  const rule = rules.find((item) => item.answer && ["compatibility", "replacement_part", "preferred_product", "product_fact", "alias"].includes(item.type));
   if (!rule) return "";
   if (rule.answer === "not_compatible" || rule.answer === "cant_confirm") return "";
   return rule.correctSearchTerms || rule.query || "";
@@ -5974,9 +6010,16 @@ async function handleAssistantPost(req: NextRequest) {
       }
     }
     const approvedKnowledgeMatches = preSearchKnowledgeMatches.length ? preSearchKnowledgeMatches : await matchingApprovedKnowledgeForQuery(latest);
-    const ruleAnswer = isDirectCatalogDetailQuestion(latest)
+    const matchingProducts = selectedDetailProducts.length ? selectedDetailProducts : detailProducts;
+    const productFactAnswer = approvedKnowledgeAnswer(
+      approvedKnowledgeMatches.filter((item) => item.type === "product_fact" && productFactMatchesQuestion(item, latest)),
+      matchingProducts,
+      language,
+      latest
+    );
+    const ruleAnswer = productFactAnswer || (isDirectCatalogDetailQuestion(latest)
       ? ""
-      : approvedKnowledgeAnswer(approvedKnowledgeMatches, selectedDetailProducts.length ? selectedDetailProducts : detailProducts, language, latest);
+      : approvedKnowledgeAnswer(approvedKnowledgeMatches, matchingProducts, language, latest));
     if (ruleAnswer) {
       await logPerformance("approved_knowledge", { answerPreview: ruleAnswer });
       return new Response(textStream(ruleAnswer), {

@@ -14,6 +14,7 @@ const memoryPath = path.join(dataDir, "knowledge-memory.json");
 export type KnowledgeMemoryType =
   | "alias"
   | "preferred_product"
+  | "product_fact"
   | "compatibility"
   | "replacement_part"
   | "color_option"
@@ -42,6 +43,7 @@ function normalizeMemoryType(value: unknown): KnowledgeMemoryType {
   const normalized = normalizeSearchText(String(value || "")).replace(/\s*\/\s*/g, " ").replace(/[\s-]+/g, "_");
   if (normalized === "intent_routing" || normalized === "intent_route" || normalized === "routing") return "intent_route";
   if (normalized === "preferred_product") return "preferred_product";
+  if (normalized === "product_fact" || normalized === "product_question" || normalized === "product_detail") return "product_fact";
   if (normalized === "replacement_part") return "replacement_part";
   if (normalized === "color_option") return "color_option";
   if (normalized === "compatibility") return "compatibility";
