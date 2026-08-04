@@ -129,7 +129,10 @@ function mapProduct(hit: SearchHit | SearchDocument): CatalogProduct {
     variantId: Number(doc.variant_id || 0),
     name: String(doc.name || ""),
     parentName: String(doc.parent_name || doc.name || ""),
-    sku: String(doc.sku || ""),
+    // Parent-product documents can retain variant numbers only in all_skus.
+    // Use the first sellable SKU as a customer-facing fallback instead of
+    // rendering “SKU unavailable” for an otherwise valid catalog result.
+    sku: String(doc.sku || (Array.isArray(doc.all_skus) ? doc.all_skus[0] : "") || ""),
     brand: String(doc.brand || ""),
     manufacturer: String(doc.sold_by || ""),
     categories: Array.isArray(doc.categories) ? doc.categories.map(String) : [],
@@ -276,18 +279,20 @@ function productPageDetailsText(html: string) {
     .trim();
 }
 
-async function fetchProductPageDetails(product: CatalogProduct) {
-  if (!product.url || /\/search\.php\b/i.test(product.url)) return "";
+async function fetchProductPageEnrichment(product: CatalogProduct) {
+  if (!product.url || /\/search\.php\b/i.test(product.url)) return { details: "", sku: "" };
   try {
     const parsed = new URL(product.url);
     const storeHost = new URL(process.env.EMRN_STORE_URL || "https://emrn.ca").hostname.replace(/^www\./, "");
-    if (parsed.hostname.replace(/^www\./, "") !== storeHost) return "";
+    if (parsed.hostname.replace(/^www\./, "") !== storeHost) return { details: "", sku: "" };
     const response = await fetch(parsed.toString(), { cache: "no-store" });
-    if (!response.ok) return "";
-    return productPageDetailsText(await response.text());
+    if (!response.ok) return { details: "", sku: "" };
+    const html = await response.text();
+    const sku = html.match(/data-product-sku\s*=\s*["']([^"']{2,80})["']/i)?.[1]?.trim() || "";
+    return { details: productPageDetailsText(html), sku };
   } catch (error) {
     console.error("[EMRN Pulse] EMRN product page enrichment failed", error);
-    return "";
+    return { details: "", sku: "" };
   }
 }
 
@@ -1555,10 +1560,11 @@ async function searchBySKUFallback(sku: string) {
 
 async function enrichProductFromBigCommerce(product: CatalogProduct) {
   const productPageDetails = async (currentProduct: CatalogProduct) => {
-    const pageDetails = await fetchProductPageDetails(currentProduct);
-    return pageDetails && pageDetails.length > currentProduct.description.length
-      ? { ...currentProduct, description: [currentProduct.description, pageDetails].filter(Boolean).join("\n") }
-      : currentProduct;
+    const page = await fetchProductPageEnrichment(currentProduct);
+    const withSku = page.sku && !currentProduct.sku ? { ...currentProduct, sku: page.sku } : currentProduct;
+    return page.details && page.details.length > currentProduct.description.length
+      ? { ...withSku, description: [withSku.description, page.details].filter(Boolean).join("\n") }
+      : withSku;
   };
 
   if (!product.productId) return productPageDetails(product);
@@ -1569,12 +1575,29 @@ async function enrichProductFromBigCommerce(product: CatalogProduct) {
     });
     if (!payload?.data) return productPageDetails(product);
 
+    const variants = payload.data.variants || [];
     const variant = product.variantId
-      ? payload.data.variants?.find((item) => Number(item.id) === Number(product.variantId))
-      : payload.data.variants?.find((item) => normalizeSku(String(item.sku || "")) === normalizeSku(product.sku));
+      ? variants.find((item) => Number(item.id) === Number(product.variantId))
+      : product.sku
+        ? variants.find((item) => normalizeSku(String(item.sku || "")) === normalizeSku(product.sku))
+        // A sparse search document sometimes has only a product ID. When the
+        // product has a single sellable variant, it is unambiguous and gives
+        // the customer the SKU, price, and add-to-cart link they expect.
+        : variants.length === 1
+          ? variants[0]
+          : undefined;
     const enriched = mapBigCommerceProduct(payload.data, variant);
     return productPageDetails({
       ...product,
+      id: product.id || enriched.id,
+      productId: product.productId || enriched.productId,
+      variantId: product.variantId || enriched.variantId,
+      name: product.name || enriched.name,
+      parentName: product.parentName || enriched.parentName,
+      sku: product.sku || enriched.sku,
+      brand: product.brand || enriched.brand,
+      manufacturer: product.manufacturer || enriched.manufacturer,
+      categories: product.categories.length ? product.categories : enriched.categories,
       description: enriched.description || product.description,
       image: enriched.image || product.image,
       url: enriched.url || product.url,
@@ -1770,6 +1793,14 @@ export async function searchProducts(input: ProductSearchInput) {
     }
   }
 
+  // Typesense is the fast primary search index, but older parent-product
+  // documents can be sparse. Hydrate only incomplete hits before they reach
+  // the assistant, so customer-facing results retain a real SKU, price, and
+  // product URL instead of placeholders.
+  if (products.some((product) => !product.sku || !product.url || !product.price)) {
+    products = await enrichProductsFromBigCommerce(products);
+  }
+
   return {
     products,
     found: products.length || Number(result.found || 0),
@@ -1818,6 +1849,13 @@ export async function searchBySKU(sku: string) {
       const isRelatedSkuMatch = skuValuesForDocument(doc).some((value) => normalizedCandidates.has(normalizeSku(value)));
       if (isPrimarySkuMatch || isRelatedSkuMatch) {
         const product = mapProduct(hit);
+        // Parent-product documents may hold sellable variant SKUs only in
+        // `all_skus`. Keep the actual matched SKU for cart/quote rendering.
+        if (!product.sku) {
+          product.sku = skuValuesForDocument(doc).find((value) =>
+            normalizedCandidates.has(normalizeSku(value))
+          ) || "";
+        }
         const key = `${product.productId}:${product.variantId}:${product.sku}`;
         if (isPrimarySkuMatch) primaryProducts.set(key, product);
         else relatedProducts.set(key, product);

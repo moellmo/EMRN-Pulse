@@ -866,7 +866,7 @@ function recentAssistantProductNames(messages: AssistantMessage[]) {
     .reverse();
   const names: string[] = [];
   for (const message of assistantMessages) {
-    for (const match of message.content.matchAll(/(?:^|\n)\s*(?:\d+\.\s*)?\*\*([^*\n]{3,140})\*\*\s+[—-]\s+SKU\b/gi)) {
+    for (const match of message.content.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?(?:\d+\.\s*)?\*\*([^*\n]{3,140})\*\*\s+[—-]\s+SKU\b/gi)) {
       const name = match[1]?.trim();
       if (name && !names.includes(name)) names.push(name);
     }
@@ -1332,15 +1332,54 @@ function isSpecificAedAccessoryRequest(text: string) {
 
 function lcsuCanisterSkuHints(text: string) {
   const normalized = normalizeSearchText(text);
-  if (!/\b(canister|cannister|suction container)\b/.test(normalized)) return [];
+  if (!/\b(canisters?|cannisters?|suction containers?)\b/.test(normalized)) return [];
   if (!/\b(?:lcsu\s*4?|laerdal compact suction unit)\b/.test(normalized)) return [];
   if (/\b800\s*(?:ml|m l)\b/.test(normalized)) return ["8002004L10"];
   if (/\b300\s*(?:ml|m l)\b/.test(normalized)) return ["886100"];
   return ["886100", "8002004L10"];
 }
 
+function verifiedLcsuCanisterProducts(): CatalogProduct[] {
+  // These are the two sellable LCSU 4 canister options maintained in the
+  // EMRN catalog. They are a safety net for sparse parent-item search records
+  // so an unsized request always presents the complete, real choice set.
+  return [
+    {
+      id: "9555", productId: 7788, variantId: 9555,
+      name: "Disposable Canister w/ Tubing for LCSU 4, 300 ML", parentName: "Disposable Canister w/ Tubing for LCSU 4, 300 ML",
+      sku: "886100", brand: "Laerdal", manufacturer: "Laerdal", categories: [], description: "LCSU 4 disposable 300 ml canister with tubing.",
+      price: 30.9, image: "", url: "https://emrn.ca/disposable-canister-w-tubing-for-lcsu-4-300-ml", inventoryLevel: 0,
+      availability: "", availabilityDescription: "", purchasable: true, quoteOnly: false, purchaseAction: "cart", purchaseMessage: "",
+    },
+    {
+      id: "33951", productId: 23881, variantId: 33951,
+      name: "10 X 800 ML CANISTERS w/ LIDS 8002004L10", parentName: "10 X 800 ML CANISTERS w/ LIDS 8002004L10",
+      sku: "8002004L10", brand: "Laerdal", manufacturer: "Laerdal", categories: [], description: "Pack of 10 disposable 800 ml LCSU canisters with lids.",
+      price: 190.6, image: "", url: "https://emrn.ca/shop-all/10-x-800-ml-canisters-w-lids-8002004l10/", inventoryLevel: 0,
+      availability: "", availabilityDescription: "", purchasable: true, quoteOnly: false, purchaseAction: "cart", purchaseMessage: "",
+    },
+  ];
+}
+
 function isLcsuFamilyRequest(text: string) {
   return /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/i.test(normalizeSearchText(text));
+}
+
+function isLcsuCanisterRequest(text: string) {
+  const normalized = normalizeSearchText(text);
+  return isLcsuFamilyRequest(normalized) && /\b(?:canisters?|cannisters?|collection jars?|suction containers?)\b/.test(normalized);
+}
+
+function productMatchesLcsuCanisterRequest(product: CatalogProduct, text: string) {
+  const normalized = normalizeSearchText(text);
+  // The LCSU product page mentions every accessory in its description. For a
+  // canister request, matching that description is too broad: require the
+  // actual catalog product title (or parent title) to identify a canister.
+  const title = normalizeSearchText(`${product.name || ""} ${product.parentName || ""}`);
+  if (!/\b(?:canisters?|cannisters?|collection jars?|suction containers?)\b/.test(title)) return false;
+
+  const requestedCapacity = normalized.match(/\b(300|800)\s*(?:ml|m l)\b/)?.[1];
+  return !requestedCapacity || new RegExp(`\\b${requestedCapacity}\\s*(?:ml|m l)\\b`).test(title);
 }
 
 function lcsuFamilySearchQuery(text: string) {
@@ -1650,6 +1689,29 @@ type ProductIntentRequirement = {
   field?: "any" | "name_category";
 };
 
+const genericProductTypeRequirements: Array<{ pattern: RegExp; terms: string[] }> = [
+  { pattern: /\b(?:kits?|trousses?)\b/, terms: ["kit", "kits", "trousse", "trousses"] },
+  { pattern: /\b(?:masks?|masques?|respirators?)\b/, terms: ["mask", "masks", "masque", "masques", "respirator", "respirators"] },
+  { pattern: /\b(?:gowns?|blouses?)\b/, terms: ["gown", "gowns", "blouse", "blouses"] },
+  { pattern: /\b(?:gauze|gazes?)\b/, terms: ["gauze", "gaze"] },
+  { pattern: /\b(?:bandages?|dressings?|pansements?)\b/, terms: ["bandage", "bandages", "dressing", "dressings", "pansement", "pansements"] },
+  { pattern: /\b(?:tapes?|adhesive strips?|ruban(?:s)?)\b/, terms: ["tape", "tapes", "adhesive strip", "adhesive strips", "ruban", "rubans"] },
+  { pattern: /\b(?:syringes?|seringues?)\b/, terms: ["syringe", "syringes", "seringue", "seringues"] },
+  { pattern: /\b(?:needles?|aiguilles?)\b/, terms: ["needle", "needles", "aiguille", "aiguilles"] },
+  { pattern: /\b(?:catheters?|cath[eé]ters?)\b/, terms: ["catheter", "catheters", "cathéter", "cathéters"] },
+  { pattern: /\b(?:tubing|tubes?|tubulures?)\b/, terms: ["tubing", "tube", "tubes", "tubulure", "tubulures"] },
+  { pattern: /\b(?:filters?|filtres?)\b/, terms: ["filter", "filters", "filtre", "filtres"] },
+  { pattern: /\b(?:chargers?|chargeurs?)\b/, terms: ["charger", "chargers", "chargeur", "chargeurs"] },
+  { pattern: /\b(?:bags?|sacs?|backpacks?|sacs à dos)\b/, terms: ["bag", "bags", "sac", "sacs", "backpack", "backpacks"] },
+  { pattern: /\b(?:paper|papers?|papier(?:s)?)\b/, terms: ["paper", "papers", "papier", "papiers"] },
+  { pattern: /\b(?:thermometers?|thermom[eè]tres?)\b/, terms: ["thermometer", "thermometers", "thermomètre", "thermomètres"] },
+  { pattern: /\b(?:stethoscopes?)\b/, terms: ["stethoscope", "stethoscopes"] },
+  { pattern: /\b(?:wheelchairs?|fauteuils? roulants?)\b/, terms: ["wheelchair", "wheelchairs", "fauteuil roulant", "fauteuils roulants"] },
+  { pattern: /\b(?:mattresses?|matelas)\b/, terms: ["mattress", "mattresses", "matelas"] },
+  { pattern: /\b(?:oxygen cylinders?|oxygen tanks?|cylindres? d.?oxyg[eè]ne|bonbonnes? d.?oxyg[eè]ne)\b/, terms: ["oxygen cylinder", "oxygen tank", "cylinder", "cylindre", "bonbonne"] },
+  { pattern: /\b(?:oxygen regulators?|r[eé]gulateurs? d.?oxyg[eè]ne)\b/, terms: ["oxygen regulator", "regulator", "régulateur"] },
+];
+
 function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   const normalized = normalizeSearchText(query);
   const groups: ProductIntentRequirement[] = [];
@@ -1673,7 +1735,7 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   if (/\b(cushion|cushions|lumbar support)\b/.test(normalized)) {
     groups.push({ terms: ["cushion", "cushions", "lumbar"], field: "name_category" });
   }
-  if (/\b(canister|cannister|collection jar|suction container|suction canister)\b/.test(normalized)) {
+  if (/\b(canisters?|cannisters?|collection jars?|suction containers?)\b/.test(normalized)) {
     groups.push({ terms: ["canister", "cannister", "collection jar", "suction container"], field: "name_category" });
   }
   if (/\b(?:vial|vials|flacon|flacons)\b/.test(normalized)) {
@@ -1708,6 +1770,14 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
     groups.push({ terms: ["first aid"], field: "name_category" });
   }
 
+  for (const requirement of genericProductTypeRequirements) {
+    if (!requirement.pattern.test(normalized)) continue;
+    const alreadyRequired = groups.some((group) =>
+      group.terms.some((term) => requirement.terms.includes(term))
+    );
+    if (!alreadyRequired) groups.push({ terms: requirement.terms, field: "name_category" });
+  }
+
   return groups;
 }
 
@@ -1721,7 +1791,9 @@ function productsMatchingExplicitIntent(products: CatalogProduct[], latest: stri
     return groups.every((group) => {
       const target = group.field === "name_category" ? nameCategory : haystack;
       return group.terms.some((term) => target.includes(normalizeSearchText(term)));
-    }) && isExactReplacementPartProductMatch(product, `${latest} ${searchQuery}`);
+    }) &&
+      isExactReplacementPartProductMatch(product, `${latest} ${searchQuery}`) &&
+      (!isLcsuCanisterRequest(`${latest} ${searchQuery}`) || productMatchesLcsuCanisterRequest(product, `${latest} ${searchQuery}`));
   });
 
   if (matching.length) return { products: matching, suppressed: false };
@@ -1790,7 +1862,7 @@ function assistantRecoveryQueries(query: string) {
   const queries: string[] = [];
 
   if (/\b(?:laerdal\s+)?compact\s+suction\s+unit\b/.test(normalized) || /\blcsu\s*[- ]?4\b/.test(normalized)) {
-    if (/\b(canister|cannister|collection jar|suction container)\b/.test(normalized)) {
+    if (/\b(canisters?|cannisters?|collection jars?|suction containers?)\b/.test(normalized)) {
       queries.push("LCSU 4 canister");
     } else {
       queries.push("LCSU 4");
@@ -1863,7 +1935,13 @@ function shouldUseAiKeywordRecovery(input: {
   // ordinary SKU lookup. Let the planner try to establish the relationship
   // when the exact model is not yet in the catalog; it must still produce a
   // matching EMRN item before anything is shown to the customer.
-  if (input.skuCandidates.length && !isSpecificAedAccessoryRequest(input.latest)) return false;
+  // A bare SKU should keep the fast, exact-SKU path. But a manufacturer/model
+  // reference inside a real product request (for example, "Acme 8210 masks")
+  // needs the AI exact-match check; otherwise a different brand's coincidentally
+  // similar number can be shown as the customer's requested item.
+  if (input.skuCandidates.length && !isSpecificAedAccessoryRequest(input.latest)) {
+    return hasProductWordsBeyondSku(input.latest, input.skuCandidates);
+  }
   if (isQuoteIntent(input.latest) || input.taughtQuoteIntent) return false;
   if (isOrderStatusIntent(input.latest) || input.taughtOrderStatusIntent) return false;
   if (isContactIntent(input.latest) || input.taughtContactIntent) return false;
@@ -2746,7 +2824,7 @@ function catalogProductMatchesRequestedType(question: string, product: CatalogPr
   if (questionType === "battery") return /\b(batter(?:y|ies)|batterie|batteries|pile|piles|lithium|alkaline|123a|cr123)\b/i.test(productText);
   if (questionType === "lung") return /\b(lungs?)\b/i.test(productText);
   if (questionType === "airway") return /\b(airways?|voies?\s+a[eé]riennes?)\b/i.test(productText);
-  if (questionType === "canister") return /\b(canister|cannister|collection jar|suction container)\b/i.test(productText);
+  if (questionType === "canister") return /\b(canisters?|cannisters?|collection jars?|suction containers?)\b/i.test(productText);
   return true;
 }
 
@@ -2924,7 +3002,7 @@ function productMatchesRequestedKnowledgeSku(query: string, product: CatalogProd
   if (key === "battery" && !/\b(batter(?:y|ies))\b/i.test(text)) return false;
   if (key === "airway" && !/\bairways?\b/i.test(text)) return false;
   if (key === "lung" && !/\blungs?\b/i.test(text)) return false;
-  if (key === "canister" && !/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return false;
+  if (key === "canister" && !/\b(canisters?|cannisters?|collection jars?|suction containers?)\b/i.test(text)) return false;
   // When a canister capacity is specified, never expand it to another size
   // just because both products fit the same suction unit. Without a capacity
   // the approved rule may safely show every compatible canister option.
@@ -2989,6 +3067,44 @@ function scoreProductForSearchPlan(product: CatalogProduct, plan: CatalogSearchP
   return score;
 }
 
+function productMatchesExactSearchPlan(product: CatalogProduct, plan: CatalogSearchPlan) {
+  const exactTerms = searchPlanTerms(plan.exactMatchTerms || []);
+  if (!exactTerms.length) return true;
+  const text = productIntentText(product);
+  return exactTerms.every((term) => text.includes(term));
+}
+
+const nonIdentifierProductWords = new Set([
+  "a", "an", "and", "are", "can", "do", "find", "for", "from", "have", "i", "in", "is", "it", "looking", "need", "of", "on", "or", "please", "show", "the", "this", "to", "we", "with", "you",
+  "bag", "battery", "canister", "charger", "filter", "glove", "kit", "mask", "masks", "needle", "pad", "pads", "paper", "product", "products", "syringe", "tube", "tubing",
+]);
+
+function customerSuppliedExactIdentifiers(query: string) {
+  const text = normalizeSearchText(query);
+  const identifiers = new Set<string>();
+  // Preserve a brand/model pair the customer actually typed. The planner can
+  // add other useful identifiers, but it may not replace this evidence with a
+  // different brand just because the model number overlaps.
+  for (const match of text.matchAll(/\b([a-z0-9+.-]{2,})\s+([a-z0-9+.-]*\d[a-z0-9+.-]*)\b/g)) {
+    const brandOrFamily = match[1];
+    const model = match[2];
+    if (!nonIdentifierProductWords.has(brandOrFamily) && /[a-z]/.test(brandOrFamily)) identifiers.add(brandOrFamily);
+    if (!nonIdentifierProductWords.has(model) && /\d/.test(model)) identifiers.add(model);
+  }
+  return [...identifiers];
+}
+
+function productMatchesCustomerExactIdentifiers(product: CatalogProduct, latest: string) {
+  const identifiers = customerSuppliedExactIdentifiers(latest);
+  if (!identifiers.length) return true;
+  const text = productIntentText(product);
+  return identifiers.every((identifier) => text.includes(identifier));
+}
+
+function productMatchesRequestedExactProduct(product: CatalogProduct, plan: CatalogSearchPlan | null | undefined, latest: string) {
+  return productMatchesCustomerExactIdentifiers(product, latest) && (!plan || productMatchesExactSearchPlan(product, plan));
+}
+
 function productsMatchingSearchPlan(products: CatalogProduct[], plan: CatalogSearchPlan, latest: string) {
   if (!products.length) return [];
   const wantsTraining = asksForTrainingUse(latest, plan);
@@ -3032,9 +3148,11 @@ function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
   const asksBattery = /\b(batter(?:y|ies))\b/.test(query);
   const asksOnsite = /\b(onsite|heartstart|hs1)\b/.test(query);
   const asksTorso = /\btorso\b/.test(query);
-  const asksCanister = /\b(canister|cannister|collection jar|suction container)\b/.test(query);
+  const asksCanister = /\b(canisters?|cannisters?|collection jars?|suction containers?)\b/.test(query);
   const asksLcsuFamily = /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/.test(query);
   const asksLcsuAccessory = isAccessoryCatalogSearch(latest) || asksCanister || /\b(?:battery|charger|filter|wire stand|carry bag|vacuum tube|patient tube|shoulder)\b/.test(query);
+  const asksAccessory = /\b(?:accessor(?:y|ies)|replacement|spare|part|parts|shelf|shelving|module|pouch|insert|divider|strap|case|holder|mount|bracket|adapter|connector|refill|cartridge|tubing|filter|charger|battery)\b/.test(query);
+  const accessoryNamePattern = /\b(?:accessor(?:y|ies)|replacement|spare|part|parts|shelf|shelving|module|pouch|insert|divider|strap|holder|mount|bracket|adapter|connector|refill|cartridge)\b/;
 
   const score = (product: CatalogProduct) => {
     const text = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.categories.join(" ")}`);
@@ -3049,10 +3167,14 @@ function rankProductsForAnswer(products: CatalogProduct[], latest: string) {
     if (asksOnsite && /\bfr3\b/.test(text)) value -= 4500;
     if (asksTorso && /\bwith torso\b/.test(text)) value += 12000;
     if (asksTorso && /\bno torso\b/.test(text)) value -= 16000;
-    if (asksCanister && /\b(canister|cannister|collection jar|suction container)\b/.test(text)) value += 9000;
-    if (asksCanister && !/\b(canister|cannister|collection jar|suction container)\b/.test(text)) value -= 12000;
+    if (asksCanister && /\b(canisters?|cannisters?|collection jars?|suction containers?)\b/.test(text)) value += 9000;
+    if (asksCanister && !/\b(canisters?|cannisters?|collection jars?|suction containers?)\b/.test(text)) value -= 12000;
     if (asksLcsuFamily && !asksLcsuAccessory && /\b(?:laerdal compact suction unit|lcsu\s*4)\b/.test(text)) value += 7000;
     if (asksLcsuFamily && !asksLcsuAccessory && /\b(?:canister|battery|charger|filter|wire stand|carry bag|vacuum tube|patient tube|shoulder)\b/.test(text)) value -= 3500;
+    // A named product-family search should lead with the sellable main item,
+    // not a shelving/insert/module that merely happens to share its name.
+    // Accessory requests explicitly opt out of this preference.
+    if (!asksAccessory && accessoryNamePattern.test(text)) value -= 6000;
     return value;
   };
 
@@ -3242,16 +3364,31 @@ function externalLookupCustomerAnswer(
     : `Can’t confirm: I can’t confirm this from available product/manufacturer info.${partText}\n\nI checked EMRN by the available part number/product terms${products.length ? ` and found related EMRN option${products.length > 1 ? "s" : ""}:\n\n${lines.join("\n")}` : " and did not find an exact EMRN match"}.\n\nReply yes and I’ll send this to support for **${item}**.`;
 }
 
-function shouldTrustG3OxygenCylinderProof(lookup: ExternalKnowledgeLookup, product: CatalogProduct | undefined, question: string) {
-  if (!product) return false;
-  const productText = normalizeSearchText(`${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer}`);
+function exactCatalogMatchUnavailableAnswer(latest: string, language: "en" | "fr" | "unknown") {
+  const requested = sentenceFragment(latest).replace(/^[\s:;.,-]+/g, "").slice(0, 180) || "the requested item";
+  return language === "fr"
+    ? `Je n’ai pas pu confirmer une correspondance exacte dans le catalogue EMRN pour **${requested}**. Je peux envoyer une demande d’approvisionnement/devis à notre équipe. Envoyez votre nom, courriel, quantité et échéance si nécessaire.`
+    : `I could not confirm an exact EMRN catalog match for **${requested}**. I can send a sourcing/quote request to our team. Please send your name, email, quantity, and any deadline.`;
+}
+
+function trustedG3OxygenCylinderSummary(lookup: ExternalKnowledgeLookup, product: CatalogProduct | undefined, question: string) {
+  const productText = normalizeSearchText(product ? `${product.name} ${product.parentName} ${product.sku} ${product.brand} ${product.manufacturer}` : "");
   const lookupText = normalizeSearchText(`${lookup.exactProductName} ${lookup.summary} ${lookup.searchTerms.join(" ")} ${lookup.manufacturerPartNumbers.join(" ")}`);
+  const familyText = `${productText} ${lookupText}`;
   const questionText = normalizeSearchText(question);
-  return /\bg3\b/.test(productText) &&
-    /load\s*n?\s*go/.test(productText) &&
-    /\b(statpacks?|g3|load|go)\b/.test(lookupText) &&
-    /\b(oxygen|o2|tank|cylinder)\b/.test(questionText) &&
+  const asksOxygenFit = /\b(oxygen|o2|tank|cylinder)\b/.test(questionText) &&
     /\b(fit|fits|hold|holds|accommodate|accommodates|carry|carries|cylinder|tank)\b/.test(questionText);
+  if (!asksOxygenFit || !/\bg3\b/.test(familyText)) return "";
+  // Verified StatPacks G3+ Responder compatibility. The customer may ask this
+  // as a terse follow-up, and an external lookup can omit the family name even
+  // though the selected EMRN product establishes it.
+  if (/\b(responder)\b/.test(familyText)) {
+    return "The StatPacks G3+ Responder EMS Bag can accommodate a D or Jumbo D oxygen cylinder when used with the G3+ Oxygen Module.";
+  }
+  if (/load\s*n?\s*go/.test(familyText) && /\b(statpacks?|g3|load|go)\b/.test(lookupText)) {
+    return "The G3+ Load-N-Go backpack can accommodate an M6 oxygen cylinder.";
+  }
+  return "";
 }
 
 function cleanExternalLookupItemName(value: string) {
@@ -3329,7 +3466,7 @@ function requestedProductTypePattern(text: string) {
   if (/\b(lungs?)\b/i.test(text)) return /\b(lungs?)\b/i;
   if (/\b(pads?|electrodes?|électrodes?)\b/i.test(text)) return /\b(pads?|electrodes?|électrodes?)\b/i;
   if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return /\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i;
-  if (/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return /\b(canister|cannister|collection jar|suction container)\b/i;
+  if (/\b(canisters?|cannisters?|collection jars?|suction containers?)\b/i.test(text)) return /\b(canisters?|cannisters?|collection jars?|suction containers?)\b/i;
   return null;
 }
 
@@ -3339,7 +3476,7 @@ function requestedProductTypeKey(text: string) {
   if (/\b(lungs?)\b/i.test(text)) return "lung";
   if (/\b(pads?|padz|electrodes?|électrodes?)\b/i.test(text)) return "pad";
   if (/\b(batter(?:y|ies)|batterie|batteries|pile|piles)\b/i.test(text)) return "battery";
-  if (/\b(canister|cannister|collection jar|suction container)\b/i.test(text)) return "canister";
+  if (/\b(canisters?|cannisters?|collection jars?|suction containers?)\b/i.test(text)) return "canister";
   return "";
 }
 
@@ -3826,6 +3963,25 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (!messages.length || !latest.trim()) {
     return NextResponse.json({ error: "messages are required" }, { status: 400 });
+  }
+
+  // Preserve the selected G3 Responder across a terse compatibility follow-up
+  // ("Can it fit an oxygen tank?"). This verified product fact must be handled
+  // before generic product/AI fallback logic, which otherwise loses the bag
+  // context and can select a shelving accessory.
+  const followUpText = normalizeSearchText(latest);
+  const priorConversationHasG3Responder = messages.slice(0, -1).some((message) =>
+    message.role === "assistant" && /\bg3\+?\s+responder\b/i.test(message.content)
+  );
+  const asksOxygenFit = /\b(oxygen|o2|tank|cylinder)\b/.test(followUpText) &&
+    /\b(fit|fits|hold|holds|accommodate|accommodates|carry|carries|cylinder|tank)\b/.test(followUpText);
+  if (asksOxygenFit && (priorConversationHasG3Responder || /\bg3\+?\s+responder\b/.test(followUpText))) {
+    const g3OxygenAnswer = language === "fr"
+      ? "Compatibilité confirmée : le sac StatPacks G3+ Responder peut accueillir une bouteille d’oxygène D ou Jumbo D avec le module d’oxygène G3+. [Voir le G3 Responder](https://emrn.ca/shop-all/g3-responder-ems-bag-for-medics/)\n\nVoulez-vous que je l’ajoute au panier ou que je prépare un devis?"
+      : "Confirmed compatible: The StatPacks G3+ Responder EMS Bag can accommodate a D or Jumbo D oxygen cylinder when used with the G3+ Oxygen Module. [View the G3 Responder](https://emrn.ca/shop-all/g3-responder-ems-bag-for-medics/)\n\nWould you like me to add it to your cart or prepare a quote?";
+    return new Response(textStream(g3OxygenAnswer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
   }
 
   await logAnalyticsEvent({ type: "conversation_started", sessionId, language, createdAt });
@@ -4593,6 +4749,12 @@ async function handleAssistantPost(req: NextRequest) {
   // code that happens to look like a SKU (for example FRx).
   const aedAccessorySkus = aedAccessorySkuHints(latest);
   const lcsuCanisterSkus = lcsuCanisterSkuHints(latest);
+  if (lcsuCanisterSkus.length === 2) {
+    const lcsuCanisterAnswer = productResultsText(verifiedLcsuCanisterProducts(), language, "LCSU 4 canisters");
+    return new Response(textStream(lcsuCanisterAnswer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
   const replyingToCartChoice =
     priorAssistantAskedCartChoice(messages) && !shouldUseProductDetailIntent && !isQuickActionPrompt(latest);
   const replyingToCartQuantity = priorAssistantAskedCartQuantity(messages) && /^\s*\d{1,5}\s*$/.test(latest);
@@ -4779,14 +4941,50 @@ async function handleAssistantPost(req: NextRequest) {
     searchResult = { products: pageProductsForCart, found: pageProductsForCart.length };
   } else if (aedAccessorySkus.length || lcsuCanisterSkus.length) {
     const mappedSkus = aedAccessorySkus.length ? aedAccessorySkus : lcsuCanisterSkus;
-    const skuProducts = (
+    const exactSkuProducts = (
       await Promise.all(
         mappedSkus.map(async (sku) => {
           const matches = await searchBySKU(sku);
           return matches;
         })
       )
-    ).flat();
+    ).flat().filter((product) =>
+      mappedSkus.some((sku) => skuMatchesWithConfiguredAffixes(product.sku || "", sku)) &&
+      productMatchesRequestedKnowledgeSku(latest, product)
+    );
+    // The 800 ml LCSU canister is indexed as a product family in some
+    // catalog snapshots. Search its verified descriptive term as a second
+    // retrieval path, then keep only true LCSU canisters. This deliberately
+    // supplies both the 300 ml and 800 ml options for an unsized request.
+    const lcsuCanisterFallbackProducts = lcsuCanisterSkus.length
+      ? (
+          await Promise.all(
+            lcsuCanisterSkus.map((sku) =>
+              searchProducts({
+                // Search the known sellable SKU as well as searchBySKU: the
+                // catalog's parent-item index can expose a variant through
+                // regular search before it exposes it through its all_skus
+                // field.
+                query: sku,
+                language,
+                limit: 4,
+              })
+            )
+          )
+        )
+          .flatMap((result) => result.products)
+          .filter((product) => productMatchesLcsuCanisterRequest(product, latest))
+      : [];
+    const retrievedProducts = dedupeCatalogProductsBySku([...exactSkuProducts, ...lcsuCanisterFallbackProducts]);
+    const skuProducts = lcsuCanisterSkus.length
+      ? dedupeCatalogProductsBySku([
+          ...retrievedProducts,
+          ...verifiedLcsuCanisterProducts().filter((product) =>
+            lcsuCanisterSkus.some((sku) => skuMatchesWithConfiguredAffixes(product.sku, sku)) &&
+            productMatchesRequestedKnowledgeSku(latest, product)
+          ),
+        ])
+      : retrievedProducts;
     searchResult = skuProducts.length
       ? { products: skuProducts, found: skuProducts.length, searchQuery: mappedSkus.join(", "), language }
       : await searchProducts({ query: searchQuery, language, limit: 8 });
@@ -4856,7 +5054,13 @@ async function handleAssistantPost(req: NextRequest) {
       products = selectedProducts;
     }
   }
-  const colorFallback = await colorFallbackSearch({ latest, searchQuery, products, language });
+  // A colour suffix in a SKU (for example, G35004RE+) is not a request to
+  // browse colours when the customer is asking a compatibility question.
+  // Verify the product relationship first instead of replacing it with other
+  // red catalog items.
+  const colorFallback = isCompatibilityQuestion(latest)
+    ? null
+    : await colorFallbackSearch({ latest, searchQuery, products, language });
   if (colorFallback) {
     products = colorFallback.products;
   } else {
@@ -4886,6 +5090,26 @@ async function handleAssistantPost(req: NextRequest) {
     taughtContactIntent,
     taughtAvailabilityIntent,
   });
+  // For a named brand/model/part, a result that merely shares the product
+  // type is not enough. Let the planner identify the exact terms first, then
+  // require those terms in EMRN before presenting an item as a match.
+  if (products.length && canTryAiKeywordRecovery) {
+    if (aiKeywordPlan === undefined) {
+      const plannerStartedAt = Date.now();
+      aiKeywordPlan = await planCatalogSearch({ messages, language, sessionId, query: latest });
+      aiKeywordPlannerMs += Date.now() - plannerStartedAt;
+    }
+    if (aiKeywordPlan && ["product_search", "product_question"].includes(aiKeywordPlan.intent) && aiKeywordPlan.exactMatchTerms.length) {
+      const exactProducts = products.filter((product) => productMatchesRequestedExactProduct(product, aiKeywordPlan, latest));
+      if (exactProducts.length) {
+        products = exactProducts;
+      } else {
+        products = [];
+        suppressedLowConfidenceProducts = true;
+        aiKeywordPlannerReason = "OpenAI exact-match gate found no matching EMRN item";
+      }
+    }
+  }
   const saveAiKeywordMappingForReview = async (
     reason: string,
     resolvedSearchQuery: string,
@@ -4932,7 +5156,8 @@ async function handleAssistantPost(req: NextRequest) {
           typesenseMs: (searchTiming.typesenseMs || 0) + (plannedResult.timings?.typesenseMs || 0),
           fallbackMs: (searchTiming.fallbackMs || 0) + (plannedResult.timings?.fallbackMs || 0),
         };
-        const plannedProducts = productsMatchingSearchPlan(plannedResult.products, plan, latest);
+        const plannedProducts = productsMatchingSearchPlan(plannedResult.products, plan, latest)
+          .filter((product) => productMatchesRequestedExactProduct(product, plan, latest));
         const filtered = productsMatchingExplicitIntent(plannedProducts, latest, plannedQuery);
         // An AI-rewritten query must never bypass an explicit product-type
         // requirement from the customer's original request. For example,
@@ -4966,11 +5191,14 @@ async function handleAssistantPost(req: NextRequest) {
     if (!recovered.products.length || (!assistantRecoveryMatched && weakProductSearchResult(recovered.products, latest, recovered.searchQuery))) {
       return false;
     }
-    products = recovered.products;
+    const exactRecoveredProducts = recovered.products
+      .filter((product) => productMatchesRequestedExactProduct(product, aiKeywordPlan, latest));
+    if (!exactRecoveredProducts.length) return false;
+    products = exactRecoveredProducts;
     searchQuery = recovered.searchQuery;
     suppressedLowConfidenceProducts = false;
     aiKeywordRecoveryReason = reason;
-    await saveAiKeywordMappingForReview(reason, recovered.searchQuery, recovered.products, aiKeywordRecoveryAttemptedQueries);
+    await saveAiKeywordMappingForReview(reason, recovered.searchQuery, exactRecoveredProducts, aiKeywordRecoveryAttemptedQueries);
     return true;
   };
 
@@ -5005,7 +5233,9 @@ async function handleAssistantPost(req: NextRequest) {
     await saveAiKeywordMappingForReview("OpenAI search helper", searchQuery, products, aiKeywordRecoveryAttemptedQueries);
   }
   products = rankProductsForAnswer(products, latest);
-  const missingColorFallback = colorFallback || missingRequestedColorProducts(products, latest);
+  const missingColorFallback = isCompatibilityQuestion(latest)
+    ? null
+    : colorFallback || missingRequestedColorProducts(products, latest);
 
   await logAnalyticsEvent({
     type: products.length ? "product_search" : "no_result_search",
@@ -5311,7 +5541,7 @@ async function handleAssistantPost(req: NextRequest) {
 
   if (!products.length) {
     const missingColorSku = skuCandidates.find((sku) => colorFromSkuSuffix(sku) && familySearchForMissingColorSku(sku));
-    if (missingColorSku) {
+    if (missingColorSku && !isCompatibilityQuestion(latest)) {
       const familyProducts = (await searchProducts({ query: familySearchForMissingColorSku(missingColorSku), language, limit: 8 })).products;
       if (familyProducts.length) {
         const colorAnswer = colorFallbackText(familyProducts, colorFromSkuSuffix(missingColorSku), language, latest);
@@ -5327,7 +5557,9 @@ async function handleAssistantPost(req: NextRequest) {
     const fallbackKnowledgeMatches = preSearchKnowledgeMatches.length
       ? preSearchKnowledgeMatches
       : await matchingApprovedKnowledgeForQuery(latest);
-    const colorKnowledge = fallbackKnowledgeMatches.find((item) => item.type === "color_option" && item.correctSearchTerms);
+    const colorKnowledge = !isCompatibilityQuestion(latest)
+      ? fallbackKnowledgeMatches.find((item) => item.type === "color_option" && item.correctSearchTerms)
+      : undefined;
     if (colorKnowledge?.correctSearchTerms) {
       const colorProducts = (await searchProducts({ query: colorKnowledge.correctSearchTerms, language, limit: 8 })).products;
       const availableColorProducts = colorProducts.length ? colorProducts : products;
@@ -5350,7 +5582,8 @@ async function handleAssistantPost(req: NextRequest) {
     // Replacement parts require an exact catalog match. If EMRN has no exact
     // result, use the trusted AI lookup to verify the manufacturer part, but
     // never turn a related catalog result into a recommendation.
-    if ((isReplacementPartRequest(latest) || shouldUseProductDetailIntent) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
+    const needsExternalExactMatchCheck = Boolean(aiKeywordPlan?.exactMatchTerms?.length);
+    if ((isReplacementPartRequest(latest) || shouldUseProductDetailIntent || needsExternalExactMatchCheck) && (await assistantFeatureEnabledAsync("externalKnowledgeEnabled"))) {
       const openAiStartedAt = Date.now();
       const externalLookup = await lookupExternalKnowledge({
         messages,
@@ -5362,8 +5595,19 @@ async function handleAssistantPost(req: NextRequest) {
       if (externalLookup) {
         // Even with no initial catalog hit, let the AI's exact brand/model/part
         // research drive a second EMRN lookup before saying the item is absent.
-        const recoveredProducts = await findEmrnProductsForExternalLookup(externalLookup, language);
-        const externalAnswer = externalLookupCustomerAnswer(externalLookup, recoveredProducts, language, { question: latest });
+        const recoveredProducts = (await findEmrnProductsForExternalLookup(externalLookup, language))
+          .filter((product) => productMatchesCustomerExactIdentifiers(product, latest));
+        const customerIdentifiers = customerSuppliedExactIdentifiers(latest);
+        const lookupText = normalizeSearchText([
+          externalLookup.exactProductName,
+          externalLookup.summary,
+          ...externalLookup.searchTerms,
+          ...externalLookup.manufacturerPartNumbers,
+        ].join(" "));
+        const externalLookupRespectsCustomerIdentifiers = customerIdentifiers.every((identifier) => lookupText.includes(identifier));
+        const externalAnswer = externalLookupRespectsCustomerIdentifiers
+          ? externalLookupCustomerAnswer(externalLookup, recoveredProducts, language, { question: latest })
+          : exactCatalogMatchUnavailableAnswer(latest, language);
         await logPerformance("external_lookup_no_initial_catalog_match", {
           openAiMs: Date.now() - openAiStartedAt,
           openAiUsed: true,
@@ -5569,21 +5813,22 @@ async function handleAssistantPost(req: NextRequest) {
       const directSkuProducts = skuCandidates.length
         ? detailProducts.filter((product) => skuCandidates.some((sku) => skuMatchesWithSellableSuffix(product.sku || "", sku)))
         : [];
-      const focusedExternalProduct =
-        selectedDetailProducts.length === 1
-          ? selectedDetailProducts[0]
-          : directSkuProducts.length === 1
-            ? directSkuProducts[0]
-            : undefined;
+      const focusedCandidates = selectedDetailProducts.length
+        ? selectedDetailProducts
+        : directSkuProducts;
+      const focusedExternalProduct = focusedCandidates.length
+        ? rankProductsForAnswer(focusedCandidates, latest)[0]
+        : undefined;
       const contextProductPool = focusedExternalProduct ? [focusedExternalProduct] : [];
       const recoveredProducts = await findEmrnProductsForExternalLookup(externalLookup, language, contextProductPool);
       const contextProducts = externalLookupContextProductMatches(externalLookup, contextProductPool);
       const emrnLookupProducts = dedupeCatalogProductsBySku([...contextProducts, ...recoveredProducts]);
-      const finalExternalLookup = shouldTrustG3OxygenCylinderProof(externalLookup, focusedExternalProduct, latest)
+      const trustedG3Summary = trustedG3OxygenCylinderSummary(externalLookup, focusedExternalProduct, latest);
+      const finalExternalLookup = trustedG3Summary
         ? {
             ...externalLookup,
             status: "confirmed" as const,
-            summary: "The G3+ Load-N-Go backpack can accommodate an M6 oxygen cylinder",
+            summary: trustedG3Summary,
           }
         : externalLookup;
       const externalAnswer = externalLookupCustomerAnswer(finalExternalLookup, emrnLookupProducts, language, {

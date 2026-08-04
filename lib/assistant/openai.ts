@@ -17,6 +17,10 @@ export type CatalogSearchPlan = {
   intent: "product_search" | "product_question" | "quote" | "order_status" | "contact" | "support" | "not_shopping";
   searchTerms: string[];
   mustInclude: string[];
+  // Brand, family, model, or manufacturer-part terms that must be present
+  // before we present a catalog item as the customer's requested product.
+  // Empty for broad category searches (for example, "exam gloves").
+  exactMatchTerms: string[];
   avoid: string[];
   confidence: number;
   reason: string;
@@ -614,6 +618,7 @@ function parseCatalogSearchPlan(value: unknown): CatalogSearchPlan | null {
       intent: intent as CatalogSearchPlan["intent"],
       searchTerms: cleanLookupArray(parsed.searchTerms, 6),
       mustInclude: cleanLookupArray(parsed.mustInclude, 8),
+      exactMatchTerms: cleanLookupArray(parsed.exactMatchTerms, 8),
       avoid: cleanLookupArray(parsed.avoid, 8),
       confidence: Math.max(0, Math.min(1, Number(parsed.confidence || 0))),
       reason: String(parsed.reason || "").trim().slice(0, 300),
@@ -673,6 +678,7 @@ export async function planCatalogSearch({
       "Prefer concrete product nouns, medical use, brand/family, material, size, body area, anatomy subject, and item type.",
       "Remove conversational filler. Correct obvious spelling mistakes and missing spaces.",
       "For long requests, identify what product the customer is actually trying to buy.",
+      "Set exactMatchTerms only when the customer is asking for a specific brand, product family, model, or manufacturer part. Include only identifying terms that a true catalog match must contain. Leave it empty for a broad category request. Never put generic product-type words there.",
       "If the customer asks for home, clinic, patient, personal, or reference use, avoid simulator/training-only items unless they explicitly ask for training, teaching, simulation, manikin, or practice.",
       "Put unwanted item classes in avoid, for example training simulator, manikin, replacement wax, refill, accessory, poster if they do not match the requested item.",
       "Do not include competitor/store names unless they are product brands.",
@@ -691,11 +697,12 @@ export async function planCatalogSearch({
             intent: { type: "string", enum: ["product_search", "product_question", "quote", "order_status", "contact", "support", "not_shopping"] },
             searchTerms: { type: "array", items: { type: "string" } },
             mustInclude: { type: "array", items: { type: "string" } },
+            exactMatchTerms: { type: "array", items: { type: "string" } },
             avoid: { type: "array", items: { type: "string" } },
             confidence: { type: "number" },
             reason: { type: "string" },
           },
-          required: ["intent", "searchTerms", "mustInclude", "avoid", "confidence", "reason"],
+          required: ["intent", "searchTerms", "mustInclude", "exactMatchTerms", "avoid", "confidence", "reason"],
         },
       },
     },
@@ -710,6 +717,7 @@ export async function planCatalogSearch({
       "  \"intent\": \"product_search | product_question | quote | order_status | contact | support | not_shopping\",",
       "  \"searchTerms\": [\"short EMRN searches\"],",
       "  \"mustInclude\": [\"terms that matching products should contain\"],",
+      "  \"exactMatchTerms\": [\"brand/model/part terms required for an exact item match, or empty for a broad category\"],",
       "  \"avoid\": [\"terms/products that should not win\"],",
       "  \"confidence\": 0.0,",
       "  \"reason\": \"brief explanation\"",
