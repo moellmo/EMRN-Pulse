@@ -154,9 +154,21 @@ async function aiSearchHelperEnabled() {
 function shouldUseAiSearchHelper(original: string, language: "en" | "fr", looksNaturalLanguage: boolean, aiEnabled: boolean) {
   if (!aiEnabled || language !== "en" || !looksNaturalLanguage) return false;
   if (/\b[A-Z]{1,8}[-\s]?\d{3,}[A-Z0-9-]*\+?\b/.test(original)) return false;
-  const wordCount = original.trim().split(/\s+/).filter(Boolean).length;
+  const normalized = normalizeSearchText(original);
+  const productTerms = normalized
+    .replace(/^(?:do\s+you\s+have|do\s+you\s+carry|i\s+(?:need|want)|we\s+(?:need|want)|looking\s+for|find|search\s+for|show\s+me)\s+/i, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  // A normal catalog lookup such as “do you have saline”, “Ferno stretcher”,
+  // or “gauze pads” should go directly to Typesense.  Calling OpenAI first
+  // adds seconds of latency and provides no benefit when the product terms are
+  // already clear.
+  const isSimpleCatalogLookup = productTerms.length > 0 && productTerms.length <= 4 &&
+    !/\b(?:compatible|compatibility|fit|fits|work|works|replacement|accessory|which|what\s+(?:size|pads?|part)|how\s+(?:big|large|many|much)|for\s+(?:this|that)|image|picture|photo|poster|chart|diagram|reference|anatomy|ear\s+wax|inside\s+(?:my\s+)?ears?)\b/i.test(normalized);
+  if (isSimpleCatalogLookup) return false;
+  const wordCount = productTerms.length;
   const productLanguage = /\b(poster|chart|diagram|reference|clinic|image|picture|photo|anatomy|anatomical|vessels?|blood|face|ear|ears|wax|otoscope|scope)\b/i.test(original);
-  return wordCount >= 7 || productLanguage || /\b(what|which|does|do|work|works|fit|fits|compatible|compatibility|replacement|part|accessory|pads?|battery|batteries|for|need|looking|find|show)\b/i.test(original);
+  return wordCount >= 7 || productLanguage || /\b(what|which|does|work|works|fit|fits|compatible|compatibility|replacement|part|accessory|pads?|battery|batteries)\b/i.test(original);
 }
 
 function shouldUseFrenchAiSearchHelper(original: string, looksNaturalLanguage: boolean, aiEnabled: boolean) {
