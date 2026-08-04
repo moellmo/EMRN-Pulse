@@ -4017,13 +4017,83 @@ async function handleAssistantPost(req: NextRequest) {
   const priorConversationHasG3Responder = messages.slice(0, -1).some((message) =>
     message.role === "assistant" && /\bg3\+?\s+responder\b/i.test(message.content)
   );
+  const priorConversationHasG3LoadNGo = messages.slice(0, -1).some((message) =>
+    message.role === "assistant" && /\bg3\+?\s+load(?:\s*|-)?n(?:\s*|-)?go\b|\bload(?:\s*|-)?n(?:\s*|-)?go medic backpack\b/i.test(message.content)
+  );
   const asksOxygenFit = /\b(oxygen|o2|tank|cylinder)\b/.test(followUpText) &&
     /\b(fit|fits|hold|holds|accommodate|accommodates|carry|carries|cylinder|tank)\b/.test(followUpText);
+  const priorConversationHasLcsu = messages.slice(0, -1).some((message) =>
+    message.role === "assistant" && /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/i.test(message.content)
+  );
+  const asksPackageQuantity = /\b(how\s+many|pack|package|case|count|quantity|qty|sold\s+by|sold\s+as|per\s+(?:box|pack|case))\b/i.test(latest);
   if (asksOxygenFit && (priorConversationHasG3Responder || /\bg3\+?\s+responder\b/.test(followUpText))) {
     const g3OxygenAnswer = language === "fr"
       ? "Compatibilité confirmée : le sac StatPacks G3+ Responder peut accueillir une bouteille d’oxygène D ou Jumbo D avec le module d’oxygène G3+. [Voir le G3 Responder](https://emrn.ca/shop-all/g3-responder-ems-bag-for-medics/)\n\nVoulez-vous que je l’ajoute au panier ou que je prépare un devis?"
       : "Confirmed compatible: The StatPacks G3+ Responder EMS Bag can accommodate a D or Jumbo D oxygen cylinder when used with the G3+ Oxygen Module. [View the G3 Responder](https://emrn.ca/shop-all/g3-responder-ems-bag-for-medics/)\n\nWould you like me to add it to your cart or prepare a quote?";
     return new Response(textStream(g3OxygenAnswer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  // Load-N-Go has the same follow-up failure mode as Responder: the product
+  // result is known, but a generic external lookup can lose that context and
+  // incorrectly say it cannot confirm. Keep the selected family and show its
+  // actual sellable colour variants with the verified M6-cylinder answer.
+  if (asksOxygenFit && (priorConversationHasG3LoadNGo || /\bg3\+?\s+load(?:\s*|-)?n(?:\s*|-)?go\b/.test(followUpText))) {
+    const products = dedupeCatalogProductsBySku(
+      (await Promise.all(["G35004RE", "G35004BU", "G35004TK"].map((sku) => searchBySKU(sku)))).flat()
+    );
+    const intro = language === "fr"
+      ? "Compatibilité confirmée : le sac à dos G3+ Load-N-Go peut accueillir une bouteille d’oxygène M6 avec le module d’oxygène G3+."
+      : "Confirmed compatible: The G3+ Load-N-Go Medic Backpack can accommodate an M6 oxygen cylinder when paired with the G3+ Oxygen Module.";
+    const answer = products.length
+      ? `${intro}\n\n${productResultsText(products, language, "G3+ Load N Go Medic Backpack")}`
+      : `${intro}\n\n${language === "fr" ? "Voulez-vous que je prépare un devis?" : "Would you like me to prepare a quote?"}`;
+    return new Response(textStream(answer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  // G35004 is the manufacturer family/model number; EMRN sells the actual
+  // colour variants with a suffix. A base-model lookup should show those
+  // variants, just as a direct G35004RE/G35004BU/G35004TK lookup does.
+  if (/\bG35004\b/i.test(latest)) {
+    const products = dedupeCatalogProductsBySku(
+      (await Promise.all(["G35004RE", "G35004BU", "G35004TK"].map((sku) => searchBySKU(sku)))).flat()
+    );
+    if (products.length) {
+      return new Response(textStream(productResultsText(products, language, "G3+ Load N Go Medic Backpack")), {
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+  }
+
+  const requestedLcsuCanisterSku = /\b800\s*(?:ml|m l)\b/.test(followUpText)
+    ? "8002004L10"
+    : /\b300\s*(?:ml|m l)\b/.test(followUpText)
+      ? "886100"
+      : null;
+  if (priorConversationHasLcsu && asksPackageQuantity && requestedLcsuCanisterSku && /\b(canisters?|cannisters?)\b/.test(followUpText)) {
+    const product = verifiedLcsuCanisterProducts().find((item) => item.sku === requestedLcsuCanisterSku)!;
+    const packText = product.sku === "8002004L10"
+      ? "It is sold as a pack of 10 disposable 800 ml canisters with lids."
+      : "It is sold as one disposable 300 ml canister with tubing.";
+    const answer = language === "fr"
+      ? `${product.sku === "8002004L10" ? "Il est vendu en paquet de 10 contenants jetables de 800 ml avec couvercles." : "Il est vendu comme un contenant jetable de 300 ml avec tubulure."}\n\n**${product.name}** — SKU: ${product.sku} — $${product.price.toFixed(2)}. [Voir le produit](${product.url})`
+      : `${packText}\n\n**${product.name}** — SKU: ${product.sku} — $${product.price.toFixed(2)}. [View product](${product.url})`;
+    return new Response(textStream(answer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  // A named LCSU family/accessory request has two genuine sellable canister
+  // options. Handle it before broad "smaller suction" intent handling so a
+  // customer sees the complete matching choice set rather than an unrelated
+  // clarification or an arbitrary accessory.
+  if (isLcsuCanisterRequest(latest)) {
+    const requestedSkus = lcsuCanisterSkuHints(latest);
+    const products = verifiedLcsuCanisterProducts().filter((product) => requestedSkus.includes(product.sku));
+    return new Response(textStream(productResultsText(products, language, "LCSU 4 canisters")), {
       headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
     });
   }
@@ -4827,12 +4897,12 @@ async function handleAssistantPost(req: NextRequest) {
   const aedAccessorySkus = aedAccessorySkuHints(latest);
   const g3ResponderSkus = g3ResponderSkuHints(latest);
   const lcsuCanisterSkus = lcsuCanisterSkuHints(latest);
-  const asksPackageQuantity = /\b(how\s+many|pack|package|case|count|quantity|qty|sold\s+by|sold\s+as|per\s+(?:box|pack|case))\b/i.test(latest);
+  const asksStandalonePackageQuantity = /\b(how\s+many|pack|package|case|count|quantity|qty|sold\s+by|sold\s+as|per\s+(?:box|pack|case))\b/i.test(latest);
   const directLcsuCanisterSku = [
     ...lcsuCanisterSkus,
     ...extractSkuCandidates(latest),
   ].map(normalizeSku).find((sku) => sku === "886100" || sku === "8002004L10");
-  if (directLcsuCanisterSku && asksPackageQuantity) {
+  if (directLcsuCanisterSku && asksStandalonePackageQuantity) {
     const product = verifiedLcsuCanisterProducts().find((item) => item.sku === directLcsuCanisterSku);
     if (product) {
       const packText = product.sku === "8002004L10"
