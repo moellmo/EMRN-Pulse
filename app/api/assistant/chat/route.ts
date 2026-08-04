@@ -1260,6 +1260,20 @@ function looksLikePlainCatalogKeywordSearch(text: string) {
   return hasProductNoun && hasModifier;
 }
 
+// Keep ordinary category and product-name lookups on the fast EMRN catalog
+// path.  These do not need an LLM to understand them (for example, "do you
+// have shower chairs?" or "saline"), and sending them to the recovery
+// planner adds several seconds without improving the result.  Questions that
+// contain a compatibility, replacement, measurement, or other requirement
+// remain eligible for AI verification below.
+function looksLikeSimpleDirectCatalogSearch(text: string) {
+  const normalized = normalizeSearchText(cleanProductQuery(text));
+  if (!normalized || extractSkuCandidates(text).length) return false;
+  const terms = normalized.split(/\s+/).filter(Boolean);
+  if (!terms.length || terms.length > 4) return false;
+  return !/\b(?:compatible|compatibility|fit|fits|work|works|replacement|replace|accessor(?:y|ies)|for\s+(?:this|that|an?\s+[a-z0-9-]+)|what\s+(?:size|weight|capacity|part)|how\s+(?:big|large|many|much)|size|dimension|measurement|capacity|weight|stock|available|availability|price|cost|sold\s+by|quantity|qty|photo|picture|image)\b/i.test(normalized);
+}
+
 function escapeRegExp(value: string) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -2001,6 +2015,7 @@ function shouldUseAiKeywordRecovery(input: {
   if (isContactIntent(input.latest) || input.taughtContactIntent) return false;
   if (isCartIntent(input.latest)) return false;
   if (isAvailabilityIntent(input.latest) || input.taughtAvailabilityIntent) return false;
+  if (looksLikeSimpleDirectCatalogSearch(input.latest)) return false;
   if (assistantRecoveryQueries(input.latest).length) return true;
   if (explicitProductTypeGroups(input.latest).length) return true;
   return isProductSearchIntent(input.latest) || looksLikeSpecificProductSearch(input.latest) || looksLikePlainCatalogKeywordSearch(input.latest);
@@ -5309,7 +5324,11 @@ async function handleAssistantPost(req: NextRequest) {
   let aiKeywordPlannerMs = 0;
   let aiKeywordPlannerReason = "";
   let aiKeywordPlan: CatalogSearchPlan | null | undefined = broadIntentPlan;
-  const canTryAiKeywordRecovery = shouldUseAiKeywordRecovery({
+  // Once a page/SKU detail question has identified its EMRN product, use the
+  // single trusted-detail lookup below if the catalog itself lacks the fact.
+  // Running the keyword planner first makes customers wait through two AI
+  // calls before the answer can start streaming.
+  const canTryAiKeywordRecovery = !shouldUseProductDetailIntent && shouldUseAiKeywordRecovery({
     latest,
     skuCandidates,
     taughtQuoteIntent,
