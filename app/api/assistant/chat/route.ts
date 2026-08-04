@@ -1676,6 +1676,9 @@ function explicitProductTypeGroups(query: string): ProductIntentRequirement[] {
   if (/\b(canister|cannister|collection jar|suction container|suction canister)\b/.test(normalized)) {
     groups.push({ terms: ["canister", "cannister", "collection jar", "suction container"], field: "name_category" });
   }
+  if (/\b(?:vial|vials|flacon|flacons)\b/.test(normalized)) {
+    groups.push({ terms: ["vial", "vials", "flacon", "flacons"], field: "name_category" });
+  }
   // Product type and active ingredient are both mandatory here. A broad
   // search service may return a result set for an otherwise unmatched query;
   // do not turn that into an answer that recommends a syringe, brush, or
@@ -3423,6 +3426,36 @@ function contactHelpText(language: "en" | "fr" | "unknown") {
     : "Of course. I can send a message to our team. Please send your name, email, and question. You can also use the Contact Us page: https://emrn.ca/contact-us/";
 }
 
+function shippingPolicyAnswerText(text: string, language: "en" | "fr" | "unknown") {
+  const asksAboutShippingCost = /\b(?:shipping|delivery|ship|deliver|livraison|exp[eé]dition|frais)\b/i.test(text) &&
+    /\b(?:cost|price|fee|charge|how much|free|under|over|below|above|co[uû]te?|prix|gratuit|moins|plus)\b|\$/i.test(text);
+  if (!asksAboutShippingCost) return "";
+
+  return language === "fr"
+    ? "Pour les commandes en ligne, la livraison coûte **29,95 $** lorsque la commande est de moins de **150 $**. Les commandes en ligne de plus de **150 $** bénéficient de la livraison gratuite."
+    : "For online orders, shipping is **$29.95** when the order is under **$150**. Online orders over **$150** receive free shipping.";
+}
+
+function supportResponseTimeAnswerText(text: string, language: "en" | "fr" | "unknown") {
+  const asksWhenSupportWillReply = /\b(?:when|how soon|how long|hear back|hear from|response|reply|respond|quand|combien de temps|r[eé]ponse)\b/i.test(text) &&
+    /\b(?:hear from them|hear back|support|team|they|them|r[eé]ponse|[eé]quipe)\b/i.test(text);
+  if (!asksWhenSupportWillReply) return "";
+
+  return language === "fr"
+    ? "Pour une demande envoyée au support, vous recevrez habituellement une réponse dans un délai d’un jour ouvrable."
+    : "For a request sent to support, you will usually hear back within 1 business day.";
+}
+
+function smallerSuctionClarifierText(text: string, language: "en" | "fr" | "unknown") {
+  const asksForSmallerSuction = /\b(?:smaller|small|compact|portable|plus petit|petit)\b/i.test(text) &&
+    /\b(?:suction|aspiration)\b/i.test(text);
+  if (!asksForSmallerSuction) return "";
+
+  return language === "fr"
+    ? "Cherchez-vous une unité d’aspiration portable plus petite, ou des cathéters/tubulures d’aspiration plus petits? Dites-moi l’utilisation ou le modèle actuel, et je chercherai le bon article EMRN."
+    : "Do you mean a smaller portable suction unit, or smaller suction catheters/tubing? Tell me the intended use or current model and I’ll look for the right EMRN item.";
+}
+
 function externalKnowledgeDisabledText(products: CatalogProduct[], language: "en" | "fr" | "unknown") {
   const product = products.find((item) => item.url);
   if (language === "fr") {
@@ -3492,10 +3525,10 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
     );
   }
 
-  if (/\b(shipping|ship across canada|free shipping|delivery time|ship time|shipping rates|oxygen cylinder|backorder)\b/i.test(text)) {
+  if (/\b(shipping|delivery|ship across canada|free shipping|delivery time|ship time|shipping rates|oxygen cylinder|backorder)\b/i.test(text)) {
     return answer(
-      `EMRN processes orders when received. Most orders ship within 1-2 business days when merchandise is available and credit/payment verification is complete. If there is a delay or backorder, EMRN will try to contact you and may offer backorder, substitution, or cancellation options. Free shipping applies to online/web orders over $150 shipped within Canada, excluding territories and remote areas. Large/overweight, hazardous, or temperature-controlled freight items do not qualify. Shipping rates are calculated by weight, size, and dimensions. Details: ${link("Shipping and returns", shippingReturnsLink)}`,
-      `EMRN traite les commandes à la réception. La plupart des commandes sont expédiées en 1 à 2 jours ouvrables lorsque les articles sont disponibles et que le paiement/crédit est confirmé. En cas de délai ou rupture, EMRN tentera de vous contacter et pourra proposer de garder la commande en attente, substituer un article ou annuler. La livraison gratuite s’applique aux commandes web de plus de 150 $ expédiées au Canada, sauf territoires et régions éloignées. Les articles lourds/surdimensionnés, dangereux ou nécessitant un transport contrôlé en température ne sont pas admissibles. Les frais sont calculés selon poids, taille et dimensions. Détails: ${link("Livraison et retours", shippingReturnsLink)}`
+      `For online orders, shipping is **$29.95** when the order is under **$150**. Online orders over **$150** receive free shipping. For product-specific delivery timing, send the product name or SKU and I’ll check its availability. Details: ${link("Shipping and returns", shippingReturnsLink)}`,
+      `Pour les commandes en ligne, la livraison coûte **29,95 $** lorsque la commande est de moins de **150 $**. Les commandes en ligne de plus de **150 $** bénéficient de la livraison gratuite. Pour connaître le délai d’un produit précis, envoyez le nom ou le SKU et je vérifierai sa disponibilité. Détails: ${link("Livraison et retours", shippingReturnsLink)}`
     );
   }
 
@@ -3825,6 +3858,27 @@ async function handleAssistantPost(req: NextRequest) {
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
+  }
+
+  const shippingPolicyAnswer = shippingPolicyAnswerText(latest, language);
+  if (shippingPolicyAnswer) {
+    return new Response(textStream(shippingPolicyAnswer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  const supportResponseTimeAnswer = supportResponseTimeAnswerText(latest, language);
+  if (supportResponseTimeAnswer) {
+    return new Response(textStream(supportResponseTimeAnswer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  const smallerSuctionClarifier = smallerSuctionClarifierText(latest, language);
+  if (smallerSuctionClarifier) {
+    return new Response(textStream(smallerSuctionClarifier), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
   }
 
   if (isNegativeSearchFeedback(latest)) {

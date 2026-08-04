@@ -146,10 +146,10 @@ export function isNegativeSearchFeedback(text: string) {
   text = intentText(text);
   const normalized = text.toLowerCase().replace(/[’']/g, "").replace(/[.!?]+/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized) return false;
-  if (/^(this is wrong|that is wrong|thats wrong|thats not it|that is not it|not it|wrong|wrong one|wrong item|wrong product|incorrect|not correct|no that is not it|no thats not it|nope thats not it|nope not it|not what i need|not what i asked|not helpful|does not help|doesnt help|useless|meri useless|meringue useless)$/.test(normalized)) {
+  if (/^(this is wrong|that is wrong|thats wrong|thats not it|that is not it|that not my item|that is not my item|thats not my item|this is not my item|this isnt my item|not it|wrong|wrong one|wrong item|wrong product|incorrect|not correct|no that is not it|no thats not it|nope thats not it|nope not it|not what i need|not what i asked|not helpful|does not help|doesnt help|useless|meri useless|meringue useless)$/.test(normalized)) {
     return true;
   }
-  return /\b(this is wrong|that is wrong|thats wrong|thats not it|that is not it|wrong item|wrong product|not what i need|not what i asked|not helpful|doesnt help|does not help|meri useless|meringue useless)\b/i.test(normalized);
+  return /\b(this is wrong|that is wrong|thats wrong|thats not it|that is not it|that not my item|that is not my item|thats not my item|this is not my item|this isnt my item|wrong item|wrong product|not what i need|not what i asked|not helpful|doesnt help|does not help|meri useless|meringue useless)\b/i.test(normalized);
 }
 
 export function isQuoteIntent(text: string) {
