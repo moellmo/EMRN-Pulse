@@ -1,4 +1,4 @@
-import { getTypesenseSearch } from "../typesense";
+import { getTypesenseAdmin, getTypesenseSearch } from "../typesense";
 import { absoluteStoreUrl, normalizeCommerceUrl } from "../store-url";
 import { buildSmartSearchQuery } from "../smart-search-translator";
 import type { SmartQueryResult } from "../smart-search-translator";
@@ -10,6 +10,8 @@ import { readSkuConfigSync } from "./sku-config";
 import type { CartRequest, CartResult, CatalogProduct, ProductSearchInput } from "./types";
 
 const COLLECTION_NAME = "emrn_products";
+const COLLECTION_PREFIX = "emrn_products_";
+let resolvedTypesenseCollection: Promise<string> | undefined;
 const STORE_HASH = process.env.BIGCOMMERCE_STORE_HASH;
 const ACCESS_TOKEN = process.env.BIGCOMMERCE_ACCESS_TOKEN;
 const BIGCOMMERCE_API_BASE = STORE_HASH ? `https://api.bigcommerce.com/stores/${STORE_HASH}/v3` : "";
@@ -56,6 +58,33 @@ type SmartSearchApiResult = TypesenseSearchResult & {
   grouped_hits?: SearchHit[];
   products?: SearchDocument[];
 };
+
+// The catalog importer publishes date-stamped Typesense collections.  The old
+// static name (`emrn_products`) is not an alias on this cluster, so every
+// lookup first failed with a 404 and only then fell back to slower providers.
+// Resolve the newest visible catalog once per server process, while allowing a
+// pinned collection for controlled deployments/tests.
+async function typesenseCollectionName() {
+  const configured = process.env.TYPESENSE_COLLECTION?.trim();
+  if (configured) return configured;
+  if (!resolvedTypesenseCollection) {
+    resolvedTypesenseCollection = getTypesenseAdmin()
+      .collections()
+      .retrieve()
+      .then((collections: Array<{ name?: string }>) =>
+        collections
+          .map((collection) => String(collection.name || ""))
+          .filter((name) => name.startsWith(COLLECTION_PREFIX))
+          .sort()
+          .at(-1) || COLLECTION_NAME
+      )
+      .catch((error) => {
+        console.warn("[EMRN Pulse] Typesense collection discovery failed", error);
+        return COLLECTION_NAME;
+      });
+  }
+  return resolvedTypesenseCollection;
+}
 
 type BigCommerceProduct = Partial<{
   id: number;
@@ -129,10 +158,10 @@ function mapProduct(hit: SearchHit | SearchDocument): CatalogProduct {
     variantId: Number(doc.variant_id || 0),
     name: String(doc.name || ""),
     parentName: String(doc.parent_name || doc.name || ""),
-    // Parent-product documents can retain variant numbers only in all_skus.
-    // Use the first sellable SKU as a customer-facing fallback instead of
-    // rendering “SKU unavailable” for an otherwise valid catalog result.
-    sku: String(doc.sku || (Array.isArray(doc.all_skus) ? doc.all_skus[0] : "") || ""),
+    // `all_skus` on a sparse parent record is not guaranteed to be the SKU
+    // for this particular hit.  Never present its first value as if it were
+    // the selected variant; hydration below resolves the actual page/variant.
+    sku: String(doc.sku || ""),
     brand: String(doc.brand || ""),
     manufacturer: String(doc.sold_by || ""),
     categories: Array.isArray(doc.categories) ? doc.categories.map(String) : [],
@@ -1587,14 +1616,24 @@ async function enrichProductFromBigCommerce(product: CatalogProduct) {
           ? variants[0]
           : undefined;
     const enriched = mapBigCommerceProduct(payload.data, variant);
+    // A resolved BigCommerce variant is the source of truth for customer
+    // facing identity.  Search-index rows can be stale or can mix a parent
+    // product's title with a sibling variant's SKU.  Do not preserve those
+    // fields once BigCommerce has identified the variant.
+    if (variant) {
+      return productPageDetails({
+        ...product,
+        ...enriched,
+        brand: product.brand || enriched.brand,
+        manufacturer: product.manufacturer || enriched.manufacturer,
+        categories: product.categories.length ? product.categories : enriched.categories,
+      });
+    }
     return productPageDetails({
       ...product,
-      id: product.id || enriched.id,
-      productId: product.productId || enriched.productId,
-      variantId: product.variantId || enriched.variantId,
-      name: product.name || enriched.name,
-      parentName: product.parentName || enriched.parentName,
-      sku: product.sku || enriched.sku,
+      // Without an exact BigCommerce variant we can retain useful product
+      // details, but must not invent a sellable SKU from a parent record.
+      sku: "",
       brand: product.brand || enriched.brand,
       manufacturer: product.manufacturer || enriched.manufacturer,
       categories: product.categories.length ? product.categories : enriched.categories,
@@ -1617,8 +1656,9 @@ async function enrichProductsFromBigCommerce(products: CatalogProduct[]) {
 }
 
 async function searchTypesenseProducts(query: string, input: ProductSearchInput) {
+  const collection = await typesenseCollectionName();
   return (await getTypesenseSearch()
-    .collections(COLLECTION_NAME)
+    .collections(collection)
     .documents()
     .search({
       q: query || "*",
@@ -1821,9 +1861,10 @@ export async function searchBySKU(sku: string) {
   const variants = skuSearchVariants(sku);
   let results: TypesenseSearchResult[] = [];
   try {
+    const collection = await typesenseCollectionName();
     results = (await Promise.all(
       variants.map((variant) =>
-        getTypesenseSearch().collections(COLLECTION_NAME).documents().search({
+        getTypesenseSearch().collections(collection).documents().search({
           q: variant,
           query_by: "sku,all_skus",
           query_by_weights: "40,32",
@@ -1864,7 +1905,14 @@ export async function searchBySKU(sku: string) {
   }
 
   const typesenseProducts = await withBackorderAvailability(Array.from((primaryProducts.size ? primaryProducts : relatedProducts).values()));
-  if (typesenseProducts.length) return enrichProductsFromBigCommerce(typesenseProducts);
+  // A current Typesense variant row already has an authoritative SKU, URL, and
+  // price. Avoid a second BigCommerce request for every exact/bare SKU lookup;
+  // it adds several seconds and was the reason `8210` and `3352` felt slow.
+  if (typesenseProducts.length) {
+    return typesenseProducts.some((product) => !product.sku || !product.url || !product.price)
+      ? enrichProductsFromBigCommerce(typesenseProducts)
+      : typesenseProducts;
+  }
 
   const smartSearchProducts = await searchSmartSearchApiBySKU(sku);
   if (smartSearchProducts.length) return smartSearchProducts;
@@ -1879,7 +1927,8 @@ export async function getProduct(productId: number, variantId?: number) {
   const filter = [`product_id:=${productId}`, "is_visible:=true"];
   if (variantId) filter.push(`variant_id:=${variantId}`);
   try {
-    const result = (await getTypesenseSearch().collections(COLLECTION_NAME).documents().search({
+    const collection = await typesenseCollectionName();
+    const result = (await getTypesenseSearch().collections(collection).documents().search({
       q: "*",
       query_by: "name",
       filter_by: filter.join(" && "),

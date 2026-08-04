@@ -1323,6 +1323,16 @@ function aedAccessorySkuHints(text: string) {
   return [];
 }
 
+function g3ResponderSkuHints(text: string) {
+  const normalized = normalizeSearchText(text);
+  // The public parent record for this family currently mixes in a G3 Medic
+  // variant.  Resolve the known, sellable Responder variants by SKU so every
+  // name, size, stock, and compatibility question stays on the actual bag.
+  return /\bg3\+?\s+responder\b/.test(normalized)
+    ? ["G35000GN", "G35000RE", "G35000BU"]
+    : [];
+}
+
 function isSpecificAedAccessoryRequest(text: string) {
   const normalized = normalizeSearchText(text);
   const asksForPads = /\b(pads?|padz|electrodes?)\b/.test(normalized);
@@ -1613,7 +1623,20 @@ function productResultsText(
   query: string,
   options: { includeFullSearchLink?: boolean } = {}
 ) {
-  const shown = products.slice(0, 5);
+  // A parent record without a sellable variant SKU is not actionable in chat.
+  // Prefer SKU-bearing results whenever the catalog returned them, while still
+  // allowing a genuinely option-only product to be shown on its own.
+  const skuBearingProducts = products.filter((product) => Boolean(product.sku));
+  // Search providers can return a product once as a parent hit and again as a
+  // variant hit. A duplicate SKU pointing to the same page is not another
+  // choice, so keep one while preserving genuinely different variants.
+  const uniqueProducts = (skuBearingProducts.length ? skuBearingProducts : products).filter((product, index, all) =>
+    all.findIndex((candidate) =>
+      normalizeSku(candidate.sku || "") === normalizeSku(product.sku || "") &&
+      candidate.url.replace(/\/+$/, "") === product.url.replace(/\/+$/, "")
+    ) === index
+  );
+  const shown = uniqueProducts.slice(0, 5);
   const lines = shown.map((product, index) => {
     const price = product.quoteOnly ? (language === "fr" ? "devis requis" : "quote required") : product.price ? `$${product.price.toFixed(2)}` : language === "fr" ? "prix non disponible" : "price unavailable";
     const availability = sentenceFragment(displayAvailability(product, language));
@@ -1644,7 +1667,7 @@ function productResultsText(
       ? "Si vous me dites la taille, la marque, l’usage ou la quantité souhaitée, je peux réduire la liste ou vous aider à l’ajouter au panier."
       : "If you tell me the size, brand, use, or quantity you need, I can narrow this down or help add the right item to your cart.";
   const fullSearchLink =
-    options.includeFullSearchLink && products.length > shown.length
+    options.includeFullSearchLink && uniqueProducts.length > shown.length
       ? language === "fr"
         ? `\n\n[Voir tous les résultats EMRN](${smartSearchResultsUrl(query)})`
         : `\n\n[View all matching EMRN products](${smartSearchResultsUrl(query)})`
@@ -3385,7 +3408,11 @@ function trustedG3OxygenCylinderSummary(lookup: ExternalKnowledgeLookup, product
   if (/\b(responder)\b/.test(familyText)) {
     return "The StatPacks G3+ Responder EMS Bag can accommodate a D or Jumbo D oxygen cylinder when used with the G3+ Oxygen Module.";
   }
-  if (/load\s*n?\s*go/.test(familyText) && /\b(statpacks?|g3|load|go)\b/.test(lookupText)) {
+  // The selected EMRN product is sufficient to establish the G3+ Load-N-Go
+  // family.  External lookups often return only its colour SKUs (G35004RE,
+  // G35004BU, etc.), which made the previous extra lookup-text guard turn a
+  // verified answer into an unnecessary "Can't confirm" response.
+  if (/load\s*n?\s*go/.test(familyText)) {
     return "The G3+ Load-N-Go backpack can accommodate an M6 oxygen cylinder.";
   }
   return "";
@@ -3703,7 +3730,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
     );
   }
 
-  if (/\b(create.*account|make.*account|register|business account|enterprise account|doctor|doctor.s office|schools|clinics|ems|government|account benefits|purchase history|reorder|compte entreprise|compte d'entreprise|demander un compte|créer un compte|creer un compte)\b/i.test(text)) {
+  if (/\b(create.*account|make.*account|register|business account|enterprise account|doctor|doctor.s office|schools|clinics|ems department|government|account benefits|purchase history|reorder|compte entreprise|compte d'entreprise|demander un compte|créer un compte|creer un compte)\b/i.test(text)) {
     return answer(
       `You can apply here: ${link("Business account application", businessLink)}. Business or enterprise accounts are useful for clinics, schools, EMS departments, companies, healthcare facilities, government organizations, and larger purchasing teams. You can also review ${link("business medical supplies", businessSolutionsLink)} or ${link("sign in / register", accountLink)}. You do not need to be a doctor’s office or have a business account to purchase many items, though some specialized products may have restrictions.`,
       `Vous pouvez faire une demande ici: ${link("Demande de compte entreprise", businessLink)}. Les comptes entreprise sont utiles pour les cliniques, écoles, services EMS, entreprises, établissements de santé, organisations gouvernementales et grandes équipes d’achat. Vous pouvez aussi consulter ${link("les fournitures médicales pour entreprises", businessSolutionsLink)} ou ${link("vous connecter / créer un compte", accountLink)}. Il n’est pas nécessaire d’être un cabinet médical ou d’avoir un compte entreprise pour acheter plusieurs articles, mais certains produits spécialisés peuvent avoir des restrictions.`
@@ -3965,6 +3992,23 @@ async function handleAssistantPost(req: NextRequest) {
     return NextResponse.json({ error: "messages are required" }, { status: 400 });
   }
 
+  // Contact details supplied after a customer has started a quote must reach
+  // quote review before the broad support detector sees the email/name.  Both
+  // flows use "our team", but only the quote flow may create a sales request.
+  const quoteConversationInProgress = messages.slice(0, -1).some(
+    (message) => message.role === "user" && isQuoteIntent(message.content)
+  );
+  const latestHasQuoteContactDetails =
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) ||
+    /\b(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\b/i.test(latest);
+  if (quoteConversationInProgress && latestHasQuoteContactDetails) {
+    const draft = buildQuoteDraft(messages, language, []);
+    const answer = draft.request ? quoteDraftText(draft.request, language) : quoteMissingText(draft.missing, language);
+    return new Response(textStream(answer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
   // Preserve the selected G3 Responder across a terse compatibility follow-up
   // ("Can it fit an oxygen tank?"). This verified product fact must be handled
   // before generic product/AI fallback logic, which otherwise loses the bag
@@ -3982,6 +4026,20 @@ async function handleAssistantPost(req: NextRequest) {
     return new Response(textStream(g3OxygenAnswer), {
       headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
     });
+  }
+
+  // Keep an exact named G3 Responder search out of the generic "G3 is a SKU"
+  // path and out of stale parent-record matches. Product-detail questions use
+  // the normal detail flow below; plain product lookup gets the real variants.
+  if (/\bg3\+?\s+responder\b/.test(followUpText) && !isProductDetailIntent(latest)) {
+    const products = dedupeCatalogProductsBySku(
+      (await Promise.all(["G35000GN", "G35000RE", "G35000BU"].map((sku) => searchBySKU(sku)))).flat()
+    );
+    if (products.length) {
+      return new Response(textStream(productResultsText(products, language, "G3 Responder EMS Bag for Medics")), {
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
   }
 
   await logAnalyticsEvent({ type: "conversation_started", sessionId, language, createdAt });
@@ -4072,7 +4130,14 @@ async function handleAssistantPost(req: NextRequest) {
 
   // Quote collection also says "our team". Keep a quote reply in its own flow
   // rather than treating the customer's email/SKU as a new support request.
-  const priorAssistantAskedQuoteDetails = priorAssistantRequestedQuoteDetails(messages);
+  const priorAssistantAskedQuoteDetails =
+    priorAssistantRequestedQuoteDetails(messages) ||
+    messages.slice(0, -1).some((message) => message.role === "user" && isQuoteIntent(message.content)) ||
+    messages.slice(-4).some(
+      (message) =>
+        message.role === "assistant" &&
+        /send your quote or item-sourcing request|to send it here|envoyer votre demande de devis|pour l'envoyer ici/i.test(message.content)
+    );
   if (!priorAssistantAskedQuoteDetails && !priorAssistantRequestedOrderStatus && priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
     if (draft.request) {
@@ -4162,6 +4227,18 @@ async function handleAssistantPost(req: NextRequest) {
   // can naturally contain words such as "receipt" or "order", and an email
   // must never cause Meri to retrieve a different customer's saved record.
   const quoteRequestInProgress = priorAssistantAskedQuoteDetails;
+
+  // Starting a quote does not require product search, external knowledge, or
+  // an AI route decision.  Collect the contact details immediately and keep
+  // the customer's item wording in the conversation for the final quote
+  // draft.  This prevents a simple "I need a quote" from waiting behind a
+  // catalog fallback (and avoids turning the request into unrelated results).
+  if (isQuoteIntent(latest) && !quoteRequestInProgress && !isQuoteLookupIntent(latest) && !isQuotePurchaseIntent(latest)) {
+    const draft = buildQuoteDraft(messages, language, []);
+    return new Response(textStream(quoteMissingText(draft.missing, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
 
   if (isCurrentCartQuestion(latest)) {
     return new Response(textStream(currentCartText(pageContext, language)), {
@@ -4477,7 +4554,7 @@ async function handleAssistantPost(req: NextRequest) {
     }
   }
 
-  const priorQuoteDetailsRequested = priorAssistantRequestedQuoteDetails(messages);
+  const priorQuoteDetailsRequested = priorAssistantAskedQuoteDetails;
   const latestCanContinueQuoteFlow =
     priorQuoteDetailsRequested && (looksLikeQuoteDetailsReply(latest) || extractSkuCandidates(latest).length > 0 || hasExplicitQuantity(latest));
   const shouldIgnorePriorQuoteFlow =
@@ -4748,7 +4825,27 @@ async function handleAssistantPost(req: NextRequest) {
   // Known AED model + pad combinations take precedence over a short model
   // code that happens to look like a SKU (for example FRx).
   const aedAccessorySkus = aedAccessorySkuHints(latest);
+  const g3ResponderSkus = g3ResponderSkuHints(latest);
   const lcsuCanisterSkus = lcsuCanisterSkuHints(latest);
+  const asksPackageQuantity = /\b(how\s+many|pack|package|case|count|quantity|qty|sold\s+by|sold\s+as|per\s+(?:box|pack|case))\b/i.test(latest);
+  const directLcsuCanisterSku = [
+    ...lcsuCanisterSkus,
+    ...extractSkuCandidates(latest),
+  ].map(normalizeSku).find((sku) => sku === "886100" || sku === "8002004L10");
+  if (directLcsuCanisterSku && asksPackageQuantity) {
+    const product = verifiedLcsuCanisterProducts().find((item) => item.sku === directLcsuCanisterSku);
+    if (product) {
+      const packText = product.sku === "8002004L10"
+        ? "It is sold as a pack of 10 disposable 800 ml canisters with lids."
+        : "It is sold as one disposable 300 ml canister with tubing.";
+      const answer = language === "fr"
+        ? `${product.sku === "8002004L10" ? "Il est vendu en paquet de 10 contenants jetables de 800 ml avec couvercles." : "Il est vendu comme un contenant jetable de 300 ml avec tubulure."}\n\n**${product.name}** — SKU: ${product.sku} — $${product.price.toFixed(2)}. [Voir le produit](${product.url})`
+        : `${packText}\n\n**${product.name}** — SKU: ${product.sku} — $${product.price.toFixed(2)}. [View product](${product.url})`;
+      return new Response(textStream(answer), {
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+  }
   if (lcsuCanisterSkus.length === 2) {
     const lcsuCanisterAnswer = productResultsText(verifiedLcsuCanisterProducts(), language, "LCSU 4 canisters");
     return new Response(textStream(lcsuCanisterAnswer), {
@@ -4991,6 +5088,16 @@ async function handleAssistantPost(req: NextRequest) {
   } else if (isLcsuFamilyRequest(latest)) {
     searchQuery = lcsuFamilySearchQuery(latest);
     searchResult = await searchProducts({ query: searchQuery, language, limit: 8 });
+  } else if (g3ResponderSkus.length) {
+    // "G3" looks SKU-like to the generic extractor. Handle the known product
+    // family before that generic branch so it cannot be mistaken for a SKU.
+    const responderProducts = (await Promise.all(g3ResponderSkus.map((sku) => searchBySKU(sku)))).flat();
+    searchResult = {
+      products: dedupeCatalogProductsBySku(responderProducts),
+      found: responderProducts.length,
+      searchQuery: "G3 Responder EMS Bag for Medics",
+      language,
+    };
   } else if (skuCandidates.length) {
     const skuProducts = (
       await Promise.all(

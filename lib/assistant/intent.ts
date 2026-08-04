@@ -545,11 +545,15 @@ export function priorAssistantRequestedQuoteDetails(messages: AssistantMessage[]
   return messages
     .slice(-4)
     .some(
-      (message) =>
-        message.role === "assistant" &&
-        /quote request|demande de devis|send your quote|envoyer votre demande|(?:quote|devis)[\s\S]{0,500}(?:still need|il me manque)/i.test(
-          message.content
-        )
+      (message) => {
+        if (message.role !== "assistant") return false;
+        const text = message.content.toLowerCase();
+        return (
+          text.includes("to send it here") ||
+          text.includes("pour l'envoyer ici") ||
+          /quote request|demande de devis|send your quote|envoyer votre demande|(?:quote|devis)[\s\S]{0,500}(?:still need|il me manque)/i.test(message.content)
+        );
+      }
     );
 }
 
@@ -644,7 +648,7 @@ export function buildQuoteDraft(
   const name =
     text.match(/\bName:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
     text.match(/\bNom:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
-    text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60}?)(?=\s+(?:and\s+)?my\s+email\b|\s+email\b|[,\n]|$)/i)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
     contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
