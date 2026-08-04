@@ -797,7 +797,10 @@ export async function lookupExternalKnowledge({
   language,
   sessionId,
   query,
-  timeoutMs = 7500,
+  // Product facts and compatibility can require a manufacturer web lookup.
+  // Give that verification a real chance to finish, but never let a stalled
+  // upstream request leave the customer waiting indefinitely.
+  timeoutMs = 30000,
 }: {
   messages: AssistantMessage[];
   products: CatalogProduct[];
