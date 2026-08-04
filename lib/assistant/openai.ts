@@ -26,6 +26,34 @@ export type CatalogSearchPlan = {
   reason: string;
 };
 
+// AbortController is normally enough for fetch, but a stalled upstream socket
+// can occasionally ignore abort long enough to hold a serverless request open.
+// Race the request against the same deadline so a customer-facing chat reply
+// is never left spinning while an AI provider or web-search tool is unhealthy.
+async function fetchOpenAiWithinDeadline(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string
+) {
+  const controller = new AbortController();
+  const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }),
+      new Promise<Response>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(timeoutError);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const trustedProductSourceDomains = [
   "emrn.ca",
   "laerdal.com",
@@ -726,24 +754,19 @@ export async function planCatalogSearch({
     max_output_tokens: 450,
   };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 4500);
   let response: Response;
   try {
-    response = await fetch("https://api.openai.com/v1/responses", {
+    response = await fetchOpenAiWithinDeadline("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    }, 4500, "OpenAI catalog search planner");
   } catch (error) {
     console.warn("[EMRN Pulse] OpenAI catalog search planner timed out or failed", error);
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 
   if (!response.ok) {
@@ -851,24 +874,19 @@ export async function lookupExternalKnowledge({
     max_output_tokens: 900,
   };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
-    response = await fetch("https://api.openai.com/v1/responses", {
+    response = await fetchOpenAiWithinDeadline("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    }, timeoutMs, "OpenAI external lookup");
   } catch (error) {
     console.warn("[EMRN Pulse] OpenAI external lookup timed out or failed", error);
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 
   if (!response.ok) {
