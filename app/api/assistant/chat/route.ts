@@ -3432,8 +3432,8 @@ function shippingPolicyAnswerText(text: string, language: "en" | "fr" | "unknown
   if (!asksAboutShippingCost) return "";
 
   return language === "fr"
-    ? "Pour les commandes en ligne, la livraison coûte **29,95 $** lorsque la commande est de moins de **150 $**. Les commandes en ligne de plus de **150 $** bénéficient de la livraison gratuite."
-    : "For online orders, shipping is **$29.95** when the order is under **$150**. Online orders over **$150** receive free shipping.";
+    ? "Pour les commandes en ligne, la livraison coûte **23,95 $** lorsque la commande est de moins de **150 $**. Les commandes en ligne de plus de **150 $** bénéficient de la livraison gratuite."
+    : "For online orders, shipping is **$23.95** when the order is under **$150**. Online orders over **$150** receive free shipping.";
 }
 
 function supportResponseTimeAnswerText(text: string, language: "en" | "fr" | "unknown") {
@@ -3527,8 +3527,8 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 
   if (/\b(shipping|delivery|ship across canada|free shipping|delivery time|ship time|shipping rates|oxygen cylinder|backorder)\b/i.test(text)) {
     return answer(
-      `For online orders, shipping is **$29.95** when the order is under **$150**. Online orders over **$150** receive free shipping. For product-specific delivery timing, send the product name or SKU and I’ll check its availability. Details: ${link("Shipping and returns", shippingReturnsLink)}`,
-      `Pour les commandes en ligne, la livraison coûte **29,95 $** lorsque la commande est de moins de **150 $**. Les commandes en ligne de plus de **150 $** bénéficient de la livraison gratuite. Pour connaître le délai d’un produit précis, envoyez le nom ou le SKU et je vérifierai sa disponibilité. Détails: ${link("Livraison et retours", shippingReturnsLink)}`
+      `For online orders, shipping is **$23.95** when the order is under **$150**. Online orders over **$150** receive free shipping. For product-specific delivery timing, send the product name or SKU and I’ll check its availability. Details: ${link("Shipping and returns", shippingReturnsLink)}`,
+      `Pour les commandes en ligne, la livraison coûte **23,95 $** lorsque la commande est de moins de **150 $**. Les commandes en ligne de plus de **150 $** bénéficient de la livraison gratuite. Pour connaître le délai d’un produit précis, envoyez le nom ou le SKU et je vérifierai sa disponibilité. Détails: ${link("Livraison et retours", shippingReturnsLink)}`
     );
   }
 
