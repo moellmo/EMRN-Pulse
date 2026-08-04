@@ -4,6 +4,9 @@ import { readSupabaseAssistantConfig, saveSupabaseAssistantConfig, supabaseAdmin
 
 const dataDir = path.join(process.cwd(), ".data", "assistant");
 const configPath = path.join(dataDir, "assistant-config.json");
+const remoteConfigCacheTtlMs = 30_000;
+let remoteConfigCache: { value: AssistantRuntimeConfig; expiresAt: number } | null = null;
+let remoteConfigInFlight: Promise<AssistantRuntimeConfig> | null = null;
 
 export type AssistantRuntimeConfig = {
   aiSearchHelperEnabled: boolean;
@@ -93,6 +96,10 @@ export function readAssistantConfigSync(): AssistantRuntimeConfig {
 }
 
 export async function readAssistantConfig(): Promise<AssistantRuntimeConfig> {
+  if (remoteConfigCache && remoteConfigCache.expiresAt > Date.now()) return remoteConfigCache.value;
+  if (remoteConfigInFlight) return remoteConfigInFlight;
+
+  remoteConfigInFlight = (async () => {
   const localConfig = readAssistantConfigSync();
   if (!supabaseAdminConfigured()) return localConfig;
 
@@ -113,6 +120,15 @@ export async function readAssistantConfig(): Promise<AssistantRuntimeConfig> {
   } catch (error) {
     console.warn("[EMRN Pulse] Supabase assistant config read skipped", error);
     return localConfig;
+  }
+  })();
+
+  try {
+    const config = await remoteConfigInFlight;
+    remoteConfigCache = { value: config, expiresAt: Date.now() + remoteConfigCacheTtlMs };
+    return config;
+  } finally {
+    remoteConfigInFlight = null;
   }
 }
 
@@ -141,7 +157,9 @@ export async function saveAssistantConfig(input: Partial<AssistantRuntimeConfig>
 
   const localSaved = writeConfigFile(supabaseSaved || config);
   if (!supabaseSaved && !localSaved && supabaseError) throw supabaseError;
-  return supabaseSaved || config;
+  const savedConfig = supabaseSaved || config;
+  remoteConfigCache = { value: savedConfig, expiresAt: Date.now() + remoteConfigCacheTtlMs };
+  return savedConfig;
 }
 
 export function assistantFeatureEnabled(feature: AssistantRuntimeBooleanFeature) {
