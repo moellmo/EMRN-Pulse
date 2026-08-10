@@ -1464,6 +1464,18 @@ function isGenericProductMediaRequest(text: string) {
     /^(?:how to use videos?|comment utiliser les videos?)$/.test(normalized);
 }
 
+function priorAssistantAskedToNarrowProductResults(messages: AssistantMessage[]) {
+  return messages
+    .slice(-3)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        /if you tell me the size, brand, use, or quantity.*narrow this down|si vous me donnez la taille, la marque, l[’']utilisation ou la quantité.*préciser/i.test(
+          message.content
+        )
+    );
+}
+
 function priorAssistantPresentedQuoteDraft(messages: AssistantMessage[]) {
   return messages
     .slice()
@@ -4728,6 +4740,20 @@ async function handleAssistantPost(req: NextRequest) {
         language === "fr"
           ? "Bien sûr. Quel produit cherchez-vous? Vous pouvez me donner un nom, une marque, une catégorie, une utilisation médicale ou un SKU. Si vous ne connaissez pas le nom, vous pouvez aussi téléverser une photo avec le bouton photo."
           : "Sure. What product are you looking for? You can give me a name, brand, category, medical use, or SKU. If you don’t know the name, you can also upload a photo with the photo button."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  // "Yes" is not a product name. After a broad result list that asked the
+  // customer to narrow the options, keep the conversation anchored to those
+  // options instead of searching the catalog for the word "yes".
+  if (isAffirmative(latest) && priorAssistantAskedToNarrowProductResults(messages)) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je peux préciser les résultats, mais j’ai besoin de savoir quel article vous intéresse: envoyez le SKU, le nom de l’article, la taille, la marque, l’utilisation ou la quantité. Si aucun ne convient, je peux aussi envoyer une demande de sourcing/devis à EMRN."
+          : "I can narrow the results, but I need to know which item you mean: send the SKU, item name, size, brand, use, or quantity. If none of these fit, I can also send an item-sourcing/quote request to EMRN."
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
