@@ -1452,10 +1452,16 @@ function priorAssistantOfferedItemRequest(messages: AssistantMessage[]) {
     .some(
       (message) =>
         message.role === "assistant" &&
-        /send your request to our team|check the item|prepare a quote request|envoyer votre demande|vérifier l’article|preparer une demande de devis|préparer une demande de devis/i.test(
+        /send your request to our team|send (?:an |this )?(?:item-)?sourcing(?:\/| or )?quote request|send (?:this|it) to emrn to source|check the item|prepare a quote request|envoyer votre demande|envoyer (?:une |cette )?demande (?:de sourcing|de devis|de sourcing\/devis)|vérifier l’article|preparer une demande de devis|préparer une demande de devis/i.test(
           message.content
         )
     );
+}
+
+function isGenericProductMediaRequest(text: string) {
+  const normalized = normalizeSearchText(text);
+  return /^(?:how to use|how do i use|where are|show me|need|want)?\s*(?:product )?(?:use )?(?:videos?|video tutorials?|pictures?|photos?)$/.test(normalized) ||
+    /^(?:how to use videos?|comment utiliser les videos?)$/.test(normalized);
 }
 
 function priorAssistantPresentedQuoteDraft(messages: AssistantMessage[]) {
@@ -4252,6 +4258,32 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
+  // Account access is a service request, even when the customer also names a
+  // product they were trying to buy. Resolve it before the product pipeline so
+  // an account problem cannot turn into a random catalog search.
+  const hasAccountAccessProblem = /\b(?:can(?:not|'t)|cannot|unable|not able|trouble|problem|won't|wont|cannot continue|can't continue)\b/i.test(latest);
+  if (isAccountIntent(latest) && (!looksLikeSpecificProductSearch(latest) || hasAccountAccessProblem)) {
+    const accountAnswer = language === "fr"
+      ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
+      : "You can create or use an EMRN account from the account area of the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question.";
+    await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
+    return new Response(
+      textStream(accountAnswer),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
+  if (isGenericProductMediaRequest(latest) && !extractSkuCandidates(latest).length && !pageContext.sku) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je peux vous aider à trouver une vidéo, des photos ou les instructions d’utilisation. Quel produit ou SKU voulez-vous voir?"
+          : "I can help find a video, photos, or use instructions. Which product or SKU would you like to see?"
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   const smallerSuctionClarifier = smallerSuctionClarifierText(latest, language);
   if (smallerSuctionClarifier) {
     return new Response(textStream(smallerSuctionClarifier), {
@@ -4300,7 +4332,7 @@ async function handleAssistantPost(req: NextRequest) {
     messages.slice(-4).some(
       (message) =>
         message.role === "assistant" &&
-        /send your quote or item-sourcing request|to send it here|envoyer votre demande de devis|pour l'envoyer ici/i.test(message.content)
+        /send your quote or item-sourcing request|send (?:an |this )?(?:item-)?sourcing(?:\/| or )?quote request|to send it here|envoyer votre demande de devis|envoyer (?:une |cette )?demande (?:de sourcing|de devis|de sourcing\/devis)|pour l'envoyer ici/i.test(message.content)
     );
   if (!priorAssistantAskedQuoteDetails && !priorAssistantRequestedOrderStatus && priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
@@ -5621,18 +5653,6 @@ async function handleAssistantPost(req: NextRequest) {
       createdAt: new Date().toISOString(),
     });
   };
-
-  if (isAccountIntent(latest) && !looksLikeSpecificProductSearch(latest)) {
-    const accountAnswer = language === "fr"
-      ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
-      : "You can create or use an EMRN account from the account area of the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question.";
-    await logPerformance("account_help", { answerPreview: accountAnswer });
-    await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
-    return new Response(
-      textStream(accountAnswer),
-      { headers: { "Content-Type": "text/plain; charset=utf-8" } }
-    );
-  }
 
   if (shouldCompareRememberedProducts && products.length) {
     const comparison = compareProductsText(products, language, latest);

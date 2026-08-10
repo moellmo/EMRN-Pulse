@@ -22,12 +22,21 @@ function cleanDirectReply(text: string) {
     .trim();
 }
 
+function looksLikeLowercaseProductPhrase(text: string) {
+  const words = text.match(/[A-Za-zÀ-ÿ]+/g) || [];
+  // A short lowercase reply such as "ashley" or "ashley smith" can be a
+  // name. A longer all-lowercase phrase is much more likely to be the item
+  // description the customer is sourcing, and must not become their name.
+  return words.length >= 3 && words.every((word) => word === word.toLowerCase());
+}
+
 function combinedLineNameCandidate(text: string) {
   const cleaned = cleanDirectReply(text);
   if (!cleaned || cleaned.length > 80) return "";
   if (/^(hi|hello|thanks|thank you|please|yes|ok|okay|oui)$/i.test(cleaned)) return "";
   if (/^(?=.*\d)[A-Z0-9+._-]{3,80}$/i.test(cleaned)) return "";
   if (/\d{3,}/.test(cleaned)) return "";
+  if (looksLikeLowercaseProductPhrase(cleaned)) return "";
   return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,80}$/.test(cleaned) ? cleaned : "";
 }
 
@@ -54,6 +63,7 @@ function plainNameCandidate(text: string) {
   if (/\b(quote|quotes|devis|cart|checkout|availability|available|support|order|commande|sku|product|produit|item|article)\b/i.test(cleaned)) return "";
   if (/^(hi|hello|thanks|thank you|please|yes|ok|okay|oui)$/i.test(cleaned)) return "";
   if (/^(?=.*\d)[A-Z0-9+._-]{3,40}$/i.test(cleaned)) return "";
+  if (looksLikeLowercaseProductPhrase(cleaned)) return "";
   return /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}$/.test(cleaned) ? cleaned : "";
 }
 
@@ -92,6 +102,8 @@ function directReplyFor(messages: AssistantMessage[], field: "name" | "company" 
   const cleaned = cleanDirectReply(latest);
   if (!cleaned || cleaned.length > 80 || /\b(quote|devis|cart|checkout|availability|available)\b/i.test(cleaned)) return "";
   if (field === "name" && /^(?=.*\d)[A-Z0-9+._-]{3,40}$/i.test(cleaned)) return "";
+  if (field === "name" && looksLikeLowercaseProductPhrase(cleaned)) return "";
+  if (field === "name") return plainNameCandidate(cleaned);
   return cleaned;
 }
 
@@ -648,7 +660,8 @@ export function buildQuoteDraft(
   const name =
     text.match(/\bName:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
     text.match(/\bNom:\s*([^\n]{2,80})/i)?.[1]?.trim() ||
-    text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60}?)(?=\s+(?:and\s+)?my\s+email\b|\s+email\b|[,\n]|$)/i)?.[1]?.trim() ||
+    text.match(/(?:my name is|name is|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60}?)(?=\s+(?:and\s+)?my\s+email\b|\s+email\b|[,\n]|$)/i)?.[1]?.trim() ||
+    text.match(/(?:I am|I'm)\s+([A-Z][A-Za-z' -]{1,60}?)(?=\s+(?:and\s+)?my\s+email\b|\s+email\b|[,\n]|$)/)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
     contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
@@ -740,7 +753,8 @@ export function buildSupportDraft(
   const text = messages.map((message) => message.content).join("\n");
   const email = text.match(emailPattern)?.[0] || "";
   const name =
-    text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    text.match(/(?:my name is|name is|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    text.match(/(?:I am|I'm)\s+([A-Z][A-Za-z' -]{1,60})/)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
     contactNameFromPriorNamePrompt(messages) ||
     directReplyFor(messages, "name");
@@ -770,7 +784,8 @@ export function buildOrderStatusDraft(
   const latest = messages.at(-1)?.content || "";
   const email = text.match(emailPattern)?.[0] || "";
   const name =
-    text.match(/(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    text.match(/(?:my name is|name is|je m'appelle|mon nom est)\s+([A-Z][A-Za-z' -]{1,60})/i)?.[1]?.trim() ||
+    text.match(/(?:I am|I'm)\s+([A-Z][A-Za-z' -]{1,60})/)?.[1]?.trim() ||
     contactNameFromLatestReply(messages) ||
     directReplyFor(messages, "name");
   const explicitOrderNumber =
