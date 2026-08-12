@@ -963,6 +963,24 @@ function isUnnamedProductFollowUp(text: string) {
   return namedTerms.length === 0;
 }
 
+// A customer will often reply to a product result with only a value copied
+// from a specification (for example, `18" width x 16" depth` or
+// `Quantity: 1`). Those numbers are not a new SKU. Keep the prior product
+// context unless the reply includes an actual product name, brand, or SKU.
+function isBareProductDetailFollowUp(text: string) {
+  const clean = String(text || "").trim();
+  if (!clean || extractSkuCandidates(clean).length) return false;
+  if (!isDirectCatalogDetailQuestion(clean)) return false;
+
+  const namedTerms = normalizeSearchText(cleanProductQuery(clean))
+    .split(/\s+/)
+    .filter((term) => term.length >= 3)
+    .filter((term) => !/^\d+(?:x\d+)?$/.test(term))
+    .filter((term) => !/^(quantity|qty|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|colour|color|spec|specs|specification|specifications|details|detail|weight|lb|lbs|inch|inches|cm|mm|x|by|of|per|case|pack|package|box|boxes|count|sold|unit)$/.test(term));
+
+  return namedTerms.length === 0;
+}
+
 function isGenericContextProductReply(text: string) {
   const normalized = String(text || "").toLowerCase();
   if (!/\b(it|this|that|the item|the product|ce produit|cet article)\b/i.test(normalized)) return false;
@@ -1460,7 +1478,8 @@ function priorAssistantOfferedItemRequest(messages: AssistantMessage[]) {
 
 function isGenericProductMediaRequest(text: string) {
   const normalized = normalizeSearchText(text);
-  return /^(?:how to use|how do i use|where are|show me|need|want)?\s*(?:product )?(?:use )?(?:videos?|video tutorials?|pictures?|photos?)$/.test(normalized) ||
+  return /\b(?:upload|send|attach|share)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
+    /^(?:how to use|how do i use|where are|show me|need|want)?\s*(?:product )?(?:use )?(?:videos?|video tutorials?|pictures?|photos?)$/.test(normalized) ||
     /^(?:how to use videos?|comment utiliser les videos?)$/.test(normalized);
 }
 
@@ -3764,7 +3783,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
   const link = (label: string, url: string) => `[${label}](${url})`;
 
   if (
-    /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn)\b/i.test(text) ||
+    /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn|where is (?:your |the )?(?:distribution|warehouse|shipping) cent(?:re|er)|(?:distribution|warehouse|shipping) cent(?:re|er).*where)\b/i.test(text) ||
     /\b(o[uù] est emrn|o[uù].*etes?.*situ[eé]s?|adresse d.?emrn|adresse.*emrn|emplacement d.?emrn|localisation d.?emrn|visiter emrn)\b/i.test(text)
   ) {
     return answer(
@@ -3960,7 +3979,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 }
 
 function isSiteInfoQuestion(text: string) {
-  return /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn|business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher|online|en ligne|acheter|commander)\b/i.test(text) ||
+  return /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn|where is (?:your |the )?(?:distribution|warehouse|shipping) cent(?:re|er)|(?:distribution|warehouse|shipping) cent(?:re|er).*where|business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher|online|en ligne|acheter|commander)\b/i.test(text) ||
     /\b(o[uù] est emrn|o[uù].*etes?.*situ[eé]s?|adresse d.?emrn|adresse.*emrn|emplacement d.?emrn|localisation d.?emrn|visiter emrn)\b/i.test(text) ||
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
 }
@@ -5104,7 +5123,7 @@ async function handleAssistantPost(req: NextRequest) {
     // A detail question only inherits the prior result when it is actually a
     // follow-up ("what size is it?"). A newly named product must start a new
     // catalog/AI search instead of inheriting unrelated prior SKUs.
-    (shouldUseProductDetailIntent && !skuCandidates.length && isUnnamedProductFollowUp(latest)) ||
+    (shouldUseProductDetailIntent && !skuCandidates.length && (isUnnamedProductFollowUp(latest) || isBareProductDetailFollowUp(latest))) ||
     shouldCompareRememberedProducts ||
     shouldFilterRememberedProducts ||
     isContextProductSelectionReply(latest);
