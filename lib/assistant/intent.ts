@@ -238,7 +238,7 @@ export function isOrderStatusIntent(text: string) {
 
 export function isContactIntent(text: string) {
   text = intentText(text);
-  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agents?|talk to agents?|speak to someone|speak with someone|speak to an agents?|speak with an agents?|speak with agents?|live agents?|agents?|representatives?|human support|human agents?|email support|need (?:customer )?support|want (?:customer )?support|(?:support|help|need help) (?:with|for) (?:my |an |a )?(?:order|product|item|return|quote|account)|help from your team|no answer|no reply|nobody answered|no one answered|nobody got back|no one got back|didn'?t hear back|didnt hear back|not heard back|unanswered|waiting for (?:a )?(?:response|reply|answer)|received no number|no number (?:was )?(?:given|provided|received)|lost (?:my )?order number|don't have (?:my )?order number|do not have (?:my )?order number|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agents?|parler a un agents?|agents? humain|support humain|j.?ai besoin d.?aide|besoin d.?aide.*(?:commande|produit|article|retour|devis|compte)|service client|représentants?|representants?|aucune réponse|aucune reponse|pas de réponse|pas de reponse|personne (?:ne )?(?:m|ma|nous|me)?\s*a répondu|personne (?:ne )?(?:m|ma|nous|me)?\s*a repondu|personne repondu|personne répondu|sans réponse|sans reponse)\b/i.test(text);
+  return /\b(contact us|contact support|customer service|talk to support|talk to someone|talk to an agents?|talk to agents?|speak to someone|speak with someone|speak to an agents?|speak with an agents?|speak with agents?|live agents?|agents?|representatives?|human support|human agents?|email support|need (?:customer )?support|want (?:customer )?support|(?:support|help|need help) (?:with|for) (?:my |an |a )?(?:(?:damaged?|missing|wrong|defective|broken|returned?|return|refund|warranty) )?(?:order|product|item|return|quote|account)|help from your team|no answer|no reply|nobody answered|no one answered|nobody got back|no one got back|didn'?t hear back|didnt hear back|not heard back|unanswered|waiting for (?:a )?(?:response|reply|answer)|received no number|no number (?:was )?(?:given|provided|received)|lost (?:my )?order number|don't have (?:my )?order number|do not have (?:my )?order number|communiquer avec|contacter|parler à quelqu'un|parler a quelqu'un|parler à un agents?|parler a un agents?|agents? humain|support humain|j.?ai besoin d.?aide|besoin d.?aide.*(?:commande|produit|article|retour|devis|compte)|service client|représentants?|representants?|aucune réponse|aucune reponse|pas de réponse|pas de reponse|personne (?:ne )?(?:m|ma|nous|me)?\s*a répondu|personne (?:ne )?(?:m|ma|nous|me)?\s*a repondu|personne repondu|personne répondu|sans réponse|sans reponse)\b/i.test(text);
 }
 
 export function isAvailabilityIntent(text: string) {
@@ -297,6 +297,11 @@ export function extractSkuCandidates(text: string) {
   }
 
   return Array.from(new Set(candidates.map((sku) => sku.replace(/\s+/g, "").toUpperCase().replace(/^(?:THIS|ITEM|PRODUCT|PRODUIT|HAVE|CARRY|FIND|SEARCH|FOR|POUR)(?=\d)/i, "")).filter((sku) => {
+    // "or 300 lb" and "and 300 ml" are ordinary alternatives or joined
+    // requirements, not SKU prefixes. Treating them as OR300 / AND300 sends
+    // a normal product question down the SKU-only route and can hide the
+    // valid second option from the catalog.
+    if (/^(?:OR|AND|OU|ET)\d+(?:ML|MM|CM|IN|LB|L)?$/i.test(sku)) return false;
     if (/^\d{1,3}G$/i.test(sku)) return false;
     if (/^OF\d{1,5}$/i.test(sku)) return false;
     if (/^X\d{1,5}$/i.test(sku)) return false;

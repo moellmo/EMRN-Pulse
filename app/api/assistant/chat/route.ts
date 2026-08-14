@@ -1376,8 +1376,14 @@ function lcsuCanisterSkuHints(text: string) {
   const normalized = normalizeSearchText(text);
   if (!/\b(canisters?|cannisters?|suction containers?)\b/.test(normalized)) return [];
   if (!/\b(?:lcsu\s*4?|laerdal compact suction unit)\b/.test(normalized)) return [];
-  if (/\b800\s*(?:ml|m l)\b/.test(normalized)) return ["8002004L10"];
-  if (/\b300\s*(?:ml|m l)\b/.test(normalized)) return ["886100"];
+  const asks300 = /\b300\s*(?:ml|m l)\b/.test(normalized);
+  const asks800 = /\b800\s*(?:ml|m l)\b/.test(normalized);
+  // Preserve every requested size. In "300 ml or 800 ml", both are valid
+  // alternatives; returning only the first number would hide a sellable
+  // option the customer explicitly asked to see.
+  if (asks300 && asks800) return ["886100", "8002004L10"];
+  if (asks800) return ["8002004L10"];
+  if (asks300) return ["886100"];
   return ["886100", "8002004L10"];
 }
 
@@ -1877,27 +1883,44 @@ function productsMatchingExplicitIntent(products: CatalogProduct[], latest: stri
 
 // An AI search can identify the right manufacturer item even when EMRN does
 // not carry that exact configuration.  In that case a vaguely similar EMRN
-// item must not be displayed as the match.  Keep every explicit measurement
+// item must not be displayed as the match. Keep every explicit measurement
 // from the customer's request as a hard requirement (capacity, volume, pack
-// size, dimensions, gauge, etc.).
+// size, dimensions, gauge, etc.). “A or B” remains an alternative request:
+// a 29G or 28G one-inch needle does not need both gauges on one SKU.
+function measurementsInText(text: string) {
+  return Array.from(
+    normalizeSearchText(text).matchAll(/\b(\d+(?:\.\d+)?)\s*(lb|lbs|pounds?|ml|l|liters?|litres?|cm|mm|inch|inches|in|g|ga|gauge)\b/g)
+  ).map((match) => ({ value: match[1], unit: match[2] }));
+}
+
+function productMatchesMeasurement(productText: string, measurement: { value: string; unit: string }) {
+  const { value, unit } = measurement;
+  const aliases =
+    /^(lb|lbs|pounds?)$/.test(unit) ? "lb|lbs|pounds?" :
+    /^(l|liters?|litres?)$/.test(unit) ? "l|liters?|litres?" :
+    /^(inch|inches|in)$/.test(unit) ? "inch|inches|in" :
+    /^(g|ga|gauge)$/.test(unit) ? "ga|gauge|g" :
+    unit;
+  return new RegExp(`\\b${value}\\s*(?:${aliases})\\b`, "i").test(productText);
+}
+
 function productMatchesExplicitMeasuredRequirements(product: CatalogProduct, query: string) {
-  const requestedMeasurements = Array.from(
-    normalizeSearchText(query).matchAll(/\b(\d+(?:\.\d+)?)\s*(lb|lbs|pounds?|ml|l|liters?|litres?|cm|mm|inch|inches|in|ga|gauge)\b/g)
-  );
+  const requestedMeasurements = measurementsInText(query);
   if (!requestedMeasurements.length) return true;
 
   const productText = normalizeSearchText(`${product.name} ${product.parentName} ${product.description} ${product.categories.join(" ")}`);
-  return requestedMeasurements.every((match) => {
-    const value = match[1];
-    const unit = match[2];
-    const aliases =
-      /^(lb|lbs|pounds?)$/.test(unit) ? "lb|lbs|pounds?" :
-      /^(l|liters?|litres?)$/.test(unit) ? "l|liters?|litres?" :
-      /^(inch|inches|in)$/.test(unit) ? "inch|inches|in" :
-      /^(ga|gauge)$/.test(unit) ? "ga|gauge|g" :
-      unit;
-    return new RegExp(`\\b${value}\\s*(?:${aliases})\\b`, "i").test(productText);
-  });
+  const alternatives = normalizeSearchText(query)
+    .split(/\s+\b(?:or|ou)\b\s+/i)
+    .map(measurementsInText)
+    .filter((measurements) => measurements.length);
+
+  // Treat only complete measurable clauses as alternatives. Ordinary prose
+  // with “or” and just one specification remains strict.
+  if (alternatives.length >= 2) {
+    return alternatives.some((measurements) => measurements.every((measurement) => productMatchesMeasurement(productText, measurement)));
+  }
+
+  return requestedMeasurements.every((measurement) => productMatchesMeasurement(productText, measurement));
 }
 
 function isReplacementPartRequest(text: string) {
@@ -2818,14 +2841,9 @@ function filterProductsFromText(products: CatalogProduct[], text: string) {
   if (/\bnon[-\s]?sterile\b/i.test(text)) filtered = filtered.filter((product) => /\bnon[-\s]?sterile\b/i.test(`${product.name} ${product.description}`));
   else if (/\bsterile\b/i.test(text)) filtered = filtered.filter((product) => /\bsterile\b/i.test(`${product.name} ${product.description}`));
 
-  const sizeMatch = normalized.match(/\b(\d{1,4})\s*(ml|g|ga|gauge|inch|in)\b/);
-  if (sizeMatch) {
-    const value = sizeMatch[1];
-    const unit = sizeMatch[2];
-    const sizePattern = new RegExp(`\\b${value}\\s*(?:${unit}|${unit === "g" ? "ga|gauge" : unit === "ga" ? "g|gauge" : unit === "in" ? "inch" : unit})\\b`, "i");
-    filtered = filtered.filter((product) => sizePattern.test(`${product.name} ${product.description}`));
-  }
-
+  // Evaluate one numeric specification or complete “A or B” alternatives in
+  // one place. Filtering on the first measurement here would wrongly drop a
+  // valid second option such as 28G in “29G or 28G one-inch needle”.
   filtered = filtered.filter((product) => productMatchesExplicitMeasuredRequirements(product, text));
 
   return filtered;
