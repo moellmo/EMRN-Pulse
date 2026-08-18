@@ -1857,7 +1857,7 @@ export async function searchProducts(input: ProductSearchInput) {
   };
 }
 
-export async function searchBySKU(sku: string, options: { allowFallback?: boolean } = {}) {
+export async function searchBySKU(sku: string, options: { allowFallback?: boolean; includeDetails?: boolean } = {}) {
   const variants = skuSearchVariants(sku);
   let results: TypesenseSearchResult[] = [];
   try {
@@ -1909,7 +1909,7 @@ export async function searchBySKU(sku: string, options: { allowFallback?: boolea
   // price. Avoid a second BigCommerce request for every exact/bare SKU lookup;
   // it adds several seconds and was the reason `8210` and `3352` felt slow.
   if (typesenseProducts.length) {
-    return typesenseProducts.some((product) => !product.sku || !product.url || !product.price)
+    return options.includeDetails || typesenseProducts.some((product) => !product.sku || !product.url || !product.price)
       ? enrichProductsFromBigCommerce(typesenseProducts)
       : typesenseProducts;
   }

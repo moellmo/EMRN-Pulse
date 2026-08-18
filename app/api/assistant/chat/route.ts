@@ -911,7 +911,10 @@ async function refreshProductsBySku(products: CatalogProduct[]) {
   return Promise.all(
     products.map(async (product) => {
       if (!product.sku) return product;
-      const [freshProduct] = await searchBySKU(product.sku);
+      // Search results stay on the fast Typesense path.  A product-detail
+      // question is different: custom fields and the selected variant's
+      // option values are the source of truth for pack counts and specs.
+      const [freshProduct] = await searchBySKU(product.sku, { includeDetails: true });
       return freshProduct || product;
     })
   );
@@ -1485,6 +1488,7 @@ function priorAssistantOfferedItemRequest(messages: AssistantMessage[]) {
 function isGenericProductMediaRequest(text: string) {
   const normalized = normalizeSearchText(text);
   return /\b(?:upload|send|attach|share)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
+    /\b(?:i|we)\s+(?:have|got|took)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
     /^(?:how to use|how do i use|where are|show me|need|want)?\s*(?:product )?(?:use )?(?:videos?|video tutorials?|pictures?|photos?)$/.test(normalized) ||
     /^(?:how to use videos?|comment utiliser les videos?)$/.test(normalized);
 }
@@ -1787,6 +1791,7 @@ const genericProductTypeRequirements: Array<{ pattern: RegExp; terms: string[] }
   { pattern: /\b(?:thermometers?|thermom[eè]tres?)\b/, terms: ["thermometer", "thermometers", "thermomètre", "thermomètres"] },
   { pattern: /\b(?:stethoscopes?)\b/, terms: ["stethoscope", "stethoscopes"] },
   { pattern: /\b(?:wheelchairs?|fauteuils? roulants?)\b/, terms: ["wheelchair", "wheelchairs", "fauteuil roulant", "fauteuils roulants"] },
+  { pattern: /\b(?:beds?|exam(?:ination)? tables?|treatment tables?|exam couches?)\b/, terms: ["bed", "beds", "exam table", "examination table", "treatment table", "exam couch"] },
   { pattern: /\b(?:mattresses?|matelas)\b/, terms: ["mattress", "mattresses", "matelas"] },
   { pattern: /\b(?:oxygen cylinders?|oxygen tanks?|cylindres? d.?oxyg[eè]ne|bonbonnes? d.?oxyg[eè]ne)\b/, terms: ["oxygen cylinder", "oxygen tank", "cylinder", "cylindre", "bonbonne"] },
   { pattern: /\b(?:oxygen regulators?|r[eé]gulateurs? d.?oxyg[eè]ne)\b/, terms: ["oxygen regulator", "regulator", "régulateur"] },
@@ -2327,6 +2332,8 @@ function packageInfo(product: CatalogProduct) {
     if (/^(PK|PACK|PKG)$/.test(code)) return `pack of ${count}`;
     if (/^(CS|CASE)$/.test(code)) return `case of ${count}`;
   }
+  const perPack = text.match(/\b(\d{1,5})\s+per\s+(?:pack|package|pkg|pkt)\b/i);
+  if (perPack?.[1]) return `pack of ${perPack[1]}`;
   const namedPackageCode = text.match(/\b(\d{1,5})\s*(?:pkg|pkgs|pack|packs|box|boxes|case|cases)\b/i);
   if (namedPackageCode?.[1] && namedPackageCode[0]) {
     const count = namedPackageCode[1];
@@ -4323,9 +4330,14 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isGenericProductMediaRequest(latest) && !extractSkuCandidates(latest).length && !pageContext.sku) {
+    const hasPhotoToIdentify = /\b(?:i|we)\s+(?:have|got|took)\s+(?:a\s+)?(?:photo|picture|image)\b/i.test(latest);
     return new Response(
       textStream(
-        language === "fr"
+        hasPhotoToIdentify
+          ? language === "fr"
+            ? "Utilisez le bouton photo dans la conversation pour téléverser l’image. Je chercherai d’abord dans le catalogue EMRN à partir de ce qui apparaît sur la photo."
+            : "Use the photo button in this chat to upload the image. I’ll first search the EMRN catalog using what appears in the photo."
+          : language === "fr"
           ? "Je peux vous aider à trouver une vidéo, des photos ou les instructions d’utilisation. Quel produit ou SKU voulez-vous voir?"
           : "I can help find a video, photos, or use instructions. Which product or SKU would you like to see?"
       ),
@@ -5968,6 +5980,34 @@ async function handleAssistantPost(req: NextRequest) {
         }))
           .filter((product) => productMatchesCustomerExactIdentifiers(product, latest))
           .filter((product) => productMatchesExplicitMeasuredRequirements(product, latest));
+        const detailedRecoveredProducts = shouldUseProductDetailIntent && recoveredProducts.length
+          ? await refreshProductsBySku(recoveredProducts)
+          : recoveredProducts;
+        if (shouldUseProductDetailIntent) {
+          const catalogCandidates = catalogDetailCandidateProducts(latest, detailedRecoveredProducts).slice(0, 8);
+          for (const product of catalogCandidates) {
+            const catalogAnswer = productDetailFromCatalog(product, latest, language);
+            if (catalogAnswer) {
+              await logPerformance("catalog_detail_external_recovery", {
+                openAiMs: Date.now() - openAiStartedAt,
+                openAiUsed: true,
+                answerPreview: catalogAnswer,
+                proofSourceType: externalLookup.sourceType,
+                proofSourceUrls: externalLookup.sourceUrls,
+                proofPartNumbers: externalLookupPartNumbers(externalLookup),
+                proofSearchTerms: externalLookupSearchTerms(externalLookup),
+                emrnMatchCount: detailedRecoveredProducts.length,
+                emrnMatchedSkus: detailedRecoveredProducts.map((item) => item.sku).filter(Boolean),
+              });
+              return new Response(textStream(catalogAnswer), {
+                headers: {
+                  "Content-Type": "text/plain; charset=utf-8",
+                  "Cache-Control": "no-store",
+                },
+              });
+            }
+          }
+        }
         const customerIdentifiers = customerSuppliedExactIdentifiers(latest);
         const lookupText = normalizeSearchText([
           externalLookup.exactProductName,
@@ -5977,7 +6017,7 @@ async function handleAssistantPost(req: NextRequest) {
         ].join(" "));
         const externalLookupRespectsCustomerIdentifiers = customerIdentifiers.every((identifier) => lookupText.includes(identifier));
         const externalAnswer = externalLookupRespectsCustomerIdentifiers
-          ? externalLookupCustomerAnswer(externalLookup, recoveredProducts, language, { question: latest })
+          ? externalLookupCustomerAnswer(externalLookup, detailedRecoveredProducts, language, { question: latest })
           : exactCatalogMatchUnavailableAnswer(latest, language);
         await logPerformance("external_lookup_no_initial_catalog_match", {
           openAiMs: Date.now() - openAiStartedAt,
@@ -5987,8 +6027,8 @@ async function handleAssistantPost(req: NextRequest) {
           proofSourceUrls: externalLookup.sourceUrls,
           proofPartNumbers: externalLookupPartNumbers(externalLookup),
           proofSearchTerms: externalLookupSearchTerms(externalLookup),
-          emrnMatchCount: recoveredProducts.length,
-          emrnMatchedSkus: recoveredProducts.map((product) => product.sku).filter(Boolean),
+          emrnMatchCount: detailedRecoveredProducts.length,
+          emrnMatchedSkus: detailedRecoveredProducts.map((product) => product.sku).filter(Boolean),
         });
         return new Response(textStream(externalAnswer), {
           headers: {
