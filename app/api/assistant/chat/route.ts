@@ -962,7 +962,7 @@ function isUnnamedProductFollowUp(text: string) {
   const namedTerms = normalizeSearchText(cleanProductQuery(text))
     .split(/\s+/)
     .filter((term) => term.length >= 3 || /\d/.test(term))
-    .filter((term) => !/^(what|which|how|many|much|does|do|is|are|can|could|would|will|with|for|from|about|the|and|this|that|these|those|it|them|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|include|included|comes|come|hold|holds|fit|fits|work|works|compatible|compatibility|part|parts|replacement|replacements|accessory|accessories|unit|units|centimeter|centimeters|centimetre|centimetres|inch|inches|cm|mm)$/.test(term));
+    .filter((term) => !/^(what|which|how|many|much|does|do|is|are|can|could|would|will|with|for|from|about|the|and|this|that|these|those|it|them|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weights|weigh|pound|pounds|lb|lbs|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|include|included|comes|come|hold|holds|fit|fits|work|works|compatible|compatibility|part|parts|replacement|replacements|accessory|accessories|unit|units|centimeter|centimeters|centimetre|centimetres|inch|inches|cm|mm)$/.test(term));
   return namedTerms.length === 0;
 }
 
@@ -1303,7 +1303,7 @@ function cleanProductQuery(text: string) {
   return String(text || "")
     // Detail questions still need to search by the named product, not by the
     // conversational wrapper (for example "what size is the g3 responder").
-    .replace(/^\s*(?:what\s+(?:size|dimensions?|measurements?|capacity|colour|color|details?|specifications?|specs?|features?)\s+(?:is|are|of|for)\s+(?:the\s+)?|how\s+(?:big|large|wide|tall|long|heavy)\s+(?:is|are)\s+(?:the\s+)?|(?:tell\s+me\s+)?(?:the\s+)?(?:size|dimensions?)\s+(?:of|for)\s+(?:the\s+)?)/i, "")
+    .replace(/^\s*(?:what\s+(?:size|dimensions?|measurements?|weight(?:\s+capacity)?|capacity|colour|color|details?|specifications?|specs?|features?)\s+(?:is|are|of|for)\s+(?:the\s+)?|how\s+(?:big|large|wide|tall|long|heavy|much\s+(?:does\s+)?(?:it|this)\s+weigh)\s+(?:is|are)?\s*(?:the\s+)?|(?:tell\s+me\s+)?(?:the\s+)?(?:size|dimensions?|weight(?:\s+capacity)?)\s+(?:of|for)\s+(?:the\s+)?)/i, "")
     .replace(/\b(no,?\s+)?(do you have|do have|do u have|so you have|you have|do you carry|can you find|find me|find|search for|search|show me|how about|what about|i am looking for|i'm looking for|im looking for|looking for|i need|we need|i want|we want|i would like|we would like|je cherche|avez-vous|avez vous|as-tu|as tu)\b/gi, " ")
     // For a part described in relation to a named device, put the device
     // family first so catalog search can retrieve the matching part.
@@ -1489,6 +1489,8 @@ function isGenericProductMediaRequest(text: string) {
   const normalized = normalizeSearchText(text);
   return /\b(?:upload|send|attach|share)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
     /\b(?:i|we)\s+(?:have|got|took)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
+    /\b(?:identify|identify\s+(?:a\s+)?product|find|look\s+up|search)\s+(?:a\s+)?(?:product\s+)?(?:from|using|with|by)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
+    /\b(?:what|which)\s+(?:product|item)\s+(?:is|is this)\s+(?:in|from)\s+(?:a\s+)?(?:photo|picture|image)\b/.test(normalized) ||
     /^(?:how to use|how do i use|where are|show me|need|want)?\s*(?:product )?(?:use )?(?:videos?|video tutorials?|pictures?|photos?)$/.test(normalized) ||
     /^(?:how to use videos?|comment utiliser les videos?)$/.test(normalized);
 }
@@ -2625,7 +2627,7 @@ function capabilityQuestionTerms(question: string) {
 function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
   const text = product.description || "";
   const normalizedQuestion = question.toLowerCase();
-  const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity)\b/i.test(question);
+  const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weigh|pounds?|lbs?|capacity)\b/i.test(question);
   const wantsDescription = /\b(description|details?|overview|specs?|specifications?|features?|what\s+is\s+it|tell\s+me\s+about|what\s+does\s+it\s+include|included|includes|include|comes?\s+with|décris|decris|description|détails?|details?|aperçu|apercu|spécifications?|specifications?|caractéristiques?|caracteristiques?|inclus|comprend)\b/i.test(question);
   const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
@@ -2700,13 +2702,19 @@ function productDetailFromCatalog(product: CatalogProduct, question: string, lan
   }
 
   if (wantsSize) {
+    const weightCapacity =
+      valueAfterLabel(text, "Weight Capacity") ||
+      valueAfterLabel(text, "Weight capacity") ||
+      text.match(/\b(?:weight\s+capacity|capacity)\s*(?:of|:|is)?\s*(\d+(?:\.\d+)?\s*(?:lb\.?s?|pounds?|kg))\b/i)?.[1]?.trim() ||
+      "";
     const capacity = valueAfterLabel(text, "Capacity");
     const packDimensions = valueAfterLabel(text, "Pack Dimensions") || valueAfterLabel(text, "Dimensions");
     const mainCompartment = text.match(/\bMain Compartment:\s*([^\n]+)/i)?.[1]?.trim() || "";
     const sidePockets = text.match(/\bSide Pockets:\s*([^\n]+)/i)?.[1]?.trim() || "";
     const auxPocket = text.match(/\bAux Pocket:\s*([^\n]+)/i)?.[1]?.trim() || "";
 
-    if (capacity) lines.push(language === "fr" ? `Capacité: ${capacity}` : `Capacity: ${capacity}`);
+    if (weightCapacity) lines.push(language === "fr" ? `Capacité de poids: ${weightCapacity}` : `Weight capacity: ${weightCapacity}`);
+    if (capacity && capacity.toLowerCase() !== weightCapacity.toLowerCase()) lines.push(language === "fr" ? `Capacité: ${capacity}` : `Capacity: ${capacity}`);
     if (packDimensions) lines.push(language === "fr" ? `Dimensions du sac: ${packDimensions}` : `Pack dimensions: ${packDimensions}`);
     if (mainCompartment || sidePockets || auxPocket) {
       if (language === "fr") {
@@ -2749,7 +2757,7 @@ function isPackageDetailQuestion(text: string) {
 
 function isDirectCatalogDetailQuestion(text: string) {
   return isPackageDetailQuestion(text) ||
-    /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|couleur|description|details?|overview|specs?|specifications?|features?|what\s+is\s+it|tell\s+me\s+about|what\s+does\s+it\s+include|included|includes|include|comes?\s+with|décris|decris|détails?|details?|aperçu|apercu|spécifications?|specifications?|caractéristiques?|caracteristiques?|inclus|comprend)\b/i.test(text);
+    /\b(how\s+big|how\s+large|how\s+much\s+(?:does\s+)?(?:it|this)\s+weigh|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weigh|pounds?|lbs?|capacity|color|colour|couleur|description|details?|overview|specs?|specifications?|features?|what\s+is\s+it|tell\s+me\s+about|what\s+does\s+it\s+include|included|includes|include|comes?\s+with|décris|decris|détails?|details?|aperçu|apercu|spécifications?|specifications?|caractéristiques?|caracteristiques?|inclus|comprend)\b/i.test(text);
 }
 
 function catalogDetailCandidateProducts(question: string, products: CatalogProduct[]) {
@@ -4181,6 +4189,19 @@ async function handleAssistantPost(req: NextRequest) {
   const priorConversationHasLcsu = messages.slice(0, -1).some((message) =>
     message.role === "assistant" && /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/i.test(message.content)
   );
+  // Keep a canister conversation anchored to the two sellable canister
+  // products. A short capacity follow-up ("300 ml and 800 ml") otherwise
+  // looks like a fresh product search and can incorrectly return complete
+  // suction units instead of the canisters just shown.
+  const priorConversationHasLcsuCanisters = messages.slice(0, -1).some((message) =>
+    message.role === "assistant" &&
+    /\b(?:lcsu\s*4?|laerdal compact suction unit)\b/i.test(message.content) &&
+    /\bcanisters?\b/i.test(message.content)
+  );
+  const asksLcsuCanisterCapacities =
+    /\b300\s*(?:ml)?\b/i.test(followUpText) &&
+    /\b800\s*(?:ml)?\b/i.test(followUpText) &&
+    !/\b(?:unit|units|rtca)\b/i.test(followUpText);
   const asksPackageQuantity = /\b(how\s+many|pack|package|case|count|quantity|qty|sold\s+by|sold\s+as|per\s+(?:box|pack|case))\b/i.test(latest);
   if (asksOxygenFit && (priorConversationHasG3Responder || /\bg3\+?\s+responder\b/.test(followUpText))) {
     const g3OxygenAnswer = language === "fr"
@@ -4206,6 +4227,12 @@ async function handleAssistantPost(req: NextRequest) {
       ? `${intro}\n\n${productResultsText(products, language, "G3+ Load N Go Medic Backpack")}`
       : `${intro}\n\n${language === "fr" ? "Voulez-vous que je prépare un devis?" : "Would you like me to prepare a quote?"}`;
     return new Response(textStream(answer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  if (priorConversationHasLcsu && priorConversationHasLcsuCanisters && asksLcsuCanisterCapacities) {
+    return new Response(textStream(productResultsText(verifiedLcsuCanisterProducts(), language, "LCSU 4 canisters")), {
       headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
     });
   }
@@ -4330,7 +4357,7 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   if (isGenericProductMediaRequest(latest) && !extractSkuCandidates(latest).length && !pageContext.sku) {
-    const hasPhotoToIdentify = /\b(?:i|we)\s+(?:have|got|took)\s+(?:a\s+)?(?:photo|picture|image)\b/i.test(latest);
+    const hasPhotoToIdentify = /\b(?:i|we)\s+(?:have|got|took)\s+(?:a\s+)?(?:photo|picture|image)\b|\b(?:identify|find|look\s+up|search)\s+(?:a\s+)?(?:product\s+)?(?:from|using|with|by)\s+(?:a\s+)?(?:photo|picture|image)\b|\b(?:what|which)\s+(?:product|item)\s+(?:is|is this)\s+(?:in|from)\s+(?:a\s+)?(?:photo|picture|image)\b/i.test(latest);
     return new Response(
       textStream(
         hasPhotoToIdentify
@@ -4815,6 +4842,31 @@ async function handleAssistantPost(req: NextRequest) {
     isProductDetailIntent(latest) &&
     !looksLikePlainCatalogKeywordSearch(latest) &&
     !explicitPartProductSearch;
+
+  // A terse specification question after a one-item result must keep that
+  // exact SKU.  Do this before broad recovery/search logic: otherwise a
+  // question such as "what is the weight capacity?" can lose the selected
+  // shower chair and attach an unrelated product that merely has a capacity
+  // field.  If the SKU has no matching detail, fall through to the existing
+  // catalog/AI/source path rather than inventing an answer.
+  const isUnnamedDetailFollowUp =
+    shouldUseProductDetailIntent &&
+    !extractSkuCandidates(latest).length &&
+    (isUnnamedProductFollowUp(latest) || isBareProductDetailFollowUp(latest));
+  if (isUnnamedDetailFollowUp) {
+    const priorProductSku = recentAssistantProductSkus(messages)[0];
+    if (priorProductSku) {
+      const [priorProduct] = await searchBySKU(priorProductSku, { includeDetails: true });
+      if (priorProduct) {
+        const priorProductAnswer = productDetailFromCatalog(priorProduct, latest, language);
+        if (priorProductAnswer) {
+          return new Response(textStream(priorProductAnswer), {
+            headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+          });
+        }
+      }
+    }
+  }
 
   if (!extractSkuCandidates(latest).length && !shouldUseProductDetailIntent && !isProductSearchIntent(latest) && !looksLikeSpecificProductSearch(latest) && !isQuoteIntent(latest) && !taughtQuoteIntent && (!isAvailabilityIntent(latest) || isSiteInfoQuestion(latest))) {
     const faqAnswer = faqAnswerText(latest, language);
@@ -6115,7 +6167,7 @@ async function handleAssistantPost(req: NextRequest) {
     const rememberedDetailProducts = await recentAssistantProducts(messages);
     const shouldUseRememberedDetailProducts =
       rememberedDetailProducts.length > 0 &&
-      isContextProductSelectionReply(latest) &&
+      (isContextProductSelectionReply(latest) || isUnnamedProductFollowUp(latest) || isBareProductDetailFollowUp(latest)) &&
       !extractSkuCandidates(latest).length;
     const detailProducts = await refreshProductsBySku(shouldUseRememberedDetailProducts ? rememberedDetailProducts : products);
     const selectedDetailProducts = selectContextProducts(latest, detailProducts);
