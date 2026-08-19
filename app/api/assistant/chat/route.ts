@@ -3774,6 +3774,41 @@ function supportResponseTimeAnswerText(text: string, language: "en" | "fr" | "un
     : "For a request sent to support, you will usually hear back within 1 business day.";
 }
 
+// These are service requests, not shopping queries. Keep the pattern narrow so
+// a real product such as an "installation kit" or a colour option still uses
+// the catalog, but never let a request to change/cancel an existing order turn
+// into an unrelated product result.
+function directSupportServiceAnswerText(text: string, language: "en" | "fr" | "unknown") {
+  const asksAboutInstallations =
+    /\b(?:do|does|can|could|would|will)\s+(?:you|emrn)\s+(?:do|offer|provide|handle)\s+installations?\b/i.test(text) ||
+    /\b(?:do|does)\s+installations?\b/i.test(text) ||
+    /\b(?:faites[-\s]+vous|faites|offrez|proposez|assurez)\s+(?:des\s+)?installations?\b/i.test(text);
+  const cancelsQuote =
+    /\b(?:cancel|cancelled|canceled|withdraw|void)\s+(?:my\s+|the\s+|a\s+)?(?:quote|devis|soumission)\b/i.test(text) ||
+    /\b(?:annuler|annulation)\s+(?:mon\s+|le\s+|un\s+)?(?:devis|soumission)\b/i.test(text);
+  const changesExistingOrder =
+    /\b(?:change|changed|wrong|switch|changer|changez|changerais|modifier|modifiez|mauvaise)\b[\s\S]{0,80}\b(?:color|colour|couleur)\b/i.test(text) &&
+    /\b(?:order|ordered|commande|command[eé])/i.test(text);
+
+  if (!asksAboutInstallations && !cancelsQuote && !changesExistingOrder) return "";
+
+  if (asksAboutInstallations) {
+    return language === "fr"
+      ? "Les installations doivent être vérifiées par notre équipe selon l’équipement et l’emplacement. Je peux envoyer cette demande au support. Pour l’envoyer, j’ai besoin de votre nom, votre courriel et votre question, ainsi que de l’article ou du SKU, de l’adresse d’installation et de ce dont vous avez besoin."
+      : "Installations need to be confirmed by our team based on the equipment and location. I can send this to support. To send it, I need your name, email, and question, plus the item or SKU, installation address, and what you need.";
+  }
+
+  if (cancelsQuote) {
+    return language === "fr"
+      ? "Je peux envoyer cette demande au support. Pour l’envoyer, j’ai besoin de votre nom, votre courriel et votre question, ainsi que du numéro de devis si vous l’avez. Nous confirmerons l’annulation."
+      : "I can send this to support. To send it, I need your name, email, and question, plus the quote number if you have it. We will confirm the cancellation.";
+  }
+
+  return language === "fr"
+    ? "Je peux envoyer cette demande au support. Pour l’envoyer, j’ai besoin de votre nom, votre courriel et votre question, ainsi que du numéro de commande si vous l’avez et de la couleur souhaitée. Nous vérifierons si le changement est encore possible."
+    : "I can send this to support. To send it, I need your name, email, and question, plus the order number if you have it and the colour you want. We will check whether the change is still possible.";
+}
+
 function smallerSuctionClarifierText(text: string, language: "en" | "fr" | "unknown") {
   const asksForSmallerSuction = /\b(?:smaller|small|compact|portable|plus petit|petit)\b/i.test(text) &&
     /\b(?:suction|aspiration)\b/i.test(text);
@@ -4157,15 +4192,21 @@ async function handleAssistantPost(req: NextRequest) {
   }
 
   // Contact details supplied after a customer has started a quote must reach
-  // quote review before the broad support detector sees the email/name.  Both
-  // flows use "our team", but only the quote flow may create a sales request.
+  // quote review before the broad support detector sees the email/name. A
+  // cancellation request mentions "quote" too, but is explicitly a support
+  // conversation and must never create a new sales quote.
+  const directSupportConversationInProgress = messages.slice(0, -1).some(
+    (message) =>
+      message.role === "assistant" &&
+      /send this to support|envoyer cette demande au support/i.test(message.content)
+  );
   const quoteConversationInProgress = messages.slice(0, -1).some(
     (message) => message.role === "user" && isQuoteIntent(message.content)
   );
   const latestHasQuoteContactDetails =
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(latest) ||
     /\b(?:my name is|name is|i am|i'm|je m'appelle|mon nom est)\b/i.test(latest);
-  if (quoteConversationInProgress && latestHasQuoteContactDetails) {
+  if (quoteConversationInProgress && !directSupportConversationInProgress && latestHasQuoteContactDetails) {
     const draft = buildQuoteDraft(messages, language, []);
     const answer = draft.request ? quoteDraftText(draft.request, language) : quoteMissingText(draft.missing, language);
     return new Response(textStream(answer), {
@@ -4199,8 +4240,9 @@ async function handleAssistantPost(req: NextRequest) {
     /\bcanisters?\b/i.test(message.content)
   );
   const asksLcsuCanisterCapacities =
-    /\b300\s*(?:ml)?\b/i.test(followUpText) &&
-    /\b800\s*(?:ml)?\b/i.test(followUpText) &&
+    ((/\b300\s*(?:ml)?\b/i.test(followUpText) &&
+      /\b800\s*(?:ml)?\b/i.test(followUpText)) ||
+      /\b(?:both|all)\s+(?:sizes|options|canisters?)\b/i.test(followUpText)) &&
     !/\b(?:unit|units|rtca)\b/i.test(followUpText);
   const asksPackageQuantity = /\b(how\s+many|pack|package|case|count|quantity|qty|sold\s+by|sold\s+as|per\s+(?:box|pack|case))\b/i.test(latest);
   if (asksOxygenFit && (priorConversationHasG3Responder || /\bg3\+?\s+responder\b/.test(followUpText))) {
@@ -4341,6 +4383,14 @@ async function handleAssistantPost(req: NextRequest) {
     });
   }
 
+  const directSupportServiceAnswer = directSupportServiceAnswerText(latest, language);
+  if (directSupportServiceAnswer) {
+    await logAnalyticsEvent({ type: "support_escalation", sessionId, language, query: latest, createdAt });
+    return new Response(textStream(directSupportServiceAnswer), {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
   // Account access is a service request, even when the customer also names a
   // product they were trying to buy. Resolve it before the product pipeline so
   // an account problem cannot turn into a random catalog search.
@@ -4415,13 +4465,14 @@ async function handleAssistantPost(req: NextRequest) {
   // Quote collection also says "our team". Keep a quote reply in its own flow
   // rather than treating the customer's email/SKU as a new support request.
   const priorAssistantAskedQuoteDetails =
-    priorAssistantRequestedQuoteDetails(messages) ||
-    messages.slice(0, -1).some((message) => message.role === "user" && isQuoteIntent(message.content)) ||
-    messages.slice(-4).some(
-      (message) =>
-        message.role === "assistant" &&
-        /send your quote or item-sourcing request|send (?:an |this )?(?:item-)?sourcing(?:\/| or )?quote request|to send it here|envoyer votre demande de devis|envoyer (?:une |cette )?demande (?:de sourcing|de devis|de sourcing\/devis)|pour l'envoyer ici/i.test(message.content)
-    );
+    !directSupportConversationInProgress &&
+    (priorAssistantRequestedQuoteDetails(messages) ||
+      messages.slice(0, -1).some((message) => message.role === "user" && isQuoteIntent(message.content)) ||
+      messages.slice(-4).some(
+        (message) =>
+          message.role === "assistant" &&
+          /send your quote or item-sourcing request|send (?:an |this )?(?:item-)?sourcing(?:\/| or )?quote request|to send it here|envoyer votre demande de devis|envoyer (?:une |cette )?demande (?:de sourcing|de devis|de sourcing\/devis)|pour l'envoyer ici/i.test(message.content)
+      ));
   if (!priorAssistantAskedQuoteDetails && !priorAssistantRequestedOrderStatus && priorAssistantAskedSupport && (isSupportYes(latest) || (looksLikeSupportDetailsReply && !isQuickActionPrompt(latest)))) {
     const draft = buildSupportDraft(messages, language);
     if (draft.request) {
