@@ -1390,6 +1390,45 @@ function lcsuCanisterSkuHints(text: string) {
   return ["886100", "8002004L10"];
 }
 
+// A combined catalogue query such as "3 ml or 5 ml syringes" can retrieve a
+// product which happens to mention both numbers in its description (for
+// example, a 3 ml solution supplied in a 5 ml syringe).  That is related, but
+// it should not hide the normal, sellable 3 ml and 5 ml options. Search each
+// complete option independently, then merge the results ahead of the broad
+// query. This is deliberately limited to explicit A-or-B product requests so
+// it does not add calls to ordinary searches or follow-up questions.
+function explicitAlternativeCatalogQueries(text: string) {
+  const normalized = normalizeSearchText(text);
+  if (!/\b(?:or|ou)\b/.test(normalized)) return [];
+
+  const productNoun = normalized.match(/\b(syringes?|seringues?|needles?|aiguilles?|gloves?|gants?|masks?|masques?|cuffs?|brassards?|catheters?|tubes?|tubing|dressings?|pansements?|canisters?|cannisters?)\b/)?.[1] || "";
+  if (!productNoun) return [];
+
+  const clauses = normalized.split(/\s+\b(?:or|ou)\b\s+/i).map((clause) => clause.trim()).filter(Boolean);
+  if (clauses.length < 2) return [];
+
+  const queries: string[] = [];
+  for (const clause of clauses) {
+    const measurements = measurementsInText(clause);
+    if (measurements.length) {
+      queries.push(`${measurements.map(({ value, unit }) => `${value}${unit}`).join(" ")} ${productNoun}`);
+    }
+  }
+
+  // Clothing/soft-goods sizes are words rather than measurements. Keep an
+  // exact size label so XL is not presented when the customer asked for only
+  // medium or large.
+  if (/\b(?:gloves?|gants?|masks?|masques?)\b/.test(productNoun)) {
+    const material = normalized.match(/\b(nitrile|latex|vinyl)\b/)?.[1] || "";
+    const requestedSizes = Array.from(new Set(
+      normalized.match(/\b(?:x[-\s]?large|extra[-\s]?large|xl|small|medium|large|petit(?:e|s|es)?|moyen(?:ne|s|nes)?|grand(?:e|s|es)?)\b/g) || []
+    ));
+    for (const size of requestedSizes) queries.push(`${size} ${material} ${productNoun}`.trim());
+  }
+
+  return Array.from(new Set(queries.map((query) => query.replace(/\s+/g, " ").trim()).filter(Boolean))).slice(0, 4);
+}
+
 function verifiedLcsuCanisterProducts(): CatalogProduct[] {
   // These are the two sellable LCSU 4 canister options maintained in the
   // EMRN catalog. They are a safety net for sparse parent-item search records
@@ -1881,6 +1920,7 @@ function productsMatchingExplicitIntent(products: CatalogProduct[], latest: stri
     }) &&
       isExactReplacementPartProductMatch(product, `${latest} ${searchQuery}`) &&
       productMatchesExplicitMeasuredRequirements(product, latest) &&
+      productMatchesNamedAlternativeOptions(product, latest) &&
       (!isLcsuCanisterRequest(`${latest} ${searchQuery}`) || productMatchesLcsuCanisterRequest(product, `${latest} ${searchQuery}`));
   });
 
@@ -1905,7 +1945,7 @@ function productMatchesMeasurement(productText: string, measurement: { value: st
   const aliases =
     /^(lb|lbs|pounds?)$/.test(unit) ? "lb|lbs|pounds?" :
     /^(l|liters?|litres?)$/.test(unit) ? "l|liters?|litres?" :
-    /^(inch|inches|in)$/.test(unit) ? "inch|inches|in" :
+    /^(inch|inches|in)$/.test(unit) ? "inch|inches|in|[\\\"″]" :
     /^(g|ga|gauge)$/.test(unit) ? "ga|gauge|g" :
     unit;
   return new RegExp(`\\b${value}\\s*(?:${aliases})\\b`, "i").test(productText);
@@ -1928,6 +1968,36 @@ function productMatchesExplicitMeasuredRequirements(product: CatalogProduct, que
   }
 
   return requestedMeasurements.every((measurement) => productMatchesMeasurement(productText, measurement));
+}
+
+function requestedNamedAlternativeOptions(query: string) {
+  const normalized = normalizeSearchText(query);
+  if (!/\b(?:or|ou)\b/.test(normalized) || !/\b(?:gloves?|gants?|masks?|masques?)\b/.test(normalized)) return [];
+
+  const options = new Set<string>();
+  if (/\b(?:x[-\s]?large|extra[-\s]?large|xl)\b/.test(normalized)) options.add("x-large");
+  if (/\bmedium\b|\bmoyen(?:ne|s|nes)?\b/.test(normalized)) options.add("medium");
+  if (/\bsmall\b|\bpetit(?:e|s|es)?\b/.test(normalized)) options.add("small");
+  // Check large after the x-large form so the latter never counts as a
+  // requested standard Large option.
+  if (/\b(?:^|\s)large\b/.test(normalized.replace(/\b(?:x[-\s]?large|extra[-\s]?large|xl)\b/g, "")) || /\bgrand(?:e|s|es)?\b/.test(normalized)) {
+    options.add("large");
+  }
+  return [...options];
+}
+
+function productMatchesNamedAlternativeOptions(product: CatalogProduct, query: string) {
+  const requested = requestedNamedAlternativeOptions(query);
+  if (!requested.length) return true;
+
+  const title = normalizeSearchText(`${product.name} ${product.parentName}`);
+  const available = new Set<string>();
+  if (/\b(?:x[-\s]?large|extra[-\s]?large|xl)\b/.test(title)) available.add("x-large");
+  const titleWithoutXl = title.replace(/\b(?:x[-\s]?large|extra[-\s]?large|xl)\b/g, "");
+  if (/\bmedium\b|\bmoyen(?:ne|s|nes)?\b/.test(titleWithoutXl)) available.add("medium");
+  if (/\bsmall\b|\bpetit(?:e|s|es)?\b/.test(titleWithoutXl)) available.add("small");
+  if (/\blarge\b|\bgrand(?:e|s|es)?\b/.test(titleWithoutXl)) available.add("large");
+  return requested.some((option) => available.has(option));
 }
 
 function isReplacementPartRequest(text: string) {
@@ -2859,7 +2929,10 @@ function filterProductsFromText(products: CatalogProduct[], text: string) {
   // Evaluate one numeric specification or complete “A or B” alternatives in
   // one place. Filtering on the first measurement here would wrongly drop a
   // valid second option such as 28G in “29G or 28G one-inch needle”.
-  filtered = filtered.filter((product) => productMatchesExplicitMeasuredRequirements(product, text));
+  filtered = filtered.filter((product) =>
+    productMatchesExplicitMeasuredRequirements(product, text) &&
+    productMatchesNamedAlternativeOptions(product, text)
+  );
 
   return filtered;
 }
@@ -5530,6 +5603,45 @@ async function handleAssistantPost(req: NextRequest) {
     supabaseMs: (searchResult.timings?.supabaseMs || 0) + preSearchKnowledgeMs,
   };
   let products = searchResult.products;
+  const alternativeQueries = explicitAlternativeCatalogQueries(latest);
+  if (
+    alternativeQueries.length &&
+    !pageProductsForCart.length &&
+    !rememberedContextProducts.length &&
+    !isReplacementPartRequest(latest)
+  ) {
+    // Run explicit alternatives in parallel. This avoids making an A-or-B
+    // question slower than a normal search while ensuring each option is
+    // retrieved as its own catalog request before broad results are ranked.
+    const alternativeResults = await Promise.all(
+      alternativeQueries.map((query) => searchProducts({ query, language, limit: 8 }))
+    );
+    const alternativeProductGroups = alternativeResults.map((result) =>
+      result.products.filter((product) =>
+        productMatchesExplicitMeasuredRequirements(product, latest) &&
+        productMatchesNamedAlternativeOptions(product, latest)
+      )
+    );
+    // Surface each requested option immediately instead of listing every
+    // 3 mL result before the first 5 mL result. The chat only previews a few
+    // items, so a round-robin merge makes an A-or-B request useful at a glance.
+    const alternativeProducts: CatalogProduct[] = [];
+    const longestAlternativeGroup = Math.max(...alternativeProductGroups.map((products) => products.length), 0);
+    for (let index = 0; index < longestAlternativeGroup; index += 1) {
+      for (const group of alternativeProductGroups) {
+        if (group[index]) alternativeProducts.push(group[index]);
+      }
+    }
+    if (alternativeProducts.length) {
+      products = dedupeCatalogProductsBySku([...alternativeProducts, ...products]);
+      searchTiming = {
+        ...searchTiming,
+        // Parallel calls add no customer wait beyond the slowest retrieval.
+        totalMs: Math.max(searchTiming.totalMs || 0, ...alternativeResults.map((result) => result.timings?.totalMs || 0)),
+        supabaseMs: Math.max(searchTiming.supabaseMs || 0, ...alternativeResults.map((result) => result.timings?.supabaseMs || 0)),
+      };
+    }
+  }
   const shouldSelectRememberedContextProduct =
     rememberedContextProducts.length > 0 &&
     isContextProductSelectionReply(latest) &&
