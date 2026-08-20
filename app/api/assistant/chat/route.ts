@@ -4468,7 +4468,13 @@ async function handleAssistantPost(req: NextRequest) {
   // product they were trying to buy. Resolve it before the product pipeline so
   // an account problem cannot turn into a random catalog search.
   const hasAccountAccessProblem = /\b(?:can(?:not|'t)|cannot|unable|not able|trouble|problem|won't|wont|cannot continue|can't continue)\b/i.test(latest);
-  if (isAccountIntent(latest) && (!looksLikeSpecificProductSearch(latest) || hasAccountAccessProblem)) {
+  if (
+    isAccountIntent(latest) &&
+    !isOrderStatusIntent(latest) &&
+    !isReorderIntent(latest) &&
+    !isInvoiceLookupIntent(latest) &&
+    (!looksLikeSpecificProductSearch(latest) || hasAccountAccessProblem)
+  ) {
     const accountAnswer = language === "fr"
       ? "Vous pouvez créer ou utiliser un compte EMRN depuis la section compte du site. Pour les comptes d’entreprise, les prix spéciaux ou l’accès Buyer Portal, notre équipe doit vérifier les détails de votre organisation. Vous pouvez consulter la FAQ ici: https://emrn.ca/faq-s/ ou je peux envoyer votre demande à notre équipe. Veuillez m’envoyer votre nom, votre courriel et votre question."
       : "You can create or use an EMRN account from the account area of the site. For business accounts, preferred pricing, or Buyer Portal access, our team needs to review your organization details. You can also check the FAQ here: https://emrn.ca/faq-s/ or I can send your request to our team. Please send your name, email, and question.";
@@ -4539,6 +4545,10 @@ async function handleAssistantPost(req: NextRequest) {
   // rather than treating the customer's email/SKU as a new support request.
   const priorAssistantAskedQuoteDetails =
     !directSupportConversationInProgress &&
+    // A historical quote lookup asks for a quote number/email too, but must
+    // never be mistaken for a new quote request. Otherwise a reply such as
+    // "QN001674" is sent into contact collection instead of quote lookup.
+    !priorAssistantRequestedQuoteLookup(messages) &&
     (priorAssistantRequestedQuoteDetails(messages) ||
       messages.slice(0, -1).some((message) => message.role === "user" && isQuoteIntent(message.content)) ||
       messages.slice(-4).some(

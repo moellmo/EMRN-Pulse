@@ -805,7 +805,14 @@ export function buildOrderStatusDraft(
     text.match(/\b(?:order|commande)\s*(?:number|#|no\.?|num[eé]ro)?\s*[:#-]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9-]{4,30})\b/i)?.[1] ||
     text.match(/\border\s*#\s*([A-Z0-9-]{4,30})\b/i)?.[1] ||
     text.match(/\bcommande\s*#\s*([A-Z0-9-]{4,30})\b/i)?.[1];
-  const standaloneOrderNumber = latest.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9-]{5,30}\b/i)?.[0] || "";
+  // BigCommerce order numbers can be short numeric values (for example
+  // "8905"). Keep the broader alphanumeric form for supplier/order codes,
+  // while accepting a bare 3+ digit order number when the customer is already
+  // in the protected order-status flow.
+  const standaloneOrderNumber =
+    latest.match(/\b\d{3,12}\b/)?.[0] ||
+    latest.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9-]{5,30}\b/i)?.[0] ||
+    "";
   const orderNumber = explicitOrderNumber || standaloneOrderNumber;
 
   const missing = [!email ? "email" : "", !orderNumber ? "order number" : ""].filter(Boolean);
