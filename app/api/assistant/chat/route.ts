@@ -842,7 +842,7 @@ function recentAssistantProductSkus(messages: AssistantMessage[]) {
   for (const message of assistantMessages) {
     const content = message.content || "";
     const looksProductRelated =
-      /products I found|produits que j’ai trouvés|I found this item|J’ai trouvé cet article|which one would you like added|laquelle voulez-vous ajouter|SKU\s*:/i.test(
+      /products I found|produits que j’ai trouvés|I found this item|J’ai trouvé cet article|which one would you like added|laquelle voulez-vous ajouter|\bSKU\s*:?\s*\**/i.test(
         content
       );
     if (!looksProductRelated) continue;
@@ -962,7 +962,7 @@ function isUnnamedProductFollowUp(text: string) {
   const namedTerms = normalizeSearchText(cleanProductQuery(text))
     .split(/\s+/)
     .filter((term) => term.length >= 3 || /\d/.test(term))
-    .filter((term) => !/^(what|which|how|many|much|does|do|is|are|can|could|would|will|with|for|from|about|the|and|this|that|these|those|it|them|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weights|weigh|pound|pounds|lb|lbs|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|include|included|comes|come|hold|holds|fit|fits|work|works|compatible|compatibility|part|parts|replacement|replacements|accessory|accessories|unit|units|centimeter|centimeters|centimetre|centimetres|inch|inches|cm|mm)$/.test(term));
+    .filter((term) => !/^(what|which|how|many|much|does|do|is|are|can|could|would|will|with|for|from|about|the|and|this|that|these|those|it|them|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weights|weigh|pound|pounds|lb|lbs|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|include|included|comes|come|hold|holds|fit|fits|work|works|compatible|compatibility|part|parts|replacement|replacements|accessory|accessories|unit|units|centimeter|centimeters|centimetre|centimetres|inch|inches|cm|mm|quel|quelle|quels|quelles|est|sont|faire|fait|taille|tailles|mesure|mesures|hauteur|largeur|profondeur|longueur|poids|capacité|capacite|sac|sacs|chaise|fauteuil|fauteuils|ce|cet|cette|ces|article|articles|pour|avec|les|des|une|un|le|la|du|de)$/.test(term));
   return namedTerms.length === 0;
 }
 
@@ -979,7 +979,7 @@ function isBareProductDetailFollowUp(text: string) {
     .split(/\s+/)
     .filter((term) => term.length >= 3)
     .filter((term) => !/^\d+(?:x\d+)?$/.test(term))
-    .filter((term) => !/^(quantity|qty|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|colour|color|spec|specs|specification|specifications|details|detail|weight|lb|lbs|inch|inches|cm|mm|x|by|of|per|case|pack|package|box|boxes|count|sold|unit)$/.test(term));
+    .filter((term) => !/^(quantity|qty|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|colour|color|spec|specs|specification|specifications|details|detail|weight|lb|lbs|inch|inches|cm|mm|x|by|of|per|case|pack|package|box|boxes|count|sold|unit|quelle|quel|quels|quelles|est|sont|faire|fait|taille|tailles|mesure|mesures|hauteur|largeur|profondeur|longueur|poids|capacité|capacite|sac|sacs|chaise|fauteuil|fauteuils|ce|cet|cette|ces|article|articles|pour|avec|les|des|une|un|le|la|du|de)$/.test(term));
 
   return namedTerms.length === 0;
 }
@@ -2697,7 +2697,7 @@ function capabilityQuestionTerms(question: string) {
 function productDetailFromCatalog(product: CatalogProduct, question: string, language: "en" | "fr" | "unknown") {
   const text = product.description || "";
   const normalizedQuestion = question.toLowerCase();
-  const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weigh|pounds?|lbs?|capacity)\b/i.test(question);
+  const wantsSize = /\b(how\s+big|how\s+large|what\s+size|size|dimension|dimensions|measurement|measurements|height|width|depth|length|weight|weigh|pounds?|lbs?|capacity|taille|dimension|dimensions|mesure|mesures|hauteur|largeur|profondeur|longueur|poids|capacité|capacite)\b/i.test(question);
   const wantsDescription = /\b(description|details?|overview|specs?|specifications?|features?|what\s+is\s+it|tell\s+me\s+about|what\s+does\s+it\s+include|included|includes|include|comes?\s+with|décris|decris|description|détails?|details?|aperçu|apercu|spécifications?|specifications?|caractéristiques?|caracteristiques?|inclus|comprend)\b/i.test(question);
   const wantsColor = /\b(color|colour|couleur)\b/i.test(question);
   const wantsPrice = /\b(how\s+much|price|cost|prix)\b/i.test(question);
@@ -2843,7 +2843,7 @@ function catalogDetailCandidateProducts(question: string, products: CatalogProdu
   const referenceTerms = normalizeSearchText(question)
     .split(/\s+/)
     .filter((term) => term.length >= 3 || /\d/.test(term))
-    .filter((term) => !/^(what|which|how|does|have|with|this|that|these|those|the|and|for|from|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|product|products|item|items|bag|bags|pack|packs|unit|units|is|are|it)$/.test(term));
+    .filter((term) => !/^(what|which|how|does|have|with|this|that|these|those|the|and|for|from|size|sizes|dimension|dimensions|measurement|measurements|height|width|depth|length|capacity|color|colour|details|detail|spec|specs|specification|specifications|feature|features|product|products|item|items|bag|bags|pack|packs|unit|units|is|are|it|quel|quelle|quels|quelles|est|sont|faire|fait|sac|sacs|chaise|fauteuil|fauteuils|ce|cet|cette|ces|article|articles|pour|avec|les|des|une|un|le|la|du|de)$/.test(term));
   const hasNamedReference = referenceTerms.length >= 2 || referenceTerms.some((term) => /\d/.test(term));
   const namedReferenceProducts = hasNamedReference
     ? products.filter((product) => {
@@ -2875,6 +2875,18 @@ function catalogDetailCandidateProducts(question: string, products: CatalogProdu
 
 function isCompareIntent(text: string) {
   return /\b(compare|comparison|difference|differences|which is cheaper|which one is cheaper|which costs less|versus|vs\.?|comparez|difference entre|différence entre)\b/i.test(text);
+}
+
+function comparisonSearchQuery(text: string) {
+  return String(text || "")
+    .replace(/^\s*(?:what\s+is\s+)?(?:the\s+)?(?:difference|differences|comparison)\s+(?:between\s+)?/i, "")
+    .replace(/^\s*(?:compare|comparison|comparez)\s+/i, "")
+    .replace(/\b(?:which\s+(?:one|is)\s+(?:cheaper|better)|which\s+costs\s+less|versus|vs\.?)\b/gi, " ")
+    .replace(/\b(?:the\s+)?(?:first|second|third|fourth|fifth|last)\s+(?:two|three|four)?\b/gi, " ")
+    .replace(/\b(?:first|second|third|fourth|fifth|last)\b/gi, " ")
+    .replace(/[?!.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isResultFilterIntent(text: string) {
@@ -3923,6 +3935,13 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
   const answer = (en: string, fr: string) => (language === "fr" ? fr : en);
   const link = (label: string, url: string) => `[${label}](${url})`;
 
+  if (/\b(?:phone|telephone|telehone|tel|call|telephone number|phone number|numero de telephone|numéro de téléphone|appeler|appelle|514[-.\s]?852[-.\s]?3899)\b/i.test(text)) {
+    return answer(
+      `You can call EMRN at **514-852-3899**. You can also use ${link("Contact EMRN", contactLink)} or email info@emrn.ca.`,
+      `Vous pouvez appeler EMRN au **514-852-3899**. Vous pouvez aussi utiliser ${link("Contactez EMRN", contactLink)} ou écrire à info@emrn.ca.`
+    );
+  }
+
   if (
     /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn|where is (?:your |the )?(?:distribution|warehouse|shipping) cent(?:re|er)|(?:distribution|warehouse|shipping) cent(?:re|er).*where)\b/i.test(text) ||
     /\b(o[uù] est emrn|o[uù].*etes?.*situ[eé]s?|adresse d.?emrn|adresse.*emrn|emplacement d.?emrn|localisation d.?emrn|visiter emrn)\b/i.test(text)
@@ -4120,6 +4139,7 @@ function faqAnswerText(text: string, language: "en" | "fr" | "unknown") {
 }
 
 function isSiteInfoQuestion(text: string) {
+  if (/\b(?:phone|telephone|telehone|phone number|telephone number|514[-.\s]?852[-.\s]?3899)\b/i.test(text)) return true;
   return /\b(where is emrn|where are you located|where.*emrn.*located|emrn.*address|your address|store address|store location|location of emrn|visit emrn|where is (?:your |the )?(?:distribution|warehouse|shipping) cent(?:re|er)|(?:distribution|warehouse|shipping) cent(?:re|er).*where|business account|compte entreprise|compte d'entreprise|business solutions|business medical supplies|job|jobs|career|careers|hiring|employment|emplois?|carrieres?|carrières?|terms|terms and conditions|conditions générales|conditions generales|privacy|privacy policy|about emrn|about us|who is emrn|what is emrn|à propos|a propos|bulk order|bulk orders|volume pricing|commande en gros|quick order|commande rapide|home medical supplies|help center|faq|centre d.aide|shipping and returns|livraison et retours|return policy|politique de retour|individuals?|individual customers?|consumers?|retail customers?|particuliers?|clients? individuels?|grand public|pick[\s-]?up|pickup|local pickup|local pick up|will call|curbside|ramassage|cueillette|venir chercher|passer chercher|online|en ligne|acheter|commander)\b/i.test(text) ||
     /\b(o[uù] est emrn|o[uù].*etes?.*situ[eé]s?|adresse d.?emrn|adresse.*emrn|emplacement d.?emrn|localisation d.?emrn|visiter emrn)\b/i.test(text) ||
     /politique de confidentialit|renseignements personnels|vie priv/i.test(text);
@@ -4440,6 +4460,35 @@ async function handleAssistantPost(req: NextRequest) {
       ),
       { headers: { "Content-Type": "text/plain; charset=utf-8" } }
     );
+  }
+
+  // A phone number is a contact lookup, never a catalog SKU. Handle both a
+  // phone-number question and a number pasted by itself before identifier
+  // extraction can send it into product search.
+  if (/\b(?:phone|telephone|telehone|phone number|telephone number|514[-.\s]?852[-.\s]?3899)\b/i.test(latest)) {
+    return new Response(textStream(faqAnswerText(latest, language)), {
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  // A quantity modifier is not a manufacturer part number. Keep a clear
+  // sharps-container keyword request on the catalog path so wording such as
+  // "50 count sharps container" returns the available EMRN sizes instead of
+  // entering the external exact-part sourcing flow.
+  if (
+    /\b(?:sharps?|sharps?\s+containers?|needle\s+containers?|objets\s+tranchants|conteneurs?\s+(?:pour\s+)?(?:objets\s+)?tranchants|contenants?\s+tranchants)\b/i.test(latest) &&
+    /\b(?:\d{1,5}\s*(?:count|ct|compte|unit[eé]s?)|count\s*\d{1,5}|\d{1,5}\s*(?:pack|packs|case|cases|container|containers|conteneur|conteneurs|contenant|contenants)|(?:pack|paquet|caisse)\s+(?:de\s+)?\d{1,5}|(?:tranchants|sharps?)\s+\d{1,5})\b/i.test(latest) &&
+    !extractSkuCandidates(latest).length &&
+    !isQuoteIntent(latest) &&
+    !isCartIntent(latest) &&
+    !isOrderStatusIntent(latest)
+  ) {
+    const result = await searchProducts({ query: "sharps container", language, limit: 8 });
+    if (result.products.length) {
+      return new Response(textStream(productResultsText(result.products, language, "sharps container")), {
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
   }
 
   const shippingPolicyAnswer = shippingPolicyAnswerText(latest, language);
@@ -5351,6 +5400,48 @@ async function handleAssistantPost(req: NextRequest) {
       ? rememberedCartProducts
       : await recentAssistantProducts(messages)
     : [];
+
+  // Never add an arbitrary catalog result for a context-only selection such
+  // as "add the first one to cart" when this chat has not shown a product.
+  // With prior results or page context, the existing selection/cart flow is
+  // unchanged.
+  if (
+    shouldHandleCart &&
+    isContextProductSelectionReply(latest) &&
+    !skuCandidates.length &&
+    !pageProductsForCart.length &&
+    !rememberedCartProducts.length &&
+    !rememberedContextProducts.length
+  ) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je peux ajouter un article au panier, mais je n’ai pas de résultat précédent à utiliser. Envoyez le nom ou le SKU du produit, ou faites d’abord une recherche."
+          : "I can add an item to the cart, but I do not have a prior product result to use. Send the product name or SKU, or search first."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } }
+    );
+  }
+
+  // A pronoun-based product question needs a product page or a prior result.
+  // Do not search words such as "size bag" and attach an unrelated catalog
+  // item when the customer has not identified which bag/chair they mean.
+  if (
+    shouldUseProductDetailIntent &&
+    !skuCandidates.length &&
+    !pageProductsForCart.length &&
+    !rememberedContextProducts.length &&
+    /\b(?:this|that|it|these|those)\b/i.test(latest)
+  ) {
+    return new Response(
+      textStream(
+        language === "fr"
+          ? "Je peux vérifier cette information, mais je n’ai pas encore le produit visé. Envoyez le nom, la marque ou le SKU, ou ouvrez la page produit concernée."
+          : "I can check that, but I do not yet have the product you mean. Send the product name, brand, or SKU, or open the relevant product page."
+      ),
+      { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } }
+    );
+  }
   let searchQuery = pageProductsForCart.length
     ? pageProductsForCart[0].sku || pageProductsForCart[0].name
     : aedAccessorySkus.length
@@ -5361,7 +5452,9 @@ async function handleAssistantPost(req: NextRequest) {
         ? searchQueryForLatest(messages, latest, rememberedContextProducts)
       : shouldContinueMissingProductFlow
         ? missingProductFollowUpQuery(messages, latest)
-      : searchQueryForLatest(messages, latest, []);
+      : isCompareIntent(latest)
+        ? comparisonSearchQuery(latest)
+        : searchQueryForLatest(messages, latest, []);
   const answerCacheEnabled = await assistantFeatureEnabledAsync("answerCacheEnabled");
   const cacheEligibility = answerCacheEligibility({
     query: latest,

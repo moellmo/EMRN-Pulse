@@ -289,6 +289,13 @@ export function extractSkuCandidates(text: string) {
     .replace(/\b(?:i|we)\s+(?:want|would like|need)\s+to\s+(?:purchase|buy|order)\b/gi, " ")
     .replace(/\b(?:purchase|buy|order|add|cart|catt|cartt|crt|checkout|sku|item|product|produit|acheter|commander|panier)\b/gi, " ");
 
+  // Manufacturer identifiers are sometimes printed with dot-separated
+  // groups (for example `01.57.040210`). Keep the original identifier intact
+  // so exact SKU search gets a chance before fuzzy matching collapses it to
+  // `040210` or an unrelated zero-inserted suggestion.
+  const dottedSkuMatches = skuText.match(/\b(?=[0-9A-Z.]{6,30}\b)(?=[0-9A-Z.]*\d)[0-9A-Z]+(?:\.[0-9A-Z]+){2,}\b/gi) || [];
+  candidates.push(...dottedSkuMatches);
+
   for (const match of normalizedText.matchAll(/\bsku\s*[:#]?\s*([A-Z0-9]{2,}(?:\s*[/-]\s*[A-Z0-9]+)+\+?|[A-Z]{1,8}\s*-?\s*\d{3,}(?:-[A-Z0-9]+)*\+?|\d{3,}(?:-[A-Z0-9]+)*\+?)(?=\s|$|[,.!?])/gi)) {
     candidates.push(match[1]);
   }

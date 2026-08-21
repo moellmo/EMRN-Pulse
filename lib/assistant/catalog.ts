@@ -350,7 +350,19 @@ function skuSearchVariants(sku: string) {
     ? skuPrefixCandidates().flatMap((prefix) => [`${prefix}${clean}`, `${prefix}-${clean}`])
     : [];
   const hyphenCandidates = normalizedCandidates.map((candidate) => candidate.replace(/^(3M)(\d+)$/i, "$1-$2"));
-  return Array.from(new Set([clean, compact, spaced, plusCompact, plusSpaced, ...normalizedCandidates, ...spacedCandidates, ...prefixedRawCandidates, ...hyphenCandidates].filter(Boolean)));
+  const dottedCompact = compact.replace(/\./g, "");
+  return Array.from(new Set([
+    clean,
+    compact,
+    dottedCompact,
+    spaced,
+    plusCompact,
+    plusSpaced,
+    ...normalizedCandidates,
+    ...spacedCandidates,
+    ...prefixedRawCandidates,
+    ...hyphenCandidates,
+  ].filter(Boolean)));
 }
 
 function smartSearchHits(result: SmartSearchApiResult | null) {
